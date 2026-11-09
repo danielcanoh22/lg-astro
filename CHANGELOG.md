@@ -1,5 +1,11 @@
 # lg-luma
 
+## 2.17.1
+
+### Patch Changes
+
+- b92609c: Check for and install updates only from the `danielcanoh22/lg-luma` releases, so upstream releases can no longer replace this fork's build.
+
 ## 2.17.0
 
 ### Minor Changes
