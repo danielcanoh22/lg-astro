@@ -746,13 +746,14 @@ impl State {
     pub fn set_inventory(&mut self, next: Inventory, warning: Option<String>) {
         self.inventory.apps = next.apps;
         self.sync_custom_tiles();
+        let inputs_read = warning.is_none();
         if let Some(warning) = warning {
             self.notify(warning);
         } else {
             self.inventory.inputs = next.inputs;
         }
         // A failed input read leaves the inputs unknown: wait for one that lists them.
-        if self.luma_input == LumaInput::AfterInventory && warning.is_none() {
+        if self.luma_input == LumaInput::AfterInventory && inputs_read {
             self.luma_input = LumaInput::Now;
         }
         self.loading = false;
