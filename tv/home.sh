@@ -69,12 +69,19 @@ if [ ! -d "$STATE" ]; then mkdir -m 755 "$STATE" || exit 1; fi
 if [ "$COMMAND" = boot ]; then
   # Seconds since boot in boot.log, to see where the delay before Luma appears goes.
   uptime_s() { cut -d' ' -f1 /proc/uptime 2>/dev/null; }
+  # Homebrew Channel runs init.d late, with LG Home already shown, so apply starts at once.
+  # A failed apply restores LG Home by itself; retry a few times in case SAM was still busy.
   (
     printf 'Luma Home: boot hook at %s s\n' "$(uptime_s)"
-    sleep 5
-    printf 'Luma Home: apply started at %s s\n' "$(uptime_s)"
-    sh "$STATE/home.sh" apply
-    status=$?
+    attempt=1
+    while :; do
+      printf 'Luma Home: apply started at %s s (attempt %s)\n' "$(uptime_s)" "$attempt"
+      sh "$STATE/home.sh" apply
+      status=$?
+      if [ "$status" = 0 ] || [ "$attempt" -ge 3 ]; then break; fi
+      attempt=$((attempt + 1))
+      sleep 2
+    done
     printf 'Luma Home: apply ended at %s s (exit %s)\n' "$(uptime_s)" "$status"
   ) </dev/null >>"$STATE/boot.log" 2>&1 &
   exit 0

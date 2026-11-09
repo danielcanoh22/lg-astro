@@ -173,11 +173,12 @@ impl<'a, S: System> Home<'a, S> {
                 stopped.push(proc);
             }
         }
-        for _ in 0..5 {
+        // The same 5 s budget in short steps: SIGTERM usually takes well under a second.
+        for _ in 0..25 {
             if stopped.iter().all(|p| !self.exists(p)) {
                 return Ok(());
             }
-            self.system.pause();
+            self.system.pause_briefly();
         }
         Err("The previous Home process has not stopped".into())
     }
