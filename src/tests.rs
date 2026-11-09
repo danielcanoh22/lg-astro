@@ -3212,14 +3212,26 @@ fn update_card_shows_progress_restores_retry_and_ignores_presses_while_busy() {
 }
 
 #[test]
-fn lumas_virtual_input_is_hidden_from_its_own_input_row() {
+fn lumas_registered_input_is_listed_once_after_the_hdmi_ports() {
     let inputs = normalize_inputs(&json!([
+        {"appId":"com.ecklf.luma", "id":"MVPD_IP-com.ecklf.luma", "label":"Luma", "port":1},
+        {"appId":"com.ecklf.luma", "id":"MVPD_IP-com.ecklf.luma", "label":"Luma"},
         {"appId":"com.ecklf.luma", "id":"LUMA", "label":"Luma"},
         {"appId":"com.webos.app.hdmi1", "id":"HDMI_1", "port":1}
     ]))
     .unwrap();
+    let ids: Vec<_> = inputs.iter().map(|input| input.id.as_str()).collect();
+    assert_eq!(ids, ["com.ecklf.luma", "com.webos.app.hdmi1"]);
+    assert_eq!(inputs[0].title, "Luma");
+    assert_eq!(inputs[0].port, "Luma");
+    assert_eq!(inputs[0].connected, Some(true));
+    assert_eq!(inputs[0].signal, None);
+    // Without a registration the row only has the HDMI ports.
+    let inputs = normalize_inputs(&json!([
+        {"appId":"com.webos.app.hdmi1", "id":"HDMI_1", "port":1}
+    ]))
+    .unwrap();
     assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].id, "com.webos.app.hdmi1");
 }
 
 #[test]
@@ -3241,7 +3253,10 @@ fn tv_input_row_reads_once_toggles_and_rereads_after_a_failed_change() {
     assert!(state.tv_input_response(None, Ok(false)).is_empty());
     assert_eq!(state.activate(), vec![Effect::TvInput(Some(true))]);
     assert_eq!(state.tv_input, TvInput::Busy);
-    assert!(state.tv_input_response(Some(true), Ok(true)).is_empty());
+    assert_eq!(
+        state.tv_input_response(Some(true), Ok(true)),
+        vec![Effect::Refresh]
+    );
     assert_eq!(state.tv_input, TvInput::Known(true));
     assert_eq!(state.activate(), vec![Effect::TvInput(Some(false))]);
     assert_eq!(

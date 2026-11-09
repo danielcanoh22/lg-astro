@@ -12,6 +12,8 @@ use std::{collections::HashSet, sync::mpsc, thread};
 mod installation;
 
 pub const APP_ID: &str = "com.ecklf.luma";
+/// The EIM input ID LG gives Luma once `luma-helper tv-input enable` registers it.
+const LUMA_INPUT: &str = "MVPD_IP-com.ecklf.luma";
 pub const HOME_ID: &str = "com.webos.app.home";
 pub const FULL_HOME_ID: &str = "com.webos.app.fullhome";
 
@@ -933,6 +935,22 @@ pub fn normalize_inputs(raw: &Value) -> Result<Vec<Input>, String> {
         let Some(id) = entry.get("appId").and_then(Value::as_str) else {
             continue;
         };
+        // Luma's own registered input (`luma-helper tv-input`). webOS 25 leaves it out of LG's
+        // input picker, so this card is the way to select it and make it the TV's last input.
+        if id == APP_ID {
+            if entry.get("id").and_then(Value::as_str) == Some(LUMA_INPUT)
+                && !inputs.iter().any(|input: &Input| input.id == APP_ID)
+            {
+                inputs.push(Input {
+                    id: APP_ID.into(),
+                    title: "Luma".into(),
+                    port: "Luma".into(),
+                    connected: Some(true),
+                    signal: None,
+                });
+            }
+            continue;
+        }
         let Some(number) = id
             .strip_prefix("com.webos.app.hdmi")
             .and_then(|s| s.parse::<u8>().ok())

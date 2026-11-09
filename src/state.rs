@@ -1637,7 +1637,12 @@ impl State {
         match result {
             Ok(registered) => {
                 self.tv_input = TvInput::Known(registered);
-                vec![]
+                // A change adds or removes the Luma card in the inputs row.
+                if request.is_some() {
+                    vec![Effect::Refresh]
+                } else {
+                    vec![]
+                }
             }
             Err(error) => {
                 eprintln!("Luma TV input: {error}");
