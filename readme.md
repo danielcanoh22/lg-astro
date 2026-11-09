@@ -249,8 +249,10 @@ On an LG 49UN71006LB (webOS 5.6.2), Luma returned after standby and a full softw
 takeover and Home Auto Launch disabled. On an LG OLED77C34LA (webOS 26), Luma came back at
 power-on only when it was the last active input before power-off. Other firmware remains untested;
 registration alone does not prove startup support. With takeover on, pressing Home before the
-takeover applies at cold boot still opens LG Home. Select HDMI or Live TV before removing the entry. Luma is hidden from
-its own input row.
+takeover applies at cold boot still opens LG Home. Select HDMI or Live TV before removing the entry.
+On an LG NANO80ASA (webOS 25), LG's input picker does not show the registered input, but opening
+`com.ecklf.luma` makes it the last input. Once registered, Luma lists a **Luma** card in its own
+inputs row for that: select it before turning the TV off to power on into Luma.
 Thanks to phranklins in [#79](https://github.com/ecklf/lg-luma/issues/79#issuecomment-6416333882)
 and [Hearth](https://github.com/rudra-avatar/Hearth/blob/b9f0a1c8240303b7cd52fdc820e2f840ac6d3a0e/src/lib/tvinput.ts)
 for the suggestion and API reference.
