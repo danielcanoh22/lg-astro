@@ -1,5 +1,11 @@
 # lg-luma
 
+## 2.18.1
+
+### Patch Changes
+
+- 5389702: Record Home takeover boot timings in `/var/lib/luma-home/boot.log` to show where the delay before Luma replaces LG Home goes.
+
 ## 2.18.0
 
 ### Minor Changes
