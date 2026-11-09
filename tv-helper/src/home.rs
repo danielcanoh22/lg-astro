@@ -665,14 +665,16 @@ pub enum Start {
 }
 /// Called by Luma as Home before it opens its window. A start counts as failed until
 /// `record_healthy`; after FAILURE_LIMIT failed starts in a row, the next one falls back.
+/// Only once per boot: the caller cannot observe whether the fallback succeeded, and a Luma
+/// that exits on every start without one would leave the TV with no Home at all.
 pub fn record_start(system: &impl System) -> Result<Start> {
     let failures = system::read(system, FAILURES, 16)
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|text| text.trim().parse::<u32>().ok())
         .unwrap_or(0);
-    if failures >= FAILURE_LIMIT {
-        return Ok(Start::Fallback);
+    if failures > FAILURE_LIMIT {
+        return Ok(Start::Continue);
     }
     system::write(
         system,
@@ -680,7 +682,11 @@ pub fn record_start(system: &impl System) -> Result<Start> {
         format!("{}\n", failures + 1).as_bytes(),
         0o644,
     )?;
-    Ok(Start::Continue)
+    Ok(if failures == FAILURE_LIMIT {
+        Start::Fallback
+    } else {
+        Start::Continue
+    })
 }
 /// Luma has been running long enough: its next start begins a new count.
 pub fn record_healthy(system: &impl System) -> Result<()> {

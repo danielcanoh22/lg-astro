@@ -484,15 +484,17 @@ pub fn home_fallback_due() -> bool {
                     "Luma Home: {} starts failed; giving LG Home back until reboot",
                     home::FAILURE_LIMIT
                 );
-                let started = std::process::Command::new("systemd-run")
-                    .args([
-                        "--unit=luma-home-fallback",
-                        "--collect",
-                        "/bin/sh",
-                        "/var/lib/luma-home/home.sh",
-                        "fallback",
-                    ])
-                    .status();
+                // The installed package's script and helper, not the copies in
+                // /var/lib/luma-home: only `enable` refreshes those, so they can predate
+                // `fallback` after a Homebrew Channel or manual upgrade.
+                let started = install_dir().and_then(|directory| {
+                    std::process::Command::new("systemd-run")
+                        .args(["--unit=luma-home-fallback", "--collect", "/bin/sh"])
+                        .arg(directory.join("home.sh"))
+                        .arg("fallback")
+                        .status()
+                        .map_err(|error| error.to_string())
+                });
                 match started {
                     Ok(status) if status.success() => return true,
                     // Keep running: exiting without a fallback would only start Luma again.

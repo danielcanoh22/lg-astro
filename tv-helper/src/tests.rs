@@ -964,13 +964,15 @@ fn persistent_preferences_win_over_package_local_migration_and_active_stages_ref
     );
 }
 #[test]
-fn unhealthy_starts_fall_back_after_the_limit_and_health_starts_a_new_count() {
+fn unhealthy_starts_fall_back_once_after_the_limit_and_health_starts_a_new_count() {
     let f = Fixture::new();
     for _ in 0..home::FAILURE_LIMIT {
         assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
     }
     assert_eq!(home::record_start(&f).unwrap(), home::Start::Fallback);
-    assert_eq!(home::record_start(&f).unwrap(), home::Start::Fallback);
+    // One attempt per boot: if that fallback failed, Luma must keep starting normally.
+    assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
+    assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
     home::record_healthy(&f).unwrap();
     assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
     assert_eq!(f.read(home::FAILURES), b"1\n");
