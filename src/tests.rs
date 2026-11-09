@@ -145,6 +145,25 @@ fn home_relaunch_dismisses_recents_and_ignores_its_pending_reply() {
     assert!(state.overlay.is_none());
 }
 
+#[test]
+fn the_app_copy_returns_to_its_home_page_with_recents_closed_but_home_keeps_its_page() {
+    let mut state = ready();
+    state.open(1);
+    state.open_recents();
+    state.recents.visibility = 1.;
+    assert!(state.returned_to_foreground(false).is_empty());
+    assert_eq!(state.page, Page::Home);
+    assert!(state.overlay.is_none());
+    assert!(state.recents.pending.is_none());
+    assert_eq!(state.recents.visibility, 0.);
+    assert_eq!(state.focus, Target::Nav(0));
+
+    let mut home = ready();
+    home.open(1);
+    assert!(home.returned_to_foreground(true).is_empty());
+    assert_eq!(home.page, Page::Apps);
+}
+
 fn scene(state: &State) -> view::Scene {
     let assets = view::Assets {
         root: PathBuf::new(),
@@ -433,6 +452,34 @@ fn auto_input_visibility_requires_a_positive_connection_report() {
         .insert(input.id.clone(), InputMode::On);
     input.connected = Some(false);
     assert!(preferences.input_visible(&input));
+}
+
+#[test]
+fn a_save_by_the_other_luma_copy_is_reloaded_once_and_a_broken_file_keeps_preferences() {
+    let directory = std::env::temp_dir().join(format!("luma-reload-test-{}", std::process::id()));
+    let path = directory.join("preferences.json");
+    let mut state = ready();
+    storage::save(&path, &state.preferences).unwrap();
+    let mut stamp = storage::stamp(&path);
+    assert!(stamp.is_some());
+    // Nothing changed: the current preferences stay as they are.
+    state.preferences.background = "unsaved".into();
+    crate::reload_changed_preferences(&path, &mut stamp, &mut state);
+    assert_eq!(state.preferences.background, "unsaved");
+    let other = Preferences {
+        background: "forest".into(),
+        show_home_names: !state.preferences.show_home_names,
+        ..state.preferences.clone()
+    };
+    storage::save(&path, &other).unwrap();
+    crate::reload_changed_preferences(&path, &mut stamp, &mut state);
+    assert_eq!(state.preferences.background, "forest");
+    assert_eq!(state.preferences.show_home_names, other.show_home_names);
+    assert_eq!(stamp, storage::stamp(&path));
+    std::fs::write(&path, "broken file").unwrap();
+    crate::reload_changed_preferences(&path, &mut stamp, &mut state);
+    assert_eq!(state.preferences.background, "forest");
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

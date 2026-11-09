@@ -467,6 +467,22 @@ impl State {
         pending
     }
 
+    /// Preferences the other Luma copy saved while this one was in the background.
+    pub fn reload_preferences(&mut self, preferences: Preferences) {
+        self.preferences = preferences;
+        self.dirty = true;
+    }
+
+    /// The app copy (`com.ecklf.luma`, not Home) shown again after it was hidden, for example
+    /// from the Luma input card: it starts on its Home page with recents closed, as Home's own
+    /// relaunch does. Home keeps its page, so Back from another app returns to where it was.
+    pub fn returned_to_foreground(&mut self, home: bool) -> Vec<Effect> {
+        if home {
+            return vec![];
+        }
+        self.return_home()
+    }
+
     pub fn open(&mut self, index: usize) {
         self.weather.cancel_search();
         self.page = match index {

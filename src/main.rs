@@ -291,6 +291,25 @@ impl BackButton {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Re-reads preferences when the file changed since `stamp`: Home and the TV-input app can both
+/// be running, and each saves its changes to the same file. A file that cannot be read keeps the
+/// current preferences.
+fn reload_changed_preferences(
+    path: &std::path::Path,
+    stamp: &mut storage::Stamp,
+    state: &mut State,
+) {
+    let current = storage::stamp(path);
+    if current == *stamp {
+        return;
+    }
+    *stamp = current;
+    match storage::load(path) {
+        Ok(preferences) => state.reload_preferences(preferences),
+        Err(error) => eprintln!("{error}"),
+    }
+}
+
 fn effects(
     effects: Vec<Effect>,
     state: &mut State,
@@ -674,6 +693,7 @@ fn run() -> Result<(), String> {
         !options.script.is_empty(),
         options.test_update_version.is_some(),
     );
+    let mut preferences_stamp = storage::stamp(&preferences_path);
     let mut state = State::new(initial_preferences);
     if let Some(version) = &options.test_update_version {
         eprintln!(
@@ -1303,6 +1323,11 @@ fn run() -> Result<(), String> {
                     if code == 1 {
                         press = None;
                         back_button.cancel();
+                        reload_changed_preferences(
+                            &preferences_path,
+                            &mut preferences_stamp,
+                            &mut state,
+                        );
                         pending = state.return_home();
                         // A staged Home must come forward itself. If it does not, its
                         // registration would leave the Home key dead: check below.
@@ -1361,6 +1386,7 @@ fn run() -> Result<(), String> {
                         back_button.cancel();
                     }
                     WindowEvent::Shown | WindowEvent::Restored | WindowEvent::FocusGained => {
+                        let returned = !visible;
                         visible = true;
                         // Shown and Restored can come from SDL itself; only focus confirms.
                         if matches!(win_event, WindowEvent::FocusGained) {
@@ -1369,6 +1395,14 @@ fn run() -> Result<(), String> {
                         }
                         state.dirty = true;
                         if webos {
+                            if returned {
+                                reload_changed_preferences(
+                                    &preferences_path,
+                                    &mut preferences_stamp,
+                                    &mut state,
+                                );
+                                pending.extend(state.returned_to_foreground(options.webos_home));
+                            }
                             pending.push(Effect::Refresh);
                         }
                     }
