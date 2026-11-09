@@ -37,6 +37,21 @@ pub fn unix_now() -> u64 {
         .as_secs()
 }
 
+/// Least time between two automatic switches to Luma's TV input, so an app copy that keeps
+/// failing cannot start a relaunch loop with Home.
+pub const LUMA_INPUT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// When Home switches to Luma's TV input (see `State::luma_input_due`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum LumaInput {
+    #[default]
+    Idle,
+    /// Home started: switch once the first inventory shows whether the input is registered.
+    AfterInventory,
+    /// Home was relaunched (Home key): switch now if the input is registered.
+    Now,
+}
+
 /// Whether LG lists Luma as a TV input. Read once when the System section first shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum TvInput {
@@ -213,6 +228,8 @@ pub enum Effect {
     Weather(weather::Command),
     /// Read (`None`) or change Luma's TV input registration.
     TvInput(Option<bool>),
+    /// Open `com.ecklf.luma` from Home so the TV keeps Luma as its last input.
+    SelectLumaInput,
     UpdateDownload(String),
 }
 
@@ -265,6 +282,8 @@ pub struct State {
     pub input_name: String,
     pub recents: crate::recents::Recents,
     pub tv_input: TvInput,
+    pub luma_input: LumaInput,
+    pub luma_input_switched: Option<Instant>,
 }
 
 impl State {
@@ -309,6 +328,8 @@ impl State {
             input_name: String::new(),
             recents: crate::recents::Recents::default(),
             tv_input: TvInput::Unknown,
+            luma_input: LumaInput::Idle,
+            luma_input_switched: None,
         }
     }
 
@@ -465,6 +486,37 @@ impl State {
         self.pressed = None;
         self.open(0);
         pending
+    }
+
+    /// Home was started (`started`) or relaunched by the Home key. With Luma registered as a TV
+    /// input, Home then opens `com.ecklf.luma`, so the TV keeps Luma as its last input. Only
+    /// these events arm it: focus coming back after the app copy exited never does.
+    pub fn home_opened(&mut self, started: bool) {
+        self.luma_input = if started {
+            LumaInput::AfterInventory
+        } else {
+            LumaInput::Now
+        };
+    }
+
+    pub fn luma_input_due(&mut self, now: Instant) -> Option<Effect> {
+        if self.luma_input != LumaInput::Now {
+            return None;
+        }
+        self.luma_input = LumaInput::Idle;
+        let registered = self
+            .inventory
+            .inputs
+            .iter()
+            .any(|input| input.id == crate::platform::APP_ID);
+        let recent = self
+            .luma_input_switched
+            .is_some_and(|at| now.duration_since(at) < LUMA_INPUT_INTERVAL);
+        if !registered || recent {
+            return None;
+        }
+        self.luma_input_switched = Some(now);
+        Some(Effect::SelectLumaInput)
     }
 
     /// Preferences the other Luma copy saved while this one was in the background.
@@ -669,6 +721,9 @@ impl State {
             self.notify(warning);
         } else {
             self.inventory.inputs = next.inputs;
+        }
+        if self.luma_input == LumaInput::AfterInventory {
+            self.luma_input = LumaInput::Now;
         }
         self.loading = false;
         self.error = None;

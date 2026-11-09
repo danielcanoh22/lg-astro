@@ -12,6 +12,24 @@ use std::{collections::HashSet, sync::mpsc, thread};
 mod installation;
 
 pub const APP_ID: &str = "com.ecklf.luma";
+/// Launch parameter Home adds when it opens `com.ecklf.luma` for its TV input: that copy then
+/// runs itself instead of redirecting to Home.
+pub const LAUNCHED_BY_HOME: &str = "lumaFromHome";
+
+/// Whether webOS launch metadata (argv[1]) carries `LAUNCHED_BY_HOME`, at its top level or
+/// under `params`.
+pub fn launched_by_home(metadata: &Value) -> bool {
+    metadata[LAUNCHED_BY_HOME] == true || metadata["params"][LAUNCHED_BY_HOME] == true
+}
+
+pub(crate) fn launch_payload(id: &str) -> Value {
+    if id == APP_ID {
+        json!({"id": id, "params": {LAUNCHED_BY_HOME: true}})
+    } else {
+        json!({"id": id})
+    }
+}
+
 /// The EIM input ID LG gives Luma once `luma-helper tv-input enable` registers it.
 const LUMA_INPUT: &str = "MVPD_IP-com.ecklf.luma";
 pub const HOME_ID: &str = "com.webos.app.home";
@@ -182,6 +200,8 @@ pub enum Request {
     SyncSplash(String),
     /// Read (`None`) or change Luma's TV input registration.
     TvInput(Option<bool>),
+    /// Open `com.ecklf.luma` for its TV input, without the launch notice.
+    SelectLumaInput,
     Recent {
         generation: u64,
         command: crate::recents::Command,
@@ -195,6 +215,7 @@ pub enum Response {
         id: String,
         result: Result<(), String>,
     },
+    LumaInputSelected(Result<(), String>),
     TvInput {
         request: Option<bool>,
         result: Result<bool, String>,
@@ -342,10 +363,19 @@ impl Platform {
                         } else {
                             call(
                                 "luna://com.webos.applicationManager/launch",
-                                json!({"id": id}),
+                                launch_payload(&id),
                             )
                             .map(|_| ())
                         }
+                    } else {
+                        Ok(())
+                    }),
+                    Request::SelectLumaInput => Response::LumaInputSelected(if webos {
+                        call(
+                            "luna://com.webos.applicationManager/launch",
+                            launch_payload(APP_ID),
+                        )
+                        .map(|_| ())
                     } else {
                         Ok(())
                     }),

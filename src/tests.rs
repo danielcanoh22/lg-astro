@@ -164,6 +164,79 @@ fn the_app_copy_returns_to_its_home_page_with_recents_closed_but_home_keeps_its_
     assert_eq!(home.page, Page::Apps);
 }
 
+fn with_luma_input(state: &mut State) {
+    let mut inventory = state.inventory.clone();
+    inventory.inputs.push(Input {
+        id: crate::platform::APP_ID.into(),
+        title: "Luma".into(),
+        port: "Luma".into(),
+        connected: Some(true),
+        signal: None,
+    });
+    state.set_inventory(inventory, None);
+}
+
+#[test]
+fn home_switches_to_lumas_input_once_per_open_and_never_twice_within_the_interval() {
+    use crate::state::{LUMA_INPUT_INTERVAL, LumaInput};
+    use std::time::{Duration, Instant};
+    let now = Instant::now();
+    let mut state = ready();
+    // A start waits for the first inventory that lists Luma's input.
+    state.home_opened(true);
+    assert_eq!(state.luma_input_due(now), None);
+    with_luma_input(&mut state);
+    assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+    assert_eq!(state.luma_input, LumaInput::Idle);
+    assert_eq!(state.luma_input_due(now), None);
+    // A Home key relaunch within the interval does not switch again.
+    state.home_opened(false);
+    assert_eq!(state.luma_input_due(now + Duration::from_secs(1)), None);
+    assert_eq!(state.luma_input, LumaInput::Idle);
+    // Focus coming back (the app copy exited or crashed) never arms it.
+    assert!(state.returned_to_foreground(true).is_empty());
+    let later = now + LUMA_INPUT_INTERVAL;
+    assert_eq!(state.luma_input_due(later), None);
+    state.home_opened(false);
+    assert_eq!(state.luma_input_due(later), Some(Effect::SelectLumaInput));
+}
+
+#[test]
+fn home_stays_when_lumas_input_is_not_registered() {
+    let mut state = ready();
+    assert!(
+        !state
+            .inventory
+            .inputs
+            .iter()
+            .any(|input| input.id == crate::platform::APP_ID)
+    );
+    state.home_opened(false);
+    assert_eq!(state.luma_input_due(std::time::Instant::now()), None);
+    assert_eq!(state.luma_input, crate::state::LumaInput::Idle);
+    let inventory = state.inventory.clone();
+    state.home_opened(true);
+    state.set_inventory(inventory, None);
+    assert_eq!(state.luma_input_due(std::time::Instant::now()), None);
+}
+
+#[test]
+fn only_lumas_own_launch_carries_the_home_parameter_and_both_metadata_shapes_are_read() {
+    use crate::platform::{LAUNCHED_BY_HOME, launch_payload, launched_by_home};
+    assert_eq!(
+        launch_payload("com.ecklf.luma"),
+        json!({"id": "com.ecklf.luma", "params": {LAUNCHED_BY_HOME: true}})
+    );
+    assert_eq!(
+        launch_payload("com.webos.app.hdmi3"),
+        json!({"id": "com.webos.app.hdmi3"})
+    );
+    assert!(launched_by_home(&json!({"nid": "com.ecklf.luma", LAUNCHED_BY_HOME: true})));
+    assert!(launched_by_home(&json!({"params": {LAUNCHED_BY_HOME: true}})));
+    assert!(!launched_by_home(&json!({"nid": "com.ecklf.luma"})));
+    assert!(!launched_by_home(&json!({LAUNCHED_BY_HOME: "true"})));
+}
+
 fn scene(state: &State) -> view::Scene {
     let assets = view::Assets {
         root: PathBuf::new(),
