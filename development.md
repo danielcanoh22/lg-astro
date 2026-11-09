@@ -1077,7 +1077,8 @@ from the former scripts keep their method, installation and original stock manif
 and `fullhome` executable targets are supported; the latter requires matching native lifecycle
 support from #142. Manifest takeover remains limited to webOS
 10/11. The optional `tv-input` subcommand implements the #124 registration/verification contract;
-its Settings integration is still tracked by that separate PR and requires `supportGIP`.
+**Settings → System → Show as TV input** runs it through Homebrew Channel's root service, and the
+package declares the required `supportGIP`.
 
 The former VM tests for interpreter code are replaced by filesystem and service fixtures in
 `tv-helper/src/tests.rs`. They do not call a TV, real LS2 service or network. Host helper executables
