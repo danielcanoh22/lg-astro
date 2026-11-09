@@ -858,9 +858,9 @@ failure retries after five minutes. Unit changes convert unrounded cached Celsiu
 Removing a city clears its cache. The `.weather.json` sidecar uses Unix-seconds timestamps.
 Mock servers accept only literal loopback HTTP origins and are refused in TV builds.
 
-`assets/messages.json` supplies Czech, Dutch, English, French, German, Italian, Polish, Portuguese (Brazil),
-Russian, Simplified Chinese, Spanish, Swedish, Traditional Chinese and Vietnamese, including locale formatting
-and weather labels. App/device names and saved city names remain real data. No geolocation,
+`assets/messages.json` supplies English and Spanish, including locale formatting and weather
+labels. A saved language this fork no longer offers falls back to English. CJK and Hangul fonts
+stay bundled for app, input and greeting names. App/device names and saved city names remain real data. No geolocation,
 runtime font/translation services or telemetry are used. Weather attribution: Open-Meteo,
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
@@ -1077,7 +1077,8 @@ from the former scripts keep their method, installation and original stock manif
 and `fullhome` executable targets are supported; the latter requires matching native lifecycle
 support from #142. Manifest takeover remains limited to webOS
 10/11. The optional `tv-input` subcommand implements the #124 registration/verification contract;
-its Settings integration is still tracked by that separate PR and requires `supportGIP`.
+**Settings → System → Show as TV input** runs it through Homebrew Channel's root service, and the
+package declares the required `supportGIP`.
 
 The former VM tests for interpreter code are replaced by filesystem and service fixtures in
 `tv-helper/src/tests.rs`. They do not call a TV, real LS2 service or network. Host helper executables

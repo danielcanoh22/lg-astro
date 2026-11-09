@@ -928,6 +928,8 @@ fn system_category_owns_refresh_and_quit_and_restores_sidebar_focus() {
     state.direction(Direction::Down, &controls(&state));
     assert_eq!(state.focus, Target::Setting(7));
     state.direction(Direction::Down, &controls(&state));
+    assert_eq!(state.focus, Target::Setting(crate::state::TV_INPUT_ROW));
+    state.direction(Direction::Down, &controls(&state));
     assert_eq!(state.focus, Target::Setting(5));
     assert_eq!(state.activate(), vec![Effect::Quit]);
     state.back();
@@ -1636,9 +1638,9 @@ fn language_selection_restores_its_parent_and_is_saved_with_preferences() {
         state.focus,
         Target::Choice(crate::i18n::Language::En.index())
     );
-    state.direction(Direction::Up, &controls(&state));
+    state.direction(Direction::Down, &controls(&state));
     assert_eq!(state.activate(), vec![Effect::Save]);
-    assert_eq!(state.preferences.language, crate::i18n::Language::De);
+    assert_eq!(state.preferences.language, crate::i18n::Language::Es);
     assert_eq!(state.focus, Target::Setting(4));
     state.activate();
     state.direction(Direction::Left, &controls(&state));
@@ -1730,13 +1732,18 @@ fn settings_order_language_sort_and_shortcut_empty_card() {
 
 #[test]
 fn unsupported_language_preferences_recover_without_losing_other_choices() {
-    let preferences: Preferences = serde_json::from_value(
-        json!({"language":"unknown","favorites":["netflix"],"show_home_names":true}),
-    )
-    .unwrap();
-    assert_eq!(preferences.language, crate::i18n::Language::En);
-    assert!(preferences.show_home_names);
-    assert_eq!(preferences.favorites, Some(vec!["netflix".into()]));
+    // Includes codes of languages that earlier versions offered.
+    for language in ["unknown", "de", "zh-tw", "cs"] {
+        let preferences: Preferences = serde_json::from_value(
+            json!({"language":language,"favorites":["netflix"],"show_home_names":true}),
+        )
+        .unwrap();
+        assert_eq!(preferences.language, crate::i18n::Language::En);
+        assert!(preferences.show_home_names);
+        assert_eq!(preferences.favorites, Some(vec!["netflix".into()]));
+    }
+    let preferences: Preferences = serde_json::from_value(json!({"language":"es"})).unwrap();
+    assert_eq!(preferences.language, crate::i18n::Language::Es);
 }
 
 #[test]
@@ -2517,104 +2524,38 @@ fn shortcut_list_scroll_and_pointer_focus_preserve_control_positions() {
 
 #[test]
 fn settings_lists_keep_bottom_padding_for_remote_and_wheel_scrolling() {
-    use crate::state::{SETTINGS_LIST_BOTTOM_PADDING, Subpage};
-    for backgrounds in [false, true] {
-        let mut state = ready();
-        state.preferences.reduced_motion = true;
-        state.open(2);
-        if backgrounds {
-            state.set_wallpapers(
-                (1..=8)
-                    .map(|index| crate::wallpapers::Wallpaper {
-                        id: format!("custom-{index:032x}"),
-                        directory: std::path::PathBuf::from(".build/padding-fixture"),
-                        has_original: true,
-                    })
-                    .collect(),
-            );
-        }
-        state.section = if backgrounds { 1 } else { 0 };
-        state.subpage = if backgrounds {
-            None
-        } else {
-            Some(Subpage::Language)
-        };
-        let last = if backgrounds {
-            Target::Background(state.background_count() - 1)
-        } else {
-            Target::Choice(crate::i18n::Language::ALL.len() - 1)
-        };
-        state.focus = last.clone();
-        state.reveal_focus(&controls(&state));
-        let bottom =
-            state.content_viewport().y + state.content_viewport().h - SETTINGS_LIST_BOTTOM_PADDING;
-        let rect = controls(&state)
-            .into_iter()
-            .find(|c| c.target == last)
-            .unwrap()
-            .rect;
-        assert!(rect.y + rect.h <= bottom + 0.01);
-        state.wheel_scroll(&controls(&state), Some((1000., 600.)), 0, -1000);
-        let rect = controls(&state)
-            .into_iter()
-            .find(|c| c.target == last)
-            .unwrap()
-            .rect;
-        assert!((rect.y + rect.h - bottom).abs() < 0.01);
-    }
-}
-
-#[test]
-fn language_list_scrolls_under_fixed_ui_without_clipping_or_fades() {
-    use crate::{renderer::Draw, state::Subpage};
+    use crate::state::SETTINGS_LIST_BOTTOM_PADDING;
     let mut state = ready();
     state.preferences.reduced_motion = true;
     state.open(2);
-    state.subpage = Some(Subpage::Language);
-    state.scroll = 180.;
-    let rendered = scene(&state);
-    assert!(!rendered.draw.iter().any(|draw| matches!(
-        draw,
-        Draw::Clip(Some(_)) | Draw::EdgeFade(Some(_)) | Draw::EdgeFadeX(Some(_))
-    )));
-    let first = rendered
-        .controls
-        .iter()
-        .find(|control| control.target == Target::Choice(0))
-        .unwrap();
-    assert!(first.rect.y < state.content_viewport().y);
-    let last_language = rendered
-        .draw
-        .iter()
-        .rposition(|draw| {
-            matches!(draw,
-                Draw::Text(label, ..) if label == crate::i18n::Language::ALL.last().unwrap().name()
-            )
-        })
-        .unwrap();
-    for key in ["interface", "settings"] {
-        let label = state.preferences.language.t(key);
-        let fixed = rendered
-            .draw
-            .iter()
-            .position(|draw| {
-                matches!(draw,
-                    Draw::Text(text, ..) if text == label
-                )
+    state.set_wallpapers(
+        (1..=8)
+            .map(|index| crate::wallpapers::Wallpaper {
+                id: format!("custom-{index:032x}"),
+                directory: std::path::PathBuf::from(".build/padding-fixture"),
+                has_original: true,
             })
-            .unwrap();
-        assert!(fixed > last_language);
-    }
-    let nav = rendered
-        .controls
-        .iter()
-        .find(|control| control.target == Target::Nav(2))
-        .unwrap();
-    let (x, y) = nav.rect.center();
-    assert_eq!(
-        state.hit_test(&rendered.controls, x, y),
-        Some(Target::Nav(2))
+            .collect(),
     );
+    state.section = 1;
+    let last = Target::Background(state.background_count() - 1);
+    state.focus = last.clone();
+    state.reveal_focus(&controls(&state));
+    let bottom =
+        state.content_viewport().y + state.content_viewport().h - SETTINGS_LIST_BOTTOM_PADDING;
+    let rect = controls(&state)
+        .into_iter()
+        .find(|c| c.target == last)
+        .unwrap()
+        .rect;
+    assert!(rect.y + rect.h <= bottom + 0.01);
+    state.wheel_scroll(&controls(&state), Some((1000., 600.)), 0, -1000);
+    let rect = controls(&state)
+        .into_iter()
+        .find(|c| c.target == last)
+        .unwrap()
+        .rect;
+    assert!((rect.y + rect.h - bottom).abs() < 0.01);
 }
 
 #[test]
@@ -3268,4 +3209,51 @@ fn update_card_shows_progress_restores_retry_and_ignores_presses_while_busy() {
     assert_eq!(state.update, InstallStatus::Idle);
     state.install_response(Response::Finished(Ok(())));
     assert_eq!(state.update_status, Status::Unchecked);
+}
+
+#[test]
+fn lumas_virtual_input_is_hidden_from_its_own_input_row() {
+    let inputs = normalize_inputs(&json!([
+        {"appId":"com.ecklf.luma", "id":"LUMA", "label":"Luma"},
+        {"appId":"com.webos.app.hdmi1", "id":"HDMI_1", "port":1}
+    ]))
+    .unwrap();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].id, "com.webos.app.hdmi1");
+}
+
+#[test]
+fn tv_input_row_reads_once_toggles_and_rereads_after_a_failed_change() {
+    use crate::state::{TV_INPUT_ROW, TvInput};
+    let mut state = ready();
+    assert_eq!(state.tv_input_due(), None);
+    state.open(2);
+    state.section = crate::state::SYSTEM_SECTION;
+    assert_eq!(state.tv_input_due(), Some(Effect::TvInput(None)));
+    assert_eq!(state.tv_input_due(), None);
+    assert!(
+        controls(&state)
+            .iter()
+            .any(|c| c.target == Target::Setting(TV_INPUT_ROW))
+    );
+    state.focus = Target::Setting(TV_INPUT_ROW);
+    assert_eq!(state.activate(), vec![]);
+    assert!(state.tv_input_response(None, Ok(false)).is_empty());
+    assert_eq!(state.activate(), vec![Effect::TvInput(Some(true))]);
+    assert_eq!(state.tv_input, TvInput::Busy);
+    assert!(state.tv_input_response(Some(true), Ok(true)).is_empty());
+    assert_eq!(state.tv_input, TvInput::Known(true));
+    assert_eq!(state.activate(), vec![Effect::TvInput(Some(false))]);
+    assert_eq!(
+        state.tv_input_response(Some(false), Err("denied".into())),
+        vec![Effect::TvInput(None)]
+    );
+    assert!(state.notice.is_some());
+    assert!(
+        state
+            .tv_input_response(None, Err("no root".into()))
+            .is_empty()
+    );
+    assert_eq!(state.tv_input, TvInput::Unavailable);
+    assert_eq!(state.activate(), vec![Effect::TvInput(Some(true))]);
 }
