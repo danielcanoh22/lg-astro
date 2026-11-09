@@ -347,6 +347,14 @@ impl<'a, S: System> Home<'a, S> {
         Ok(())
     }
     pub fn apply(&self, config: &Config, open: bool) -> Result<()> {
+        // Stage timings land in boot.log at cold boot, to see where the delay before Luma goes.
+        let started = std::time::Instant::now();
+        let stage = |name: &str| {
+            eprintln!(
+                "Luma Home: {name} after {} ms",
+                started.elapsed().as_millis()
+            );
+        };
         if !self.exists(Path::new(&config.app_dir).join("luma")) {
             return Err("Luma is no longer installed".into());
         }
@@ -388,6 +396,7 @@ impl<'a, S: System> Home<'a, S> {
                     0o644,
                 )?;
                 system::write(self.system, MARKER, format!("{APP}\n").as_bytes(), 0o644)?;
+                stage("mounted");
             } else {
                 if !self.mounted() {
                     system::command(self.system, "/bin/mount", &["--bind", STAGE, &self.target])?;
@@ -395,15 +404,19 @@ impl<'a, S: System> Home<'a, S> {
                 if !self.mounted() {
                     return Err("The Home bind mount did not take".into());
                 }
+                stage("mounted");
                 self.reread(&system::json(self.system, format!("{STAGE}/appinfo.json"))?)?;
+                stage("manifest reread");
             }
             self.stop_home(&config.app_dir)?;
+            stage("previous Home stopped");
             if open || (front == self.id && self.foreground()? == self.id) {
                 if config.method == "executable" {
                     self.open_executable()?;
                 } else {
                     self.launch()?;
                 }
+                stage("launched");
             }
             Ok(())
         })();
