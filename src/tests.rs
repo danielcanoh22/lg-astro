@@ -1638,9 +1638,9 @@ fn language_selection_restores_its_parent_and_is_saved_with_preferences() {
         state.focus,
         Target::Choice(crate::i18n::Language::En.index())
     );
-    state.direction(Direction::Up, &controls(&state));
+    state.direction(Direction::Down, &controls(&state));
     assert_eq!(state.activate(), vec![Effect::Save]);
-    assert_eq!(state.preferences.language, crate::i18n::Language::De);
+    assert_eq!(state.preferences.language, crate::i18n::Language::Es);
     assert_eq!(state.focus, Target::Setting(4));
     state.activate();
     state.direction(Direction::Left, &controls(&state));
@@ -1732,13 +1732,18 @@ fn settings_order_language_sort_and_shortcut_empty_card() {
 
 #[test]
 fn unsupported_language_preferences_recover_without_losing_other_choices() {
-    let preferences: Preferences = serde_json::from_value(
-        json!({"language":"unknown","favorites":["netflix"],"show_home_names":true}),
-    )
-    .unwrap();
-    assert_eq!(preferences.language, crate::i18n::Language::En);
-    assert!(preferences.show_home_names);
-    assert_eq!(preferences.favorites, Some(vec!["netflix".into()]));
+    // Includes codes of languages that earlier versions offered.
+    for language in ["unknown", "de", "zh-tw", "cs"] {
+        let preferences: Preferences = serde_json::from_value(
+            json!({"language":language,"favorites":["netflix"],"show_home_names":true}),
+        )
+        .unwrap();
+        assert_eq!(preferences.language, crate::i18n::Language::En);
+        assert!(preferences.show_home_names);
+        assert_eq!(preferences.favorites, Some(vec!["netflix".into()]));
+    }
+    let preferences: Preferences = serde_json::from_value(json!({"language":"es"})).unwrap();
+    assert_eq!(preferences.language, crate::i18n::Language::Es);
 }
 
 #[test]
@@ -2519,104 +2524,38 @@ fn shortcut_list_scroll_and_pointer_focus_preserve_control_positions() {
 
 #[test]
 fn settings_lists_keep_bottom_padding_for_remote_and_wheel_scrolling() {
-    use crate::state::{SETTINGS_LIST_BOTTOM_PADDING, Subpage};
-    for backgrounds in [false, true] {
-        let mut state = ready();
-        state.preferences.reduced_motion = true;
-        state.open(2);
-        if backgrounds {
-            state.set_wallpapers(
-                (1..=8)
-                    .map(|index| crate::wallpapers::Wallpaper {
-                        id: format!("custom-{index:032x}"),
-                        directory: std::path::PathBuf::from(".build/padding-fixture"),
-                        has_original: true,
-                    })
-                    .collect(),
-            );
-        }
-        state.section = if backgrounds { 1 } else { 0 };
-        state.subpage = if backgrounds {
-            None
-        } else {
-            Some(Subpage::Language)
-        };
-        let last = if backgrounds {
-            Target::Background(state.background_count() - 1)
-        } else {
-            Target::Choice(crate::i18n::Language::ALL.len() - 1)
-        };
-        state.focus = last.clone();
-        state.reveal_focus(&controls(&state));
-        let bottom =
-            state.content_viewport().y + state.content_viewport().h - SETTINGS_LIST_BOTTOM_PADDING;
-        let rect = controls(&state)
-            .into_iter()
-            .find(|c| c.target == last)
-            .unwrap()
-            .rect;
-        assert!(rect.y + rect.h <= bottom + 0.01);
-        state.wheel_scroll(&controls(&state), Some((1000., 600.)), 0, -1000);
-        let rect = controls(&state)
-            .into_iter()
-            .find(|c| c.target == last)
-            .unwrap()
-            .rect;
-        assert!((rect.y + rect.h - bottom).abs() < 0.01);
-    }
-}
-
-#[test]
-fn language_list_scrolls_under_fixed_ui_without_clipping_or_fades() {
-    use crate::{renderer::Draw, state::Subpage};
+    use crate::state::SETTINGS_LIST_BOTTOM_PADDING;
     let mut state = ready();
     state.preferences.reduced_motion = true;
     state.open(2);
-    state.subpage = Some(Subpage::Language);
-    state.scroll = 180.;
-    let rendered = scene(&state);
-    assert!(!rendered.draw.iter().any(|draw| matches!(
-        draw,
-        Draw::Clip(Some(_)) | Draw::EdgeFade(Some(_)) | Draw::EdgeFadeX(Some(_))
-    )));
-    let first = rendered
-        .controls
-        .iter()
-        .find(|control| control.target == Target::Choice(0))
-        .unwrap();
-    assert!(first.rect.y < state.content_viewport().y);
-    let last_language = rendered
-        .draw
-        .iter()
-        .rposition(|draw| {
-            matches!(draw,
-                Draw::Text(label, ..) if label == crate::i18n::Language::ALL.last().unwrap().name()
-            )
-        })
-        .unwrap();
-    for key in ["interface", "settings"] {
-        let label = state.preferences.language.t(key);
-        let fixed = rendered
-            .draw
-            .iter()
-            .position(|draw| {
-                matches!(draw,
-                    Draw::Text(text, ..) if text == label
-                )
+    state.set_wallpapers(
+        (1..=8)
+            .map(|index| crate::wallpapers::Wallpaper {
+                id: format!("custom-{index:032x}"),
+                directory: std::path::PathBuf::from(".build/padding-fixture"),
+                has_original: true,
             })
-            .unwrap();
-        assert!(fixed > last_language);
-    }
-    let nav = rendered
-        .controls
-        .iter()
-        .find(|control| control.target == Target::Nav(2))
-        .unwrap();
-    let (x, y) = nav.rect.center();
-    assert_eq!(
-        state.hit_test(&rendered.controls, x, y),
-        Some(Target::Nav(2))
+            .collect(),
     );
+    state.section = 1;
+    let last = Target::Background(state.background_count() - 1);
+    state.focus = last.clone();
+    state.reveal_focus(&controls(&state));
+    let bottom =
+        state.content_viewport().y + state.content_viewport().h - SETTINGS_LIST_BOTTOM_PADDING;
+    let rect = controls(&state)
+        .into_iter()
+        .find(|c| c.target == last)
+        .unwrap()
+        .rect;
+    assert!(rect.y + rect.h <= bottom + 0.01);
+    state.wheel_scroll(&controls(&state), Some((1000., 600.)), 0, -1000);
+    let rect = controls(&state)
+        .into_iter()
+        .find(|c| c.target == last)
+        .unwrap()
+        .rect;
+    assert!((rect.y + rect.h - bottom).abs() < 0.01);
 }
 
 #[test]
