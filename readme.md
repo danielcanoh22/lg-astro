@@ -173,6 +173,10 @@ sh /var/lib/luma-home/home.sh disable
 
 `restore` is an alias for `disable`.
 
+If Luma fails to start as Home three times in a row, it gives LG Home back automatically so the TV
+and remote stay usable. The takeover stays enabled: the next full reboot (not a Quick Start+ wake)
+applies Luma again.
+
 Boot log: `/var/lib/luma-home/boot.log`. See the
 [development guide](development.md#optional-native-home-integration) for implementation details.
 

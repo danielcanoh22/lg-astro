@@ -466,6 +466,62 @@ pub fn update_result_for(
         .map_err(|e| format!("Invalid installer result: {e}"))
 }
 
+/// Counts this start of Luma as Home. After repeated starts that never became healthy, it starts
+/// the fallback to LG Home until reboot and returns true: the caller exits. The fallback runs in
+/// its own systemd unit because restoring LG Home stops this process.
+pub fn home_fallback_due() -> bool {
+    #[cfg(all(feature = "webos", unix))]
+    {
+        use luma_tv_helper::home;
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } != 0 {
+            return false;
+        }
+        match home::record_start(&luma_tv_helper::system::Tv) {
+            Ok(home::Start::Continue) => {}
+            Ok(home::Start::Fallback) => {
+                eprintln!(
+                    "Luma Home: {} starts failed; giving LG Home back until reboot",
+                    home::FAILURE_LIMIT
+                );
+                // The installed package's script and helper, not the copies in
+                // /var/lib/luma-home: only `enable` refreshes those, so they can predate
+                // `fallback` after a Homebrew Channel or manual upgrade.
+                let started = install_dir().and_then(|directory| {
+                    std::process::Command::new("systemd-run")
+                        .args(["--unit=luma-home-fallback", "--collect", "/bin/sh"])
+                        .arg(directory.join("home.sh"))
+                        .arg("fallback")
+                        .status()
+                        .map_err(|error| error.to_string())
+                });
+                match started {
+                    Ok(status) if status.success() => return true,
+                    // Keep running: exiting without a fallback would only start Luma again.
+                    Ok(status) => eprintln!("Luma Home: fallback not started ({status})"),
+                    Err(error) => eprintln!("Luma Home: fallback not started: {error}"),
+                }
+            }
+            Err(error) => eprintln!("Luma Home: start not counted: {error}"),
+        }
+    }
+    false
+}
+
+/// How long Luma must keep running after its first frame for a start as Home to count as
+/// healthy. Short, because an unregistered Home restarts on every Home key press.
+pub const HOME_HEALTHY_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Luma ran long enough as Home: its next start begins a new failure count.
+pub fn record_home_healthy() {
+    #[cfg(all(feature = "webos", unix))]
+    thread::spawn(|| {
+        if let Err(error) = luma_tv_helper::home::record_healthy(&luma_tv_helper::system::Tv) {
+            eprintln!("Luma Home: health not recorded: {error}");
+        }
+    });
+}
+
 fn sync_splash(background: &str) -> Result<(), String> {
     let directory = install_dir()?;
     // The executable/manifest Home already runs privileged. Avoid starting another process or

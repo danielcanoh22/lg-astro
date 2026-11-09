@@ -601,6 +601,11 @@ fn run() -> Result<(), String> {
         if !options.webos_home && platform::redirect_to_home()? {
             return Ok(());
         }
+        // Before any window or GL work, so failures there count too: a Luma that keeps failing
+        // as Home gives LG Home back until reboot instead of leaving the TV without one.
+        if options.webos_home && platform::home_fallback_due() {
+            return Ok(());
+        }
         let surface_id = if options.webos_home {
             platform::home_id()
         } else {
@@ -952,6 +957,8 @@ fn run() -> Result<(), String> {
     let mut startup_cycle_pending = state.preferences.wallpaper_cycle;
     let mut wallpapers_scanned = false;
     let launched = Instant::now();
+    // When this start as Home counts as healthy (platform::record_home_healthy).
+    let mut healthy_at: Option<Instant> = None;
     // When to ask for the inventory again after a failed load (State::inventory_failed).
     let mut inventory_retry: Option<Instant> = None;
     let mut input_refresh = input_refresh::Refresh::default();
@@ -1771,6 +1778,9 @@ fn run() -> Result<(), String> {
                 let swap_ms = swap_started.elapsed().as_secs_f64() * 1000.;
                 if presented == 0 {
                     startup_stage("first frame");
+                    if webos && options.webos_home {
+                        healthy_at = Some(Instant::now() + platform::HOME_HEALTHY_AFTER);
+                    }
                     if webos {
                         let stats = renderer.stats();
                         eprintln!(
@@ -1820,6 +1830,10 @@ fn run() -> Result<(), String> {
         frame += 1;
         if final_frame {
             running = false;
+        }
+        if healthy_at.is_some_and(|at| Instant::now() >= at) {
+            healthy_at = None;
+            platform::record_home_healthy();
         }
         if foreground.failed(Instant::now())
             && let Some(end_registration) = &end_registration

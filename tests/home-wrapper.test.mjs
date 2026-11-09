@@ -79,6 +79,17 @@ test('a cold boot through the hook symlink schedules the copied apply', async ()
   }
 });
 
+test('a fallback runs the copied helper', async () => {
+  const tv = await fixture();
+  try {
+    const fallback = tv.run('fallback');
+    assert.equal(fallback.status, 0, fallback.stderr);
+    assert.deepEqual(await tv.recorded(), [`[home][fallback][${tv.state}][]`]);
+  } finally {
+    await fs.rm(tv.root, { recursive: true, force: true });
+  }
+});
+
 test('a missing helper is reported before any change', async () => {
   const tv = await fixture({ helper: false });
   try {
