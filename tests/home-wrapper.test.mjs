@@ -79,6 +79,23 @@ test('a cold boot through the hook symlink schedules the copied apply', async ()
   }
 });
 
+test('a cold boot logs when the hook ran and when apply started and ended', async () => {
+  const tv = await fixture();
+  try {
+    assert.equal(tv.run().status, 0);
+    let log = '';
+    for (let i = 0; i < 200 && !log.includes('apply ended'); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      log = await fs.readFile(path.join(tv.state, 'boot.log'), 'utf8').catch(() => '');
+    }
+    assert.match(log, /Luma Home: boot hook at [\d.]* s\n/);
+    assert.match(log, /Luma Home: apply started at [\d.]* s\n/);
+    assert.match(log, /Luma Home: apply ended at [\d.]* s \(exit 0\)\n/);
+  } finally {
+    await fs.rm(tv.root, { recursive: true, force: true });
+  }
+});
+
 test('a fallback runs the copied helper', async () => {
   const tv = await fixture();
   try {

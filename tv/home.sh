@@ -67,9 +67,15 @@ fi
 if [ ! -d "$STATE" ]; then mkdir -m 755 "$STATE" || exit 1; fi
 [ "$(stat -c %u "$STATE")" = 0 ] || exit 1
 if [ "$COMMAND" = boot ]; then
+  # Seconds since boot in boot.log, to see where the delay before Luma appears goes.
+  uptime_s() { cut -d' ' -f1 /proc/uptime 2>/dev/null; }
   (
+    printf 'Luma Home: boot hook at %s s\n' "$(uptime_s)"
     sleep 5
-    exec sh "$STATE/home.sh" apply
+    printf 'Luma Home: apply started at %s s\n' "$(uptime_s)"
+    sh "$STATE/home.sh" apply
+    status=$?
+    printf 'Luma Home: apply ended at %s s (exit %s)\n' "$(uptime_s)" "$status"
   ) </dev/null >>"$STATE/boot.log" 2>&1 &
   exit 0
 fi
