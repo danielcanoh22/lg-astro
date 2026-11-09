@@ -202,6 +202,53 @@ fn home_switches_to_lumas_input_once_per_open_and_never_twice_within_the_interva
 }
 
 #[test]
+fn home_stops_after_three_quick_switches_until_the_home_key_and_settles_after_a_pause() {
+    use crate::state::{LUMA_INPUT_INTERVAL, LUMA_INPUT_LIMIT, LUMA_INPUT_SETTLE};
+    let mut now = std::time::Instant::now();
+    let mut state = ready();
+    with_luma_input(&mut state);
+    for _ in 0..LUMA_INPUT_LIMIT {
+        state.home_opened(false);
+        assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+        now += LUMA_INPUT_INTERVAL;
+    }
+    // The input copy keeps exiting and SAM keeps relaunching Home: stop.
+    state.home_opened(false);
+    assert_eq!(state.luma_input_due(now), None);
+    // The Home key in Home is user input and starts a new streak.
+    state.home_key();
+    assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+    // After a quiet pause, Home switches again without the key.
+    now += LUMA_INPUT_SETTLE;
+    state.home_opened(false);
+    assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+    assert_eq!(state.luma_input_streak, 1);
+}
+
+#[test]
+fn a_home_start_waits_past_a_failed_input_read_and_a_hidden_start_never_switches() {
+    use crate::state::LumaInput;
+    let now = std::time::Instant::now();
+    let mut state = ready();
+    let inventory = state.inventory.clone();
+    state.home_opened(true);
+    state.set_inventory(inventory, Some("inputs unavailable".into()));
+    assert_eq!(state.luma_input, LumaInput::AfterInventory);
+    with_luma_input(&mut state);
+    assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+
+    let mut hidden = ready();
+    hidden.home_opened(true);
+    hidden.home_hidden();
+    with_luma_input(&mut hidden);
+    assert_eq!(hidden.luma_input_due(now), None);
+    // Hiding does not cancel a relaunch switch that is already due.
+    hidden.home_opened(false);
+    hidden.home_hidden();
+    assert_eq!(hidden.luma_input_due(now), Some(Effect::SelectLumaInput));
+}
+
+#[test]
 fn home_stays_when_lumas_input_is_not_registered() {
     let mut state = ready();
     assert!(
@@ -539,19 +586,21 @@ fn a_save_by_the_other_luma_copy_is_reloaded_once_and_a_broken_file_keeps_prefer
     state.preferences.background = "unsaved".into();
     crate::reload_changed_preferences(&path, &mut stamp, &mut state);
     assert_eq!(state.preferences.background, "unsaved");
+    // A different size, so the change shows even within one file-time tick.
     let other = Preferences {
-        background: "forest".into(),
+        background: "midnight".into(),
         show_home_names: !state.preferences.show_home_names,
         ..state.preferences.clone()
     };
+    assert_ne!(other.background.len(), state.preferences.background.len());
     storage::save(&path, &other).unwrap();
     crate::reload_changed_preferences(&path, &mut stamp, &mut state);
-    assert_eq!(state.preferences.background, "forest");
+    assert_eq!(state.preferences.background, "midnight");
     assert_eq!(state.preferences.show_home_names, other.show_home_names);
     assert_eq!(stamp, storage::stamp(&path));
     std::fs::write(&path, "broken file").unwrap();
     crate::reload_changed_preferences(&path, &mut stamp, &mut state);
-    assert_eq!(state.preferences.background, "forest");
+    assert_eq!(state.preferences.background, "midnight");
     std::fs::remove_dir_all(directory).unwrap();
 }
 

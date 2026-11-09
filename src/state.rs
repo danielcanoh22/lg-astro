@@ -40,6 +40,11 @@ pub fn unix_now() -> u64 {
 /// Least time between two automatic switches to Luma's TV input, so an app copy that keeps
 /// failing cannot start a relaunch loop with Home.
 pub const LUMA_INPUT_INTERVAL: Duration = Duration::from_secs(5);
+/// Automatic switches in a row, each within `LUMA_INPUT_SETTLE` of the previous one, before Home
+/// stops switching until the Home key is pressed in Home: an input copy that keeps exiting
+/// cannot keep reopening.
+pub const LUMA_INPUT_LIMIT: u32 = 3;
+pub const LUMA_INPUT_SETTLE: Duration = Duration::from_secs(30);
 
 /// When Home switches to Luma's TV input (see `State::luma_input_due`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -284,6 +289,7 @@ pub struct State {
     pub tv_input: TvInput,
     pub luma_input: LumaInput,
     pub luma_input_switched: Option<Instant>,
+    pub luma_input_streak: u32,
 }
 
 impl State {
@@ -330,6 +336,7 @@ impl State {
             tv_input: TvInput::Unknown,
             luma_input: LumaInput::Idle,
             luma_input_switched: None,
+            luma_input_streak: 0,
         }
     }
 
@@ -499,6 +506,20 @@ impl State {
         };
     }
 
+    /// The Home key pressed while Home is in front: user input, so it also ends a stopped streak.
+    pub fn home_key(&mut self) {
+        self.luma_input_streak = 0;
+        self.home_opened(false);
+    }
+
+    /// Home hidden before its first inventory (started behind another input) does not take the
+    /// screen afterwards.
+    pub fn home_hidden(&mut self) {
+        if self.luma_input == LumaInput::AfterInventory {
+            self.luma_input = LumaInput::Idle;
+        }
+    }
+
     pub fn luma_input_due(&mut self, now: Instant) -> Option<Effect> {
         if self.luma_input != LumaInput::Now {
             return None;
@@ -515,6 +536,14 @@ impl State {
         if !registered || recent {
             return None;
         }
+        let streak = match self.luma_input_switched {
+            Some(at) if now.duration_since(at) < LUMA_INPUT_SETTLE => self.luma_input_streak + 1,
+            _ => 1,
+        };
+        if streak > LUMA_INPUT_LIMIT {
+            return None;
+        }
+        self.luma_input_streak = streak;
         self.luma_input_switched = Some(now);
         Some(Effect::SelectLumaInput)
     }
@@ -722,7 +751,8 @@ impl State {
         } else {
             self.inventory.inputs = next.inputs;
         }
-        if self.luma_input == LumaInput::AfterInventory {
+        // A failed input read leaves the inputs unknown: wait for one that lists them.
+        if self.luma_input == LumaInput::AfterInventory && warning.is_none() {
             self.luma_input = LumaInput::Now;
         }
         self.loading = false;

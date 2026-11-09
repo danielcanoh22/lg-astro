@@ -293,7 +293,6 @@ impl BackButton {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Re-reads preferences when the file changed since `stamp`: Home and the TV-input app can both
 /// be running, and each saves its changes to the same file. A file that cannot be read keeps the
 /// current preferences.
@@ -313,6 +312,7 @@ fn reload_changed_preferences(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn effects(
     effects: Vec<Effect>,
     state: &mut State,
@@ -1393,6 +1393,7 @@ fn run() -> Result<(), String> {
                         focused = false;
                         press = None;
                         back_button.cancel();
+                        state.home_hidden();
                         if matches!(state.overlay, Some(Overlay::SystemKeyboard)) {
                             pending = state.finish_text_input();
                         }
@@ -1467,6 +1468,7 @@ fn run() -> Result<(), String> {
                                 press = None;
                                 back_button.cancel();
                                 pending = state.return_home();
+                                state.home_key();
                             }
                         }
                         _ if native_hold => {
