@@ -677,9 +677,13 @@ executable itself stays at its installed path for LS2 authentication, `$ORIGIN/l
 and preference selection. Opening Luma's normal tile while the Home mount is active redirects to
 the Home instance. The scripts do not create a browser wrapper or change the package's app ID.
 
-`64-luma-home` reapplies the mount from a detached boot hook. `/var/lib/luma-home/boot.log` records
-the seconds since boot when the hook ran and when its `apply` started and ended, plus the
-milliseconds `apply` took to mount, reread the manifest, stop the previous Home and launch Luma.
+`64-luma-home` reapplies the mount from a detached boot hook. Homebrew Channel runs `init.d` late
+in boot, after LG Home is already shown (about 43 s after kernel start on a webOS 25 TV), so
+`apply` starts at once. A failed `apply` is tried up to three times, 2 s apart; a failure after
+mounting attempts to restore LG Home before the next try. `/var/lib/luma-home/boot.log` records the seconds since boot when the hook ran
+and when each `apply` attempt started and ended, plus the milliseconds `apply` took to mount,
+reread the manifest, stop the previous Home and launch Luma. Waiting for the previous Home to
+exit checks every 200 ms within the same 5 s limit.
 The existing TV Home Auto Launch
 and Quick Start+ settings determine whether power-on opens Home. Until the hook applies, LG Home
 can still appear. This integration does not change those settings or install a remote-key filter.

@@ -18,6 +18,7 @@ pub struct Output {
     pub stderr: Vec<u8>,
     pub success: bool,
 }
+pub const BRIEF_PAUSE: Duration = Duration::from_millis(200);
 pub trait System {
     fn path(&self, path: &Path) -> PathBuf;
     fn run(
@@ -29,6 +30,10 @@ pub trait System {
     ) -> Result<Output>;
     fn pause(&self) {
         thread::sleep(Duration::from_secs(1));
+    }
+    /// For waits that usually end within a fraction of a second, such as a terminated process.
+    fn pause_briefly(&self) {
+        thread::sleep(BRIEF_PAUSE);
     }
     fn terminate(&self, pid: u32) -> Result<()>;
     fn uid(&self) -> u32;

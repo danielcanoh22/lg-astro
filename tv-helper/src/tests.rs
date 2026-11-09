@@ -22,6 +22,7 @@ struct Fixture {
     close_normal: Cell<bool>,
     uid: Cell<u32>,
     pauses: Cell<usize>,
+    brief_pauses: Cell<usize>,
     fail_unmount: Cell<bool>,
     stuck: Cell<bool>,
 }
@@ -51,6 +52,7 @@ impl Fixture {
             close_normal: Cell::new(true),
             uid: Cell::new(0),
             pauses: Cell::new(0),
+            brief_pauses: Cell::new(0),
             fail_unmount: Cell::new(false),
             stuck: Cell::new(false),
         };
@@ -168,6 +170,9 @@ impl System for Fixture {
     }
     fn pause(&self) {
         self.pauses.set(self.pauses.get() + 1);
+    }
+    fn pause_briefly(&self) {
+        self.brief_pauses.set(self.brief_pauses.get() + 1);
     }
     fn terminate(&self, pid: u32) -> Result<()> {
         self.calls.borrow_mut().push(format!("kill {pid}"));
@@ -896,6 +901,9 @@ fn a_stuck_home_process_is_reported_after_unmount_recovery() {
     assert!(error.contains("Restore also failed"));
     assert_eq!(f.read(EXE), b"stock-com.webos.app.home");
     assert!(!system::exists(&f, "/var/run/luma-home"));
+    // apply and its restore each wait the full 5 s budget in 200 ms steps.
+    assert_eq!(f.brief_pauses.get(), 2 * 25);
+    assert_eq!(system::BRIEF_PAUSE * 25, Duration::from_secs(5));
 }
 #[test]
 fn accepted_close_waits_boundedly_and_a_close_race_can_succeed() {
