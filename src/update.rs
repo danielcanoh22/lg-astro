@@ -587,8 +587,7 @@ mod tests {
         }}]})
     }
 
-    const URL: &str =
-        "https://github.com/danielcanoh22/lg-luma/releases/download/v9.0.0/com.ecklf.luma_9.0.0_arm.ipk";
+    const URL: &str = "https://github.com/danielcanoh22/lg-luma/releases/download/v9.0.0/com.ecklf.luma_9.0.0_arm.ipk";
 
     #[test]
     fn attempt_paths_are_private_unique_and_results_are_terminal_only_when_finished() {
