@@ -685,6 +685,16 @@ instance and removes the boot hook. The copied restore scripts remain in `/var/l
 even if the installed package is removed. Disable the standalone `65-luma` cold-boot hook before
 enabling this integration.
 
+A crash-loop guard keeps a failing Luma from leaving the TV without a Home. On each start as Home,
+before any window or GL work, Luma (as root) counts the start in `/var/run/luma-home-failures`.
+A start stays counted as failed until Luma has run 10 seconds after its first presented frame,
+which removes the file. After three failed starts in a row, the next start runs
+`home.sh fallback` in its own `luma-home-fallback` systemd unit and exits. `fallback` removes the
+mount, refreshes LG's manifest, stops the native Home instance and always opens LG Home, but keeps
+`state.json` enabled and the boot hook in place. The counter lives on tmpfs, so the next cold boot
+applies Luma again; any `apply` (boot, `enable` or manual) also clears it. A binary that cannot
+execute at all, or a Luma that hangs without exiting, is not detected.
+
 Build and script checks cannot establish native Home compatibility. Manually verify Home, Back
 out of the last app, standby wake with the TV's chosen Quick Start+ setting, a full cold boot,
 saved preferences and restoring LG Home. The broader webOS 6+ app compatibility statement does

@@ -11,6 +11,11 @@ const CONFIG: &str = "/var/lib/luma-home/state.json";
 const STAGE: &str = "/var/lib/luma-home/app";
 const HOOK: &str = "/var/lib/webosbrew/init.d/64-luma-home";
 const MARKER: &str = "/var/run/luma-home";
+/// Luma starts as Home that have not become healthy yet. tmpfs: a reboot clears it, and with it
+/// any fallback to LG Home.
+pub const FAILURES: &str = "/var/run/luma-home-failures";
+/// Consecutive unhealthy starts after which the next start gives LG Home back until reboot.
+pub const FAILURE_LIMIT: u32 = 3;
 pub const HOME: &str = "com.webos.app.home";
 pub const FULL_HOME: &str = "com.webos.app.fullhome";
 fn default_home() -> String {
@@ -294,6 +299,15 @@ impl<'a, S: System> Home<'a, S> {
         Err("Close Luma before enabling Home integration".into())
     }
     pub fn restore(&self, config: &Config) -> Result<()> {
+        self.restore_home(config, false)
+    }
+    /// Gives LG Home back without disabling the integration: state.json and the boot hook stay,
+    /// so the next cold boot applies Luma again. A failing Luma may not be in front, so LG Home
+    /// is always opened.
+    pub fn fallback(&self, config: &Config) -> Result<()> {
+        self.restore_home(config, true)
+    }
+    fn restore_home(&self, config: &Config, open: bool) -> Result<()> {
         let was_home = match self.foreground() {
             Ok(id) => id == self.id,
             Err(e) => {
@@ -327,7 +341,7 @@ impl<'a, S: System> Home<'a, S> {
             )?)?;
         }
         self.stop_home(&config.app_dir)?;
-        if was_home {
+        if open || was_home {
             self.launch()?;
         }
         Ok(())
@@ -336,6 +350,8 @@ impl<'a, S: System> Home<'a, S> {
         if !self.exists(Path::new(&config.app_dir).join("luma")) {
             return Err("Luma is no longer installed".into());
         }
+        // Every apply (boot, enable, manual) gives Luma a fresh set of attempts.
+        system::remove(self.system, FAILURES)?;
         let root = if config.method == "executable" {
             self.owned_mount()?
         } else {
@@ -630,6 +646,43 @@ pub fn dispatch(
             }
             Ok(json!({"returnValue":true}))
         }
+        "fallback" => {
+            let config = saved.ok_or("Luma Home has not been enabled")?;
+            if config.enabled {
+                home.fallback(&config)?;
+            }
+            Ok(json!({"returnValue":true}))
+        }
         _ => Err("Unknown Home integration command".into()),
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Start {
+    Continue,
+    /// Too many starts never became healthy: give LG Home back until reboot.
+    Fallback,
+}
+/// Called by Luma as Home before it opens its window. A start counts as failed until
+/// `record_healthy`; after FAILURE_LIMIT failed starts in a row, the next one falls back.
+pub fn record_start(system: &impl System) -> Result<Start> {
+    let failures = system::read(system, FAILURES, 16)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|text| text.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    if failures >= FAILURE_LIMIT {
+        return Ok(Start::Fallback);
+    }
+    system::write(
+        system,
+        FAILURES,
+        format!("{}\n", failures + 1).as_bytes(),
+        0o644,
+    )?;
+    Ok(Start::Continue)
+}
+/// Luma has been running long enough: its next start begins a new count.
+pub fn record_healthy(system: &impl System) -> Result<()> {
+    system::remove(system, FAILURES)
 }

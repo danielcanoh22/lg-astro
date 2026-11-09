@@ -963,3 +963,57 @@ fn persistent_preferences_win_over_package_local_migration_and_active_stages_ref
         b"prism"
     );
 }
+#[test]
+fn unhealthy_starts_fall_back_after_the_limit_and_health_starts_a_new_count() {
+    let f = Fixture::new();
+    for _ in 0..home::FAILURE_LIMIT {
+        assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
+    }
+    assert_eq!(home::record_start(&f).unwrap(), home::Start::Fallback);
+    assert_eq!(home::record_start(&f).unwrap(), home::Start::Fallback);
+    home::record_healthy(&f).unwrap();
+    assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
+    assert_eq!(f.read(home::FAILURES), b"1\n");
+    f.put(home::FAILURES, b"garbage");
+    assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
+    assert_eq!(f.read(home::FAILURES), b"1\n");
+}
+#[test]
+fn fallback_restores_lg_home_until_the_next_apply_for_both_methods() {
+    for release in ["5.6.2-21", "11.2.0"] {
+        let f = Fixture::new();
+        f.put(
+            "/etc/starfish-release",
+            format!("Rockhopper release {release}").as_bytes(),
+        );
+        home::dispatch(&f, "enable", Some(DIR), None).unwrap();
+        assert!(!f.mounts.borrow().is_empty(), "{release}");
+        let launches = || f.calls().iter().filter(|s| s.contains("/launch ")).count();
+        let before = launches();
+        // A crashing Luma is not in front, yet LG Home must open for the remote.
+        *f.front.borrow_mut() = "other.app".into();
+        home::dispatch(&f, "fallback", None, None).unwrap();
+        assert!(f.mounts.borrow().is_empty(), "{release}");
+        assert_eq!(launches(), before + 1, "{release}");
+        // Only until reboot: the integration and its boot hook stay.
+        assert_eq!(
+            system::json(&f, "/var/lib/luma-home/state.json").unwrap()["enabled"].as_bool(),
+            Some(true)
+        );
+        assert!(system::exists(&f, "/var/lib/webosbrew/init.d/64-luma-home"));
+        f.put(home::FAILURES, b"3\n");
+        home::dispatch(&f, "apply", None, None).unwrap();
+        assert!(!f.mounts.borrow().is_empty(), "{release}");
+        assert!(!system::exists(&f, home::FAILURES), "{release}");
+    }
+}
+#[test]
+fn fallback_changes_nothing_once_the_integration_is_disabled() {
+    let f = Fixture::new();
+    home::dispatch(&f, "enable", Some(DIR), None).unwrap();
+    home::dispatch(&f, "disable", None, None).unwrap();
+    let calls = f.calls().len();
+    home::dispatch(&f, "fallback", None, None).unwrap();
+    assert_eq!(f.calls().len(), calls);
+    assert!(f.mounts.borrow().is_empty());
+}
