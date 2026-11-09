@@ -1,5 +1,11 @@
 # lg-luma
 
+## 2.18.0
+
+### Minor Changes
+
+- 2940cd6: Give LG Home back until the next reboot when Luma fails to start as Home three times in a row, so a crashing build can no longer leave the TV without a Home.
+
 ## 2.17.1
 
 ### Patch Changes
