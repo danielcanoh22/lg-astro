@@ -278,8 +278,12 @@ fn only_lumas_own_launch_carries_the_home_parameter_and_both_metadata_shapes_are
         launch_payload("com.webos.app.hdmi3"),
         json!({"id": "com.webos.app.hdmi3"})
     );
-    assert!(launched_by_home(&json!({"nid": "com.ecklf.luma", LAUNCHED_BY_HOME: true})));
-    assert!(launched_by_home(&json!({"params": {LAUNCHED_BY_HOME: true}})));
+    assert!(launched_by_home(
+        &json!({"nid": "com.ecklf.luma", LAUNCHED_BY_HOME: true})
+    ));
+    assert!(launched_by_home(
+        &json!({"params": {LAUNCHED_BY_HOME: true}})
+    ));
     assert!(!launched_by_home(&json!({"nid": "com.ecklf.luma"})));
     assert!(!launched_by_home(&json!({LAUNCHED_BY_HOME: "true"})));
 }
