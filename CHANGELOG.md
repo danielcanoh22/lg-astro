@@ -1,5 +1,12 @@
 # lg-luma
 
+## 2.19.0
+
+### Minor Changes
+
+- 426fab2: Offer only English and Spanish in Settings → Language. A saved language that is no longer offered falls back to English; Chinese and Korean fonts stay bundled for app and input names.
+- 664034c: Allow owners to register Luma as a TV input from Settings → System → Show as TV input, verify it is listed, and remove it again. Keep the virtual input out of Luma's own HDMI row. Firmware-specific last-input startup remains experimental.
+
 ## 2.18.2
 
 ### Patch Changes
