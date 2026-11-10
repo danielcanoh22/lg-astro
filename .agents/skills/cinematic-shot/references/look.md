@@ -1,7 +1,7 @@
 # Look recipes: readable cinematic UI
 
 These are starting values, not overrides of the user brief. They describe the restrained look
-approved during the Luma film iterations. Pixel values assume a **1920×1080 output**; multiply
+approved during the Astro film iterations. Pixel values assume a **1920×1080 output**; multiply
 blur radii, margins, and type sizes by `outputHeight / 1080`.
 
 ## Stage and light

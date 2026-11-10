@@ -11,10 +11,10 @@ use std::{collections::HashSet, sync::mpsc, thread};
 #[path = "platform-install.rs"]
 mod installation;
 
-pub const APP_ID: &str = "com.ecklf.luma";
-/// Launch parameter Home adds when it opens `com.ecklf.luma` for its TV input: that copy then
-/// runs itself instead of redirecting to Home.
-pub const LAUNCHED_BY_HOME: &str = "lumaFromHome";
+pub const APP_ID: &str = "com.danielcanoh22.astro";
+/// Launch parameter Home adds when it opens `com.danielcanoh22.astro` for its TV input: that copy
+/// then runs itself instead of redirecting to Home.
+pub const LAUNCHED_BY_HOME: &str = "astroFromHome";
 
 /// Whether webOS launch metadata (argv[1]) carries `LAUNCHED_BY_HOME`, at its top level or
 /// under `params`.
@@ -40,10 +40,10 @@ pub(crate) fn launch_payload(id: &str) -> Value {
     }
 }
 
-/// Opens `com.ecklf.luma` for its TV input. With `if_home_in_front` it first checks that Home is
-/// the foreground app, so a Home the system started behind another input or app never takes the
-/// screen; if the check fails, it does not switch.
-fn select_luma_input(if_home_in_front: bool) -> Result<(), String> {
+/// Opens `com.danielcanoh22.astro` for its TV input. With `if_home_in_front` it first checks that
+/// Home is the foreground app, so a Home the system started behind another input or app never
+/// takes the screen; if the check fails, it does not switch.
+fn select_astro_input(if_home_in_front: bool) -> Result<(), String> {
     if if_home_in_front {
         let reply = call(
             "luna://com.webos.applicationManager/getForegroundAppInfo",
@@ -51,7 +51,7 @@ fn select_luma_input(if_home_in_front: bool) -> Result<(), String> {
         )?;
         let front = reply["appId"].as_str().unwrap_or_default();
         if !is_home_id(front) {
-            eprintln!("Luma TV input: {front} is in front; Home stays behind it");
+            eprintln!("Astro TV input: {front} is in front; Home stays behind it");
             return Ok(());
         }
     }
@@ -62,8 +62,8 @@ fn select_luma_input(if_home_in_front: bool) -> Result<(), String> {
     .map(|_| ())
 }
 
-/// The EIM input ID LG gives Luma once `luma-helper tv-input enable` registers it.
-const LUMA_INPUT: &str = "MVPD_IP-com.ecklf.luma";
+/// The EIM input ID LG gives Astro once `astro-helper tv-input enable` registers it.
+const ASTRO_INPUT: &str = "MVPD_IP-com.danielcanoh22.astro";
 pub const HOME_ID: &str = "com.webos.app.home";
 pub const FULL_HOME_ID: &str = "com.webos.app.fullhome";
 
@@ -100,7 +100,7 @@ pub fn home_id() -> &'static str {
         .and_then(|arg| serde_json::from_str::<Value>(&arg).ok());
     home_identity(executable.as_deref(), metadata.as_ref())
 }
-/// LG's Home executable. A root integration may bind-mount Luma over it, so sam starts Luma
+/// LG's Home executable. A root integration may bind-mount Astro over it, so sam starts Astro
 /// under LG's own Home manifest and LS2 role (lifecycle v2, keep-alive, no sam restart).
 pub const LG_HOME_EXE: &str = "/usr/bin/com.webos.app.home";
 
@@ -113,13 +113,13 @@ pub fn runs_as_lg_home() -> bool {
 }
 
 /// While this file exists, a staged Home (webOS 10/11) does not register with sam and is
-/// restarted per Home key as before. Luma creates it when a relaunch did not bring it to the
+/// restarted per Home key as before. Astro creates it when a relaunch did not bring it to the
 /// front; delete it to try registering again.
 #[cfg_attr(
     not(all(feature = "webos", target_os = "linux", target_arch = "arm")),
     allow(dead_code)
 )]
-pub const HOME_LIFECYCLE_OFF: &str = "/var/lib/luma-home/no-lifecycle";
+pub const HOME_LIFECYCLE_OFF: &str = "/var/lib/astro-home/no-lifecycle";
 
 /// Whether a relaunch actually brought a staged Home (webOS 10/11) to the front. Only the
 /// compositor's focus or remote input counts: SDL_ShowWindow emits Shown by itself, so Shown
@@ -132,14 +132,14 @@ pub struct ForegroundCheck {
 impl ForegroundCheck {
     pub const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
-    /// A relaunch arrived. `in_front`: Luma was already focused and visible, so nothing to check.
+    /// A relaunch arrived. `in_front`: Astro was already focused and visible, so nothing to check.
     pub fn relaunched(&mut self, now: std::time::Instant, in_front: bool) {
         if !in_front {
             self.deadline = Some(now + Self::TIMEOUT);
         }
     }
 
-    /// The compositor focused Luma, or remote input reached it.
+    /// The compositor focused Astro, or remote input reached it.
     pub fn confirmed(&mut self) {
         self.deadline = None;
     }
@@ -207,13 +207,13 @@ pub fn redirect_to_home() -> Result<bool, String> {
     // A normal tile launch then opens that same instance instead of starting
     // a second renderer writing the same preferences.
     let marked = |file| std::fs::read_to_string(file).is_ok_and(|marker| marker.trim() == APP_ID);
-    if marked("/usr/palm/applications/com.webos.app.home/.luma-home")
-        || marked("/var/run/luma-home")
+    if marked("/usr/palm/applications/com.webos.app.home/.astro-home")
+        || marked("/var/run/astro-home")
     {
         thread::spawn(|| {
             call(
                 "luna://com.webos.applicationManager/launch",
-                json!({"id": std::fs::read_to_string("/var/run/luma-home-target").ok()
+                json!({"id": std::fs::read_to_string("/var/run/astro-home-target").ok()
                     .filter(|id| is_home_id(id.trim())).map(|id| id.trim().to_owned()).unwrap_or_else(|| HOME_ID.into())}),
             )
         })
@@ -230,11 +230,11 @@ pub enum Request {
     Launch(String),
     Uninstall(String),
     SyncSplash(String),
-    /// Read (`None`) or change Luma's TV input registration.
+    /// Read (`None`) or change Astro's TV input registration.
     TvInput(Option<bool>),
-    /// Open `com.ecklf.luma` for its TV input, without the launch notice; with
+    /// Open `com.danielcanoh22.astro` for its TV input, without the launch notice; with
     /// `if_home_in_front`, only while Home is the foreground app.
-    SelectLumaInput {
+    SelectAstroInput {
         if_home_in_front: bool,
     },
     Recent {
@@ -250,7 +250,7 @@ pub enum Response {
         id: String,
         result: Result<(), String>,
     },
-    LumaInputSelected(Result<(), String>),
+    AstroInputSelected(Result<(), String>),
     TvInput {
         request: Option<bool>,
         result: Result<bool, String>,
@@ -373,7 +373,9 @@ impl Platform {
                                             }
                                             Ok(false) => {}
                                             Err(read_error) => {
-                                                eprintln!("Luma uninstall inventory: {read_error}");
+                                                eprintln!(
+                                                    "Astro uninstall inventory: {read_error}"
+                                                );
                                                 break;
                                             }
                                         }
@@ -405,9 +407,9 @@ impl Platform {
                     } else {
                         Ok(())
                     }),
-                    Request::SelectLumaInput { if_home_in_front } => {
-                        Response::LumaInputSelected(if webos {
-                            select_luma_input(if_home_in_front)
+                    Request::SelectAstroInput { if_home_in_front } => {
+                        Response::AstroInputSelected(if webos {
+                            select_astro_input(if_home_in_front)
                         } else {
                             Ok(())
                         })
@@ -431,7 +433,7 @@ impl Platform {
                         {
                             match sync_splash(&background) {
                                 Ok(()) => splash_background = Some(background),
-                                Err(error) => eprintln!("Luma splash: {error}"),
+                                Err(error) => eprintln!("Astro splash: {error}"),
                             }
                         }
                         continue;
@@ -464,7 +466,7 @@ impl Platform {
 /// Homebrew remains the privilege boundary for normal app jails. Each argument is shell-quoted
 /// independently; there is no interpreter source and no untrusted command name.
 fn helper_command(operation: &str, arguments: &[String]) -> Result<String, String> {
-    let executable = install_dir()?.join("luma-helper");
+    let executable = install_dir()?.join("astro-helper");
     let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
     let mut parts = vec![quote(&executable.to_string_lossy()), quote(operation)];
     parts.extend(arguments.iter().map(|argument| quote(argument)));
@@ -482,7 +484,7 @@ fn update_argument(value: &str) -> String {
 
 /// Hands a downloaded, verified update to `tv/self-update.sh`, run as root through Homebrew
 /// Channel's exec in its own systemd unit: exec ends its children when the call returns, and the
-/// install closes Luma.
+/// install closes Astro.
 pub fn start_update(
     release: &crate::update::Release,
     attempt: &str,
@@ -490,7 +492,7 @@ pub fn start_update(
 ) -> Result<(), String> {
     let directory = install_dir()?;
     let command = format!(
-        "systemd-run --unit=luma-update-{} --collect /bin/sh -c {} self-update {} {} {} {} {}",
+        "systemd-run --unit=astro-update-{} --collect /bin/sh -c {} self-update {} {} {} {} {}",
         attempt,
         update_argument(include_str!("../tv/self-update.sh")),
         update_argument(&ipk.to_string_lossy()),
@@ -534,7 +536,7 @@ pub fn update_result_for(
     let envelope = call(
         "luna://org.webosbrew.hbchannel.service/exec",
         json!({
-            "command": format!("cat /var/lib/luma-update/{file} 2>/dev/null || true")
+            "command": format!("cat /var/lib/astro-update/{file} 2>/dev/null || true")
         }),
     )?;
     let output = envelope
@@ -550,30 +552,30 @@ pub fn update_result_for(
         .map_err(|e| format!("Invalid installer result: {e}"))
 }
 
-/// Counts this start of Luma as Home. After repeated starts that never became healthy, it starts
+/// Counts this start of Astro as Home. After repeated starts that never became healthy, it starts
 /// the fallback to LG Home until reboot and returns true: the caller exits. The fallback runs in
 /// its own systemd unit because restoring LG Home stops this process.
 pub fn home_fallback_due() -> bool {
     #[cfg(all(feature = "webos", unix))]
     {
-        use luma_tv_helper::home;
+        use astro_tv_helper::home;
         // SAFETY: geteuid has no preconditions.
         if unsafe { libc::geteuid() } != 0 {
             return false;
         }
-        match home::record_start(&luma_tv_helper::system::Tv) {
+        match home::record_start(&astro_tv_helper::system::Tv) {
             Ok(home::Start::Continue) => {}
             Ok(home::Start::Fallback) => {
                 eprintln!(
-                    "Luma Home: {} starts failed; giving LG Home back until reboot",
+                    "Astro Home: {} starts failed; giving LG Home back until reboot",
                     home::FAILURE_LIMIT
                 );
                 // The installed package's script and helper, not the copies in
-                // /var/lib/luma-home: only `enable` refreshes those, so they can predate
+                // /var/lib/astro-home: only `enable` refreshes those, so they can predate
                 // `fallback` after a Homebrew Channel or manual upgrade.
                 let started = install_dir().and_then(|directory| {
                     std::process::Command::new("systemd-run")
-                        .args(["--unit=luma-home-fallback", "--collect", "/bin/sh"])
+                        .args(["--unit=astro-home-fallback", "--collect", "/bin/sh"])
                         .arg(directory.join("home.sh"))
                         .arg("fallback")
                         .status()
@@ -581,27 +583,27 @@ pub fn home_fallback_due() -> bool {
                 });
                 match started {
                     Ok(status) if status.success() => return true,
-                    // Keep running: exiting without a fallback would only start Luma again.
-                    Ok(status) => eprintln!("Luma Home: fallback not started ({status})"),
-                    Err(error) => eprintln!("Luma Home: fallback not started: {error}"),
+                    // Keep running: exiting without a fallback would only start Astro again.
+                    Ok(status) => eprintln!("Astro Home: fallback not started ({status})"),
+                    Err(error) => eprintln!("Astro Home: fallback not started: {error}"),
                 }
             }
-            Err(error) => eprintln!("Luma Home: start not counted: {error}"),
+            Err(error) => eprintln!("Astro Home: start not counted: {error}"),
         }
     }
     false
 }
 
-/// How long Luma must keep running after its first frame for a start as Home to count as
+/// How long Astro must keep running after its first frame for a start as Home to count as
 /// healthy. Short, because an unregistered Home restarts on every Home key press.
 pub const HOME_HEALTHY_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Luma ran long enough as Home: its next start begins a new failure count.
+/// Astro ran long enough as Home: its next start begins a new failure count.
 pub fn record_home_healthy() {
     #[cfg(all(feature = "webos", unix))]
     thread::spawn(|| {
-        if let Err(error) = luma_tv_helper::home::record_healthy(&luma_tv_helper::system::Tv) {
-            eprintln!("Luma Home: health not recorded: {error}");
+        if let Err(error) = astro_tv_helper::home::record_healthy(&astro_tv_helper::system::Tv) {
+            eprintln!("Astro Home: health not recorded: {error}");
         }
     });
 }
@@ -612,8 +614,8 @@ fn sync_splash(background: &str) -> Result<(), String> {
     // queuing a Homebrew call behind its startup; file work still stays on the platform worker.
     #[cfg(all(feature = "webos", unix))]
     if unsafe { libc::geteuid() } == 0 {
-        return luma_tv_helper::files::sync_splash(
-            &luma_tv_helper::system::Tv,
+        return astro_tv_helper::files::sync_splash(
+            &astro_tv_helper::system::Tv,
             &directory,
             background,
         )
@@ -634,8 +636,8 @@ fn sync_splash(background: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads or changes whether LG lists Luma as a TV input, through the packaged native helper
-/// (`luma-helper tv-input`). It verifies LG's input list itself and rolls back an unlisted add.
+/// Reads or changes whether LG lists Astro as a TV input, through the packaged native helper
+/// (`astro-helper tv-input`). It verifies LG's input list itself and rolls back an unlisted add.
 fn tv_input(request: Option<bool>) -> Result<bool, String> {
     let command = helper_command(
         "tv-input",
@@ -675,6 +677,7 @@ pub fn can_uninstall(id: &str) -> bool {
             id,
             APP_ID
                 | HOME_ID
+                | "com.ecklf.luma"
                 | "com.luma.native"
                 | "com.luma.launcher"
                 | "com.luma.launcher.native"
@@ -697,7 +700,7 @@ pub fn uninstall_request(id: &str) -> Result<(&'static str, Value), String> {
 }
 
 /// Use the unfiltered inventory: a hidden/system app must not look uninstalled
-/// merely because it would be excluded from Luma's visible catalogue.
+/// merely because it would be excluded from Astro's visible catalogue.
 pub fn inventory_confirms_removal(apps: &Value, id: &str) -> Result<bool, String> {
     let apps = apps
         .as_array()
@@ -731,7 +734,7 @@ fn call(uri: &str, payload: Value) -> Result<Value, String> {
         .and_then(checked_response)
         .map_err(|error| {
             let error = format!("{uri}: {error}");
-            eprintln!("Luma TV service: {error}");
+            eprintln!("Astro TV service: {error}");
             error
         })
 }
@@ -750,7 +753,7 @@ fn checked_response(value: Value) -> Result<Value, String> {
 }
 
 fn inventory_read(uri: &str, field: &str) -> Result<Value, String> {
-    // In place of LG's Home, Luma holds LG Home's LS2 role and asks sam/EIM itself: an early
+    // In place of LG's Home, Astro holds LG Home's LS2 role and asks sam/EIM itself: an early
     // root integration can bring this Home up long before Homebrew's service starts (~21 s vs
     // ~51 s into a cold boot). A refused call answers at once and falls back below.
     if runs_as_lg_home()
@@ -771,7 +774,7 @@ fn inventory_read(uri: &str, field: &str) -> Result<Value, String> {
     )?;
     inventory_payload(&envelope, field).map_err(|error| {
         let error = format!("{uri}: {error}");
-        eprintln!("Luma TV inventory: {error}");
+        eprintln!("Astro TV inventory: {error}");
         error
     })
 }
@@ -911,7 +914,7 @@ fn inventory() -> Result<(Inventory, Option<String>), String> {
     match inputs {
         Ok(inputs) => {
             eprintln!(
-                "Luma TV inventory: {} apps, {} inputs",
+                "Astro TV inventory: {} apps, {} inputs",
                 apps.len(),
                 inputs.len()
             );
@@ -964,6 +967,7 @@ pub fn normalize_apps(raw: &Value) -> Result<Vec<App>, String> {
         let live = id == "com.webos.app.livetv";
         let visible = entry.get("visible");
         if id == APP_ID
+            || id == "com.ecklf.luma"
             || id == "com.luma.native"
             || id == "com.luma.launcher"
             || id == "com.luma.launcher.native"
@@ -998,16 +1002,16 @@ pub fn normalize_inputs(raw: &Value) -> Result<Vec<Input>, String> {
         let Some(id) = entry.get("appId").and_then(Value::as_str) else {
             continue;
         };
-        // Luma's own registered input (`luma-helper tv-input`). webOS 25 leaves it out of LG's
+        // Astro's own registered input (`astro-helper tv-input`). webOS 25 leaves it out of LG's
         // input picker, so this card is the way to select it and make it the TV's last input.
         if id == APP_ID {
-            if entry.get("id").and_then(Value::as_str) == Some(LUMA_INPUT)
+            if entry.get("id").and_then(Value::as_str) == Some(ASTRO_INPUT)
                 && !inputs.iter().any(|input: &Input| input.id == APP_ID)
             {
                 inputs.push(Input {
                     id: APP_ID.into(),
-                    title: "Luma".into(),
-                    port: "Luma".into(),
+                    title: "Astro".into(),
+                    port: "Astro".into(),
                     connected: Some(true),
                     signal: None,
                 });

@@ -1,6 +1,6 @@
 //! Host-only SVG compiler. No XML parser or tessellator is linked into the TV app.
-use luma_vector_geometry as geometry;
-use luma_vector_geometry::lyon_tessellation::{
+use astro_vector_geometry as geometry;
+use astro_vector_geometry::lyon_tessellation::{
     FillRule,
     math::{Point, point},
     path::Path,
@@ -12,7 +12,7 @@ use usvg::{
     tiny_skia_path::{PathSegment, Transform},
 };
 
-const MAGIC: &[u8; 8] = b"LUMAVEC1";
+const MAGIC: &[u8; 8] = b"ASTRVEC1";
 const MAX_VERTICES: usize = 1_000_000;
 
 #[derive(Deserialize)]

@@ -9,7 +9,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-const DIR: &str = "/media/developer/apps/usr/palm/applications/com.ecklf.luma";
+const DIR: &str = "/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro";
 const EXE: &str = "/usr/bin/com.webos.app.home";
 struct Fixture {
     root: PathBuf,
@@ -35,7 +35,7 @@ impl Fixture {
     fn under(parent: &Path) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let root = parent.join(format!(
-            "luma-native-fixture-{}-{}",
+            "astro-native-fixture-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -57,7 +57,7 @@ impl Fixture {
             stuck: Cell::new(false),
         };
         for dir in [
-            "/var/lib/luma-home/app",
+            "/var/lib/astro-home/app",
             "/var/lib/webosbrew/init.d",
             "/var/run",
             "/proc/self",
@@ -73,9 +73,9 @@ impl Fixture {
                 stock(id),
             );
         }
-        f.put_json(&format!("{DIR}/appinfo.json"),json!({"id":APP,"type":"native","main":"luma","icon":"app-icon.png","largeIcon":"app-icon-large.png","supportGIP":true}));
-        f.put(&format!("{DIR}/luma"), b"native-luma");
-        f.put(&format!("{DIR}/luma-helper"), b"native-helper");
+        f.put_json(&format!("{DIR}/appinfo.json"),json!({"id":APP,"type":"native","main":"astro","icon":"app-icon.png","largeIcon":"app-icon-large.png","supportGIP":true}));
+        f.put(&format!("{DIR}/astro"), b"native-astro");
+        f.put(&format!("{DIR}/astro-helper"), b"native-helper");
         f.put(&format!("{DIR}/home.sh"), b"#!/bin/sh\n");
         f.put(&format!("{DIR}/splash.png"), b"default");
         for name in ["dunes", "forest", "prism"] {
@@ -294,15 +294,15 @@ fn home_methods_reject_unknown_firmware_or_lifecycle() {
     assert!(home::Home::new(&Fixture::new(), "../other").is_err());
 }
 #[test]
-fn only_luma_mounts_are_owned_even_after_package_replacement() {
+fn only_astro_mounts_are_owned_even_after_package_replacement() {
     for root in [
-        "/developer/apps/usr/palm/applications/com.ecklf.luma/luma",
-        "/cryptofs/apps/usr/palm/applications/com.ecklf.luma/luma//deleted",
+        "/developer/apps/usr/palm/applications/com.danielcanoh22.astro/astro",
+        "/cryptofs/apps/usr/palm/applications/com.danielcanoh22.astro/astro//deleted",
     ] {
         assert!(home::exe_owned(root));
     }
     assert!(!home::exe_owned("/var/lib/other/launcher"));
-    assert!(!home::exe_owned("/com.ecklf.luma/luma/../other"));
+    assert!(!home::exe_owned("/com.danielcanoh22.astro/astro/../other"));
 }
 #[test]
 fn executable_apply_mounts_marks_and_launches_then_restore_unmounts() {
@@ -310,11 +310,11 @@ fn executable_apply_mounts_marks_and_launches_then_restore_unmounts() {
     let h = home::Home::new(&f, home::HOME).unwrap();
     let c = f.config("executable", home::HOME);
     h.apply(&c, true).unwrap();
-    assert!(system::same_file(&f, EXE, format!("{DIR}/luma")));
-    assert_eq!(f.read("/var/run/luma-home"), format!("{APP}\n").as_bytes());
+    assert!(system::same_file(&f, EXE, format!("{DIR}/astro")));
+    assert_eq!(f.read("/var/run/astro-home"), format!("{APP}\n").as_bytes());
     assert_eq!(f.front.borrow().as_str(), home::HOME);
     h.restore(&c).unwrap();
-    assert!(!system::exists(&f, "/var/run/luma-home"));
+    assert!(!system::exists(&f, "/var/run/astro-home"));
     assert_eq!(f.read(EXE), format!("stock-{}", home::HOME).as_bytes());
 }
 #[test]
@@ -325,7 +325,7 @@ fn fullhome_round_trip_and_persisted_target_keep_their_identity() {
     assert_eq!(c.home_id, home::FULL_HOME);
     assert!(c.enabled);
     assert_eq!(
-        f.read("/var/run/luma-home-target"),
+        f.read("/var/run/astro-home-target"),
         format!("{}\n", home::FULL_HOME).as_bytes()
     );
     let status = home::dispatch(&f, "status", None, None).unwrap();
@@ -336,12 +336,12 @@ fn fullhome_round_trip_and_persisted_target_keep_their_identity() {
         f.read("/usr/bin/com.webos.app.fullhome"),
         b"stock-com.webos.app.fullhome"
     );
-    assert!(!system::exists(&f, "/var/run/luma-home-target"));
+    assert!(!system::exists(&f, "/var/run/astro-home-target"));
 }
 #[test]
 fn installation_under_a_symlinked_temporary_parent_stays_inside_the_root() {
-    let real = std::env::temp_dir().join(format!("luma-native-real-{}", std::process::id()));
-    let link = std::env::temp_dir().join(format!("luma-native-link-{}", std::process::id()));
+    let real = std::env::temp_dir().join(format!("astro-native-real-{}", std::process::id()));
+    let link = std::env::temp_dir().join(format!("astro-native-link-{}", std::process::id()));
     fs::create_dir_all(&real).unwrap();
     let _ = fs::remove_file(&link);
     std::os::unix::fs::symlink(&real, &link).unwrap();
@@ -358,7 +358,7 @@ fn installation_under_a_symlinked_temporary_parent_stays_inside_the_root() {
 fn copied_recovery_binary_and_shell_survive_package_removal() {
     let f = Fixture::new();
     home::dispatch(&f, "enable", Some(DIR), None).unwrap();
-    assert_eq!(f.read("/var/lib/luma-home/luma-helper"), b"native-helper");
+    assert_eq!(f.read("/var/lib/astro-home/astro-helper"), b"native-helper");
     fs::remove_dir_all(f.p(DIR)).unwrap();
     home::dispatch(&f, "disable", None, None).unwrap();
     assert_eq!(f.read(EXE), b"stock-com.webos.app.home");
@@ -379,9 +379,9 @@ fn package_update_replaces_the_old_bound_inode() {
     let h = home::Home::new(&f, home::HOME).unwrap();
     let c = f.config("executable", home::HOME);
     h.apply(&c, false).unwrap();
-    let changed = f.p(&format!("{DIR}/luma.new"));
+    let changed = f.p(&format!("{DIR}/astro.new"));
     fs::write(&changed, b"updated").unwrap();
-    fs::rename(changed, f.p(&format!("{DIR}/luma"))).unwrap();
+    fs::rename(changed, f.p(&format!("{DIR}/astro"))).unwrap();
     h.apply(&c, false).unwrap();
     assert_eq!(f.read(EXE), b"updated");
     assert!(f.calls().iter().any(|s| s == &format!("/bin/umount {EXE}")));
@@ -411,7 +411,7 @@ fn failed_launch_retries_once_then_restores_stock_files() {
             .contains("did not come")
     );
     assert_eq!(f.read(EXE), b"stock-com.webos.app.home");
-    assert!(!system::exists(&f, "/var/run/luma-home"));
+    assert!(!system::exists(&f, "/var/run/astro-home"));
     assert_eq!(
         f.calls().iter().filter(|s| s.contains("/launch ")).count(),
         2
@@ -454,7 +454,7 @@ fn changing_an_enabled_target_or_using_a_foreign_hook_is_rejected() {
     system::link(
         &f,
         "/other/home.sh",
-        "/var/lib/webosbrew/init.d/64-luma-home",
+        "/var/lib/webosbrew/init.d/64-astro-home",
     )
     .unwrap();
     assert!(
@@ -467,7 +467,7 @@ fn changing_an_enabled_target_or_using_a_foreign_hook_is_rejected() {
 fn old_configuration_without_method_or_target_is_readable() {
     let f = Fixture::new();
     f.put_json(
-        "/var/lib/luma-home/state.json",
+        "/var/lib/astro-home/state.json",
         json!({"enabled":false,"appDir":DIR,"stock":stock(home::HOME),"futureFlag":42}),
     );
     let c = home::load(&f).unwrap().unwrap();
@@ -482,7 +482,7 @@ fn manifest_takeover_rereads_staged_metadata_and_restores_the_stock_manifest() {
     home::dispatch(&f, "enable", Some(DIR), None).unwrap();
     assert_eq!(
         system::json(&f, "/usr/palm/applications/com.webos.app.home/appinfo.json").unwrap()["main"],
-        "luma"
+        "astro"
     );
     home::dispatch(&f, "disable", None, None).unwrap();
     assert_eq!(
@@ -528,10 +528,10 @@ fn normal_close_denials_and_stuck_instances_prevent_mounting() {
     assert!(f.mounts.borrow().is_empty());
 }
 #[test]
-fn process_matching_never_kills_a_normal_luma_or_unrelated_native_app() {
+fn process_matching_never_kills_a_normal_astro_or_unrelated_native_app() {
     let f = Fixture::new();
     let args = |main: &str, meta: Value| vec![main.into(), meta.to_string()];
-    let exe = f.p(&format!("{DIR}/luma"));
+    let exe = f.p(&format!("{DIR}/astro"));
     assert!(home::home_process(
         &args(EXE, json!({})),
         None,
@@ -540,14 +540,14 @@ fn process_matching_never_kills_a_normal_luma_or_unrelated_native_app() {
         &f
     ));
     assert!(home::home_process(
-        &args("luma", json!({"nid":home::HOME})),
+        &args("astro", json!({"nid":home::HOME})),
         Some(&exe),
         DIR,
         home::HOME,
         &f
     ));
     assert!(!home::home_process(
-        &args("luma", json!({"nid":APP})),
+        &args("astro", json!({"nid":APP})),
         Some(&exe),
         DIR,
         home::HOME,
@@ -657,13 +657,13 @@ fn invalid_ids_and_unrelated_manifests_cannot_select_private_artwork() {
 fn splash_updates_tile_and_only_the_enabled_own_manifest_stage() {
     let f = Fixture::new();
     f.put_json(
-        "/var/lib/luma-home/state.json",
+        "/var/lib/astro-home/state.json",
         json!({"enabled":true,"method":"manifest","appDir":DIR}),
     );
-    f.put("/var/lib/luma-home/app/splash.png", b"old");
+    f.put("/var/lib/astro-home/app/splash.png", b"old");
     files::sync_splash(&f, Path::new(DIR), "forest").unwrap();
     assert_eq!(f.read(&format!("{DIR}/splash.png")), b"forest");
-    assert_eq!(f.read("/var/lib/luma-home/app/splash.png"), b"forest");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
     let before = fs::metadata(f.p(&format!("{DIR}/splash.png")))
         .unwrap()
         .modified()
@@ -685,10 +685,10 @@ fn executable_other_or_disabled_stages_are_never_written() {
         json!({"enabled":true,"appDir":"/other/install"}),
     ] {
         let f = Fixture::new();
-        f.put_json("/var/lib/luma-home/state.json", c);
-        f.put("/var/lib/luma-home/app/splash.png", b"old");
+        f.put_json("/var/lib/astro-home/state.json", c);
+        f.put("/var/lib/astro-home/app/splash.png", b"old");
         files::sync_splash(&f, Path::new(DIR), "prism").unwrap();
-        assert_eq!(f.read("/var/lib/luma-home/app/splash.png"), b"old");
+        assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"old");
     }
 }
 #[test]
@@ -698,7 +698,7 @@ fn missing_or_invalid_splash_sources_preserve_previous_images() {
         assert!(files::sync_splash(&f, Path::new(DIR), background).is_err());
         assert_eq!(f.read(&format!("{DIR}/splash.png")), b"default");
     }
-    assert!(files::sync_splash(&f, Path::new("/tmp/com.ecklf.luma"), "forest").is_err());
+    assert!(files::sync_splash(&f, Path::new("/tmp/com.danielcanoh22.astro"), "forest").is_err());
 }
 #[test]
 fn failed_atomic_write_cleans_its_private_temporary_file() {
@@ -721,7 +721,7 @@ fn stage_uses_persistent_selection_and_retains_manual_background_over_rotation()
         json!({"background":"prism","splash_background":"forest"}),
     );
     files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/luma-home/app/splash.png"), b"forest");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
 }
 #[test]
 fn null_manual_selection_falls_back_to_saved_background() {
@@ -731,7 +731,7 @@ fn null_manual_selection_falls_back_to_saved_background() {
         json!({"background":"prism","splash_background":null}),
     );
     files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/luma-home/app/splash.png"), b"prism");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"prism");
 }
 #[test]
 fn malformed_missing_and_unavailable_preferences_use_package_splash() {
@@ -748,7 +748,7 @@ fn malformed_missing_and_unavailable_preferences_use_package_splash() {
         );
         files::stage_splash(&f, Path::new(DIR)).unwrap();
         assert!(matches!(
-            f.read("/var/lib/luma-home/app/splash.png").as_slice(),
+            f.read("/var/lib/astro-home/app/splash.png").as_slice(),
             b"dunes" | b"default"
         ));
     }
@@ -763,7 +763,7 @@ fn symlink_storage_directories_are_not_used_as_root_preferences() {
         json!({"background":"forest"}),
     );
     files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/luma-home/app/splash.png"), b"forest");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
 }
 
 #[test]
@@ -807,6 +807,7 @@ fn uninstall_rejects_failures_wrong_identity_and_resource_exhaustion() {
 fn uninstall_protects_system_apps_and_does_not_spawn_when_denied() {
     for id in [
         APP,
+        "com.ecklf.luma",
         "com.webos.app.home",
         "org.webosbrew.hbchannel",
         "bad/id",
@@ -900,7 +901,7 @@ fn a_stuck_home_process_is_reported_after_unmount_recovery() {
         .unwrap_err();
     assert!(error.contains("Restore also failed"));
     assert_eq!(f.read(EXE), b"stock-com.webos.app.home");
-    assert!(!system::exists(&f, "/var/run/luma-home"));
+    assert!(!system::exists(&f, "/var/run/astro-home"));
     // apply and its restore each wait the full 5 s budget in 200 ms steps.
     assert_eq!(f.brief_pauses.get(), 2 * 25);
     assert_eq!(system::BRIEF_PAUSE * 25, Duration::from_secs(5));
@@ -913,7 +914,7 @@ fn accepted_close_waits_boundedly_and_a_close_race_can_succeed() {
     assert!(
         home::dispatch(&f, "enable", Some(DIR), None)
             .unwrap_err()
-            .contains("Close Luma")
+            .contains("Close Astro")
     );
     assert_eq!(f.pauses.get(), 5);
     assert!(f.mounts.borrow().is_empty());
@@ -938,11 +939,11 @@ fn developer_and_production_splash_precedence_matches_native_storage() {
         json!({"background":"prism"}),
     );
     files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/luma-home/app/splash.png"), b"forest");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
     let production = format!("/media/cryptofs/apps/usr/palm/applications/{APP}");
     f.put(&format!("{production}/splash/prism.png"), b"prism");
     files::stage_splash(&f, Path::new(&production)).unwrap();
-    assert_eq!(f.read("/var/lib/luma-home/app/splash.png"), b"prism");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"prism");
 }
 #[test]
 fn persistent_preferences_win_over_package_local_migration_and_active_stages_refresh() {
@@ -978,7 +979,7 @@ fn unhealthy_starts_fall_back_once_after_the_limit_and_health_starts_a_new_count
         assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
     }
     assert_eq!(home::record_start(&f).unwrap(), home::Start::Fallback);
-    // One attempt per boot: if that fallback failed, Luma must keep starting normally.
+    // One attempt per boot: if that fallback failed, Astro must keep starting normally.
     assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
     assert_eq!(home::record_start(&f).unwrap(), home::Start::Continue);
     home::record_healthy(&f).unwrap();
@@ -1000,17 +1001,20 @@ fn fallback_restores_lg_home_until_the_next_apply_for_both_methods() {
         assert!(!f.mounts.borrow().is_empty(), "{release}");
         let launches = || f.calls().iter().filter(|s| s.contains("/launch ")).count();
         let before = launches();
-        // A crashing Luma is not in front, yet LG Home must open for the remote.
+        // A crashing Astro is not in front, yet LG Home must open for the remote.
         *f.front.borrow_mut() = "other.app".into();
         home::dispatch(&f, "fallback", None, None).unwrap();
         assert!(f.mounts.borrow().is_empty(), "{release}");
         assert_eq!(launches(), before + 1, "{release}");
         // Only until reboot: the integration and its boot hook stay.
         assert_eq!(
-            system::json(&f, "/var/lib/luma-home/state.json").unwrap()["enabled"].as_bool(),
+            system::json(&f, "/var/lib/astro-home/state.json").unwrap()["enabled"].as_bool(),
             Some(true)
         );
-        assert!(system::exists(&f, "/var/lib/webosbrew/init.d/64-luma-home"));
+        assert!(system::exists(
+            &f,
+            "/var/lib/webosbrew/init.d/64-astro-home"
+        ));
         f.put(home::FAILURES, b"3\n");
         home::dispatch(&f, "apply", None, None).unwrap();
         assert!(!f.mounts.borrow().is_empty(), "{release}");

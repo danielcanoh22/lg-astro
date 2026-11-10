@@ -10,7 +10,7 @@ const out = path.join(root, '.build');
 await fs.mkdir(out, { recursive: true });
 const temporary = await fs.mkdtemp(path.join(out, 'translations-smoke-'));
 const preferences = path.join(temporary, 'preferences.json');
-const binary = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target', 'debug/luma');
+const binary = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target', 'debug/astro');
 const requests = [];
 const places = {
   en: { name: 'Vienna', region: 'Vienna', country: 'Austria' },
@@ -102,8 +102,8 @@ const weatherPage = 'settings,down,down,down,enter,down,down,enter';
 const inputsPage = 'settings,down,down,down,enter,down,down,down,down,enter';
 const location = `${weatherPage},down,enter`;
 try {
-  if (process.env.LUMA_SMOKE_SKIP_BUILD !== '1')
-    await run('cargo', ['build', '--locked', '--package', 'luma']);
+  if (process.env.ASTRO_SMOKE_SKIP_BUILD !== '1')
+    await run('cargo', ['build', '--locked', '--package', 'astro']);
   await fs.writeFile(
     preferences,
     JSON.stringify({ language: 'en', show_home_names: true, reduced_motion: true }),

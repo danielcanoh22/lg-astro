@@ -14,9 +14,9 @@ function run(command, args) {
   if (result.error) throw result.error;
   assert.equal(result.status, 0, `${command} failed`);
 }
-if (process.env.LUMA_SMOKE_SKIP_BUILD !== '1')
-  run('cargo', ['build', '--locked', '--package', 'luma', '--no-default-features']);
-const binary = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target', 'debug/luma');
+if (process.env.ASTRO_SMOKE_SKIP_BUILD !== '1')
+  run('cargo', ['build', '--locked', '--package', 'astro', '--no-default-features']);
+const binary = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target', 'debug/astro');
 const scratch = await fs.mkdtemp(path.join(out, 'brand-gallery-'));
 try {
   const preferences = path.join(scratch, 'preferences.json');

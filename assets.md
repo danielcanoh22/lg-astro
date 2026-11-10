@@ -1,4 +1,4 @@
-# Luma assets and references
+# Astro assets and references
 
 - `assets/mark.svg`, `assets/app-icon.svg`, and the Midnight/Slate/Prism SVG wallpapers:
   original Luma artwork, MIT. webOS supplies the app icon panel using `iconColor`.
@@ -18,19 +18,19 @@
 - Inter variable font (Latin, Latin Extended-A, Vietnamese + Cyrillic subset, `opsz` pinned at 14): Rasmus Andersson, SIL Open Font License 1.1, `assets/fonts/ofl.txt`.
 - Noto Sans SC: copyright 2014–2021 Adobe, SIL OFL 1.1. Source/license in `assets/fonts/`;
   `tools/font-assets.mjs` pins the Google Fonts revision and checksums. Generated regular/medium
-  subsets are renamed Luma CJK and retain copyright/license tables.
+  subsets are renamed Astro CJK and retain copyright/license tables.
 - Noto Sans KR: copyright 2014–2021 Adobe, SIL OFL 1.1 (same license text as Noto Sans SC,
   `assets/fonts/noto-ofl.txt`). Pinned the same way. Google Fonts ships Hangul only in this family,
-  not in Noto Sans SC; generated Hangul-only regular/medium subsets are renamed Luma KR.
+  not in Noto Sans SC; generated Hangul-only regular/medium subsets are renamed Astro KR.
 - Lucide interface icons: exported standalone SVG sources in `assets/ui-icons/`, ISC license
-  bundled at `assets/licenses/lucide.txt`. The Luma upload icon and the small `luma-mark.svg` reuse
+  bundled at `assets/licenses/lucide.txt`. The Astro upload icon and the small `astro-mark.svg` reuse
   original project artwork under MIT. PlayStation/Apple TV input paths were supplied by the user;
   the brand marks belong to Sony/Apple. The Shield and Xbox input icons are the NVIDIA eye and Xbox logo from Simple
   Icons (CC0); the marks belong to NVIDIA and Microsoft. The Switch and Switch 2 input icons are the
   Wikimedia Commons logo files `Nintendo_Switch_Logo.svg` and
   `Nintendo_Switch_2_logo_transparent_black.svg`, recoloured to `currentColor`; the marks belong to
   Nintendo. Spotify/Kodi symbol treatments use the original native
-  artwork. Logos identify third-party apps; Luma is unaffiliated with their owners.
+  artwork. Logos identify third-party apps; Astro is unaffiliated with their owners.
 - SDL-webOS 2.30.12 (`release-2.30.12-webos.5`, standard SDL ABI), zlib license.
   `tools/webos-runtime.mjs` records archive/library SHA-256. Notice at `assets/licenses/sdl2.txt`.
 - QR Code generator (`qrcodegen`): Project Nayuki, MIT; `assets/licenses/qrcodegen.txt`.
@@ -116,7 +116,7 @@ uses its native app's exact ID.
 On TV, installed-app PNG/JPEG/WebP artwork is read from that TV's installed applications at runtime.
 Desktop previews use curated vector logos or generic/category fallbacks, with no dumped TV artwork
 or collected icon maps in the repository. Names and marks remain the property of the respective
-app owners. Luma's folded-light L logo is original artwork; its SVG geometry produces the
+app owners. Astro's folded-light L logo is original Luma artwork; its SVG geometry produces the
 small/large webOS installation icons.
 
 Weather data: [Open-Meteo](https://open-meteo.com/), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

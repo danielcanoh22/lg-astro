@@ -1,10 +1,10 @@
 //! Lazy TTF metrics and individual outlines; never preprocess an entire font.
+use astro_vector_geometry::{self as geometry, Vertex};
 use geometry::lyon_tessellation::{
     FillRule,
     math::point,
     path::{Path, path::Builder},
 };
-use luma_vector_geometry::{self as geometry, Vertex};
 use owned_ttf_parser::{AsFaceRef, GlyphId, OutlineBuilder, OwnedFace};
 
 pub struct Font {

@@ -15,7 +15,7 @@ pub fn default_path(webos: bool) -> Result<PathBuf, String> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config")))
         .ok_or("Set HOME, XDG_CONFIG_HOME or --preferences for native preferences")?;
-    Ok(base.join("luma-native/preferences.json"))
+    Ok(base.join("astro-native/preferences.json"))
 }
 
 #[cfg(all(feature = "webos", unix))]
@@ -104,7 +104,7 @@ fn tv_path_in(mut candidates: [PathBuf; 3], legacy: &Path, user: u32) -> Result<
                 .mode(0o600)
                 .open(&probe)?;
             let result = file
-                .write_all(b"Luma storage probe")
+                .write_all(b"Astro storage probe")
                 .and_then(|_| file.sync_all());
             drop(file);
             // Only remove a probe that this process created successfully.
@@ -130,7 +130,7 @@ fn tv_path_in(mut candidates: [PathBuf; 3], legacy: &Path, user: u32) -> Result<
                     preferences.sanitize();
                     save(&path, &preferences)?;
                     eprintln!(
-                        "Luma preferences migrated from {} to {}",
+                        "Astro preferences migrated from {} to {}",
                         legacy.display(),
                         path.display()
                     );
@@ -149,10 +149,10 @@ fn tv_path_in(mut candidates: [PathBuf; 3], legacy: &Path, user: u32) -> Result<
                 && let Some(reading) = crate::weather_service::load_cache(&old_cache)
                 && let Err(error) = crate::weather_service::save_cache(&cache, &reading)
             {
-                eprintln!("Luma weather cache migration: {error}");
+                eprintln!("Astro weather cache migration: {error}");
             }
         }
-        eprintln!("Luma persistent storage: {}", directory.display());
+        eprintln!("Astro persistent storage: {}", directory.display());
         return Ok(path);
     }
     Err(format!(
@@ -174,7 +174,7 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
     }
 }
 
-/// A preferences file's modification time and size, to notice a save by the other Luma copy
+/// A preferences file's modification time and size, to notice a save by the other Astro copy
 /// (Home and the TV-input app share one file).
 pub type Stamp = Option<(std::time::SystemTime, u64)>;
 
@@ -265,7 +265,7 @@ mod tests {
         fn new() -> Self {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
             let root = std::env::temp_dir().join(format!(
-                "luma-storage-{}-{}",
+                "astro-storage-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));

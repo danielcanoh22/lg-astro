@@ -1,4 +1,4 @@
-//! Privileged, bounded TV operations. Shared with Luma for its already-root Home process.
+//! Privileged, bounded TV operations. Shared with Astro for its already-root Home process.
 //! No SDL, image decoding, browser engine, or persistent daemon is needed by the helper.
 pub mod files;
 pub mod home;
@@ -7,7 +7,7 @@ pub mod system;
 pub mod uninstall;
 
 pub type Result<T> = std::result::Result<T, String>;
-pub const APP: &str = "com.ecklf.luma";
+pub const APP: &str = "com.danielcanoh22.astro";
 pub const ROOTS: [&str; 5] = [
     "/media/developer/apps/usr/palm/applications",
     "/media/cryptofs/apps/usr/palm/applications",

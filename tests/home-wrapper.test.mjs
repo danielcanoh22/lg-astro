@@ -7,24 +7,24 @@ import test from 'node:test';
 
 const source = await fs.readFile(new URL('../tv/home.sh', import.meta.url), 'utf8');
 
-// tv/home.sh in a temporary root: the copied state directory with a recording luma-helper,
+// tv/home.sh in a temporary root: the copied state directory with a recording astro-helper,
 // the cold-boot hook as a real symlink, and stubs for the root-only id/stat checks.
 async function fixture({ helper = true, relative = false, helperExit = 0 } = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'luma-home-wrapper-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astro-home-wrapper-'));
   const state = path.join(root, 'state');
   const bin = path.join(root, 'bin');
   const hooks = path.join(root, 'init.d');
   const calls = path.join(root, 'calls');
   const sleeps = path.join(root, 'sleeps');
   await Promise.all([state, bin, hooks].map((dir) => fs.mkdir(dir)));
-  const line = 'STATE=/var/lib/luma-home\n';
+  const line = 'STATE=/var/lib/astro-home\n';
   assert.ok(source.includes(line));
   await fs.writeFile(path.join(state, 'home.sh'), source.replace(line, `STATE='${state}'\n`), {
     mode: 0o755,
   });
   if (helper) {
     await fs.writeFile(
-      path.join(state, 'luma-helper'),
+      path.join(state, 'astro-helper'),
       `#!/bin/sh\nfor a; do printf '[%s]' "$a"; done >>'${calls}'\necho >>'${calls}'\nexit ${helperExit}\n`,
       { mode: 0o755 },
     );
@@ -36,7 +36,7 @@ async function fixture({ helper = true, relative = false, helperExit = 0 } = {})
   ]) {
     await fs.writeFile(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   }
-  const hook = path.join(hooks, '64-luma-home');
+  const hook = path.join(hooks, '64-astro-home');
   await fs.symlink(relative ? '../state/home.sh' : path.join(state, 'home.sh'), hook);
   const run = (...args) =>
     spawnSync('/bin/sh', [hook, ...args], {
@@ -104,9 +104,9 @@ test('a cold boot applies at once and logs when the hook ran and apply started a
   try {
     assert.equal(tv.run().status, 0);
     const log = await tv.bootLog();
-    assert.match(log, /Luma Home: boot hook at [\d.]* s\n/);
-    assert.match(log, /Luma Home: apply started at [\d.]* s \(attempt 1\)\n/);
-    assert.match(log, /Luma Home: apply ended at [\d.]* s \(exit 0\)\n/);
+    assert.match(log, /Astro Home: boot hook at [\d.]* s\n/);
+    assert.match(log, /Astro Home: apply started at [\d.]* s \(attempt 1\)\n/);
+    assert.match(log, /Astro Home: apply ended at [\d.]* s \(exit 0\)\n/);
     assert.deepEqual(await tv.calls(), [`[home][apply][${tv.state}][]`]);
     assert.deepEqual(await tv.sleeps(), []);
   } finally {
@@ -120,7 +120,7 @@ test('a failed boot apply is tried three times, two seconds apart', async () => 
     assert.equal(tv.run().status, 0);
     const log = await tv.bootLog();
     assert.match(log, /apply started at [\d.]* s \(attempt 3\)\n/);
-    assert.match(log, /Luma Home: apply ended at [\d.]* s \(exit 1\)\n/);
+    assert.match(log, /Astro Home: apply ended at [\d.]* s \(exit 1\)\n/);
     assert.deepEqual(await tv.calls(), Array(3).fill(`[home][apply][${tv.state}][]`));
     assert.deepEqual(await tv.sleeps(), ['2', '2']);
   } finally {
@@ -144,7 +144,7 @@ test('a missing helper is reported before any change', async () => {
   try {
     const status = tv.run('status');
     assert.equal(status.status, 1);
-    assert.match(status.stderr, /native Luma TV helper is missing/);
+    assert.match(status.stderr, /native Astro TV helper is missing/);
   } finally {
     await fs.rm(tv.root, { recursive: true, force: true });
   }

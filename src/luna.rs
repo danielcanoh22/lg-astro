@@ -340,7 +340,7 @@ pub fn subscribe(
 
 /// Like `subscribe`, but the call is made as `app_id` by a root `luna-send -a` child, which the
 /// system bus lets act for an app. For a Home manifest staged under LG's app-ID based role
-/// (webOS 10/11), where Luma's own connection cannot be that app. Requires root. Does not wait
+/// (webOS 10/11), where Astro's own connection cannot be that app. Requires root. Does not wait
 /// for the service; see `app_subscription::subscribe` for how replies and failures are reported.
 pub fn subscribe_as_app(
     app_id: &str,

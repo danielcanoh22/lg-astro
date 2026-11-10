@@ -104,11 +104,11 @@ fn installed(system: &impl System, directory: &Path) -> Result<Value> {
         .iter()
         .any(|root| directory == Path::new(root).join(APP))
     {
-        return Err("Invalid Luma installation directory".into());
+        return Err("Invalid Astro installation directory".into());
     }
     let app = system::json(system, directory.join("appinfo.json"))?;
-    if app["id"] != APP || app["type"] != "native" || app["main"] != "luma" {
-        return Err("Requires an installed native Luma package".into());
+    if app["id"] != APP || app["type"] != "native" || app["main"] != "astro" {
+        return Err("Requires an installed native Astro package".into());
     }
     Ok(app)
 }
@@ -123,7 +123,7 @@ pub fn sync_splash(system: &impl System, directory: &Path, background: &str) -> 
         32 * 1024 * 1024,
     )?;
     replace(system, &directory.join("splash.png"), &image)?;
-    let config_path = Path::new("/var/lib/luma-home/state.json");
+    let config_path = Path::new("/var/lib/astro-home/state.json");
     if system::exists(system, config_path) {
         let config = system::json(system, config_path)?;
         if config["enabled"] == true
@@ -132,7 +132,7 @@ pub fn sync_splash(system: &impl System, directory: &Path, background: &str) -> 
         {
             replace(
                 system,
-                Path::new("/var/lib/luma-home/app/splash.png"),
+                Path::new("/var/lib/astro-home/app/splash.png"),
                 &image,
             )?;
         }
@@ -200,5 +200,5 @@ pub(crate) fn stage_splash(system: &impl System, directory: &Path) -> Result<()>
         directory.join("splash.png")
     };
     let bytes = system::read(system, path, 32 * 1024 * 1024)?;
-    system::write(system, "/var/lib/luma-home/app/splash.png", &bytes, 0o644)
+    system::write(system, "/var/lib/astro-home/app/splash.png", &bytes, 0o644)
 }

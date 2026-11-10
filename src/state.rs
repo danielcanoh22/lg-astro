@@ -13,7 +13,7 @@ pub const SYSTEM_SECTION: usize = 3;
 pub const SECTION_COUNT: usize = 4;
 pub const SETTINGS_BOTTOM_PADDING: f32 = 64.;
 pub const SETTINGS_LIST_BOTTOM_PADDING: f32 = 48.;
-/// System row registering Luma as a TV input (luma-helper tv-input), at upstream PR #124's index.
+/// System row registering Astro as a TV input (astro-helper tv-input), at upstream PR #124's index.
 pub const TV_INPUT_ROW: usize = 12;
 pub const APPS_COLUMNS: usize = 6;
 /// Automatic inventory retries before the error shows: with the 6.5 s Luna timeout about 50 s.
@@ -37,30 +37,30 @@ pub fn unix_now() -> u64 {
         .as_secs()
 }
 
-/// Least time between two automatic switches to Luma's TV input, so an app copy that keeps
+/// Least time between two automatic switches to Astro's TV input, so an app copy that keeps
 /// failing cannot start a relaunch loop with Home.
-pub const LUMA_INPUT_INTERVAL: Duration = Duration::from_secs(5);
-/// Automatic switches in a row, each within `LUMA_INPUT_SETTLE` of the previous one, before Home
+pub const ASTRO_INPUT_INTERVAL: Duration = Duration::from_secs(5);
+/// Automatic switches in a row, each within `ASTRO_INPUT_SETTLE` of the previous one, before Home
 /// stops switching until the Home key is pressed in Home: an input copy that keeps exiting
 /// cannot keep reopening.
-pub const LUMA_INPUT_LIMIT: u32 = 3;
-pub const LUMA_INPUT_SETTLE: Duration = Duration::from_secs(30);
+pub const ASTRO_INPUT_LIMIT: u32 = 3;
+pub const ASTRO_INPUT_SETTLE: Duration = Duration::from_secs(30);
 
-/// When Home switches to Luma's TV input (see `State::luma_input_due`).
+/// When Home switches to Astro's TV input (see `State::astro_input_due`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum LumaInput {
+pub enum AstroInput {
     #[default]
     Idle,
     /// Home started: switch once the first inventory shows whether the input is registered.
     AfterInventory,
     /// Home started and its inventory arrived: switch only if Home is in front, because the
-    /// system also starts Home behind another input or app (after a power-on into Luma's input).
+    /// system also starts Home behind another input or app (after a power-on into Astro's input).
     Started,
     /// Home was relaunched (Home key): switch now if the input is registered.
     Now,
 }
 
-/// Whether LG lists Luma as a TV input. Read once when the System section first shows.
+/// Whether LG lists Astro as a TV input. Read once when the System section first shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum TvInput {
     #[default]
@@ -234,11 +234,11 @@ pub enum Effect {
     FireWebhook(CustomTile),
     Quit,
     Weather(weather::Command),
-    /// Read (`None`) or change Luma's TV input registration.
+    /// Read (`None`) or change Astro's TV input registration.
     TvInput(Option<bool>),
-    /// Open `com.ecklf.luma` from Home so the TV keeps Luma as its last input; with
+    /// Open `com.danielcanoh22.astro` from Home so the TV keeps Astro as its last input; with
     /// `if_home_in_front`, only while Home is the foreground app.
-    SelectLumaInput {
+    SelectAstroInput {
         if_home_in_front: bool,
     },
     UpdateDownload(String),
@@ -284,7 +284,7 @@ pub struct State {
     pub deleting_wallpaper: Option<String>,
     pub wallpaper_upload: Option<Result<crate::wallpapers::Session, String>>,
     pub tile_editor: Option<Result<crate::companion::Session, String>>,
-    /// Luma update (Settings → System), driven by the update worker.
+    /// Astro update (Settings → System), driven by the update worker.
     pub update: crate::update::InstallStatus,
     pub panel_started: Option<Instant>,
     pub weather: weather::Weather,
@@ -293,9 +293,9 @@ pub struct State {
     pub input_name: String,
     pub recents: crate::recents::Recents,
     pub tv_input: TvInput,
-    pub luma_input: LumaInput,
-    pub luma_input_switched: Option<Instant>,
-    pub luma_input_streak: u32,
+    pub astro_input: AstroInput,
+    pub astro_input_switched: Option<Instant>,
+    pub astro_input_streak: u32,
 }
 
 impl State {
@@ -340,9 +340,9 @@ impl State {
             input_name: String::new(),
             recents: crate::recents::Recents::default(),
             tv_input: TvInput::Unknown,
-            luma_input: LumaInput::Idle,
-            luma_input_switched: None,
-            luma_input_streak: 0,
+            astro_input: AstroInput::Idle,
+            astro_input_switched: None,
+            astro_input_streak: 0,
         }
     }
 
@@ -362,7 +362,7 @@ impl State {
                 }
             }
             Err(error) => {
-                eprintln!("Luma update check: {error}");
+                eprintln!("Astro update check: {error}");
                 self.update_status = crate::update::Status::Failed;
             }
         }
@@ -407,7 +407,7 @@ impl State {
                         self.update_status = crate::update::Status::Unchecked;
                     }
                     Err(error) => {
-                        eprintln!("Luma update: {error}");
+                        eprintln!("Astro update: {error}");
                         self.update = InstallStatus::Failed(error);
                         self.update_status = crate::update::Status::Failed;
                         self.notify(self.preferences.language.t("updateError"));
@@ -501,20 +501,20 @@ impl State {
         pending
     }
 
-    /// Home was started (`started`) or relaunched by the Home key. With Luma registered as a TV
-    /// input, Home then opens `com.ecklf.luma`, so the TV keeps Luma as its last input. Only
-    /// these events arm it: focus coming back after the app copy exited never does.
+    /// Home was started (`started`) or relaunched by the Home key. With Astro registered as a TV
+    /// input, Home then opens `com.danielcanoh22.astro`, so the TV keeps Astro as its last input.
+    /// Only these events arm it: focus coming back after the app copy exited never does.
     pub fn home_opened(&mut self, started: bool) {
-        self.luma_input = if started {
-            LumaInput::AfterInventory
+        self.astro_input = if started {
+            AstroInput::AfterInventory
         } else {
-            LumaInput::Now
+            AstroInput::Now
         };
     }
 
     /// The Home key pressed while Home is in front: user input, so it also ends a stopped streak.
     pub fn home_key(&mut self) {
-        self.luma_input_streak = 0;
+        self.astro_input_streak = 0;
         self.home_opened(false);
     }
 
@@ -522,20 +522,20 @@ impl State {
     /// screen afterwards.
     pub fn home_hidden(&mut self) {
         if matches!(
-            self.luma_input,
-            LumaInput::AfterInventory | LumaInput::Started
+            self.astro_input,
+            AstroInput::AfterInventory | AstroInput::Started
         ) {
-            self.luma_input = LumaInput::Idle;
+            self.astro_input = AstroInput::Idle;
         }
     }
 
-    pub fn luma_input_due(&mut self, now: Instant) -> Option<Effect> {
-        let started = match self.luma_input {
-            LumaInput::Now => false,
-            LumaInput::Started => true,
-            LumaInput::Idle | LumaInput::AfterInventory => return None,
+    pub fn astro_input_due(&mut self, now: Instant) -> Option<Effect> {
+        let started = match self.astro_input {
+            AstroInput::Now => false,
+            AstroInput::Started => true,
+            AstroInput::Idle | AstroInput::AfterInventory => return None,
         };
-        self.luma_input = LumaInput::Idle;
+        self.astro_input = AstroInput::Idle;
         let registered = self
             .inventory
             .inputs
@@ -546,39 +546,40 @@ impl State {
         }
         // A start happens once per Home process: the relaunch limits do not apply to it.
         if started {
-            return Some(Effect::SelectLumaInput {
+            return Some(Effect::SelectAstroInput {
                 if_home_in_front: true,
             });
         }
         let recent = self
-            .luma_input_switched
-            .is_some_and(|at| now.duration_since(at) < LUMA_INPUT_INTERVAL);
+            .astro_input_switched
+            .is_some_and(|at| now.duration_since(at) < ASTRO_INPUT_INTERVAL);
         if recent {
             return None;
         }
-        let streak = match self.luma_input_switched {
-            Some(at) if now.duration_since(at) < LUMA_INPUT_SETTLE => self.luma_input_streak + 1,
+        let streak = match self.astro_input_switched {
+            Some(at) if now.duration_since(at) < ASTRO_INPUT_SETTLE => self.astro_input_streak + 1,
             _ => 1,
         };
-        if streak > LUMA_INPUT_LIMIT {
+        if streak > ASTRO_INPUT_LIMIT {
             return None;
         }
-        self.luma_input_streak = streak;
-        self.luma_input_switched = Some(now);
-        Some(Effect::SelectLumaInput {
+        self.astro_input_streak = streak;
+        self.astro_input_switched = Some(now);
+        Some(Effect::SelectAstroInput {
             if_home_in_front: false,
         })
     }
 
-    /// Preferences the other Luma copy saved while this one was in the background.
+    /// Preferences the other Astro copy saved while this one was in the background.
     pub fn reload_preferences(&mut self, preferences: Preferences) {
         self.preferences = preferences;
         self.dirty = true;
     }
 
-    /// The app copy (`com.ecklf.luma`, not Home) shown again after it was hidden, for example
-    /// from the Luma input card: it starts on its Home page with recents closed, as Home's own
-    /// relaunch does. Home keeps its page, so Back from another app returns to where it was.
+    /// The app copy (`com.danielcanoh22.astro`, not Home) shown again after it was hidden, for
+    /// example from the Astro input card: it starts on its Home page with recents closed, as
+    /// Home's own relaunch does. Home keeps its page, so Back from another app returns to where it
+    /// was.
     pub fn returned_to_foreground(&mut self, home: bool) -> Vec<Effect> {
         if home {
             return vec![];
@@ -775,8 +776,8 @@ impl State {
             self.inventory.inputs = next.inputs;
         }
         // A failed input read leaves the inputs unknown: wait for one that lists them.
-        if self.luma_input == LumaInput::AfterInventory && inputs_read {
-            self.luma_input = LumaInput::Started;
+        if self.astro_input == AstroInput::AfterInventory && inputs_read {
+            self.astro_input = AstroInput::Started;
         }
         self.loading = false;
         self.error = None;
@@ -1041,7 +1042,7 @@ impl State {
         }
         self.deleting_wallpaper = None;
         if let Err(error) = result {
-            eprintln!("Luma background deletion: {error}");
+            eprintln!("Astro background deletion: {error}");
             self.notify(self.preferences.language.t("deleteBackgroundError"));
             return;
         }
@@ -1739,7 +1740,7 @@ impl State {
         }
     }
 
-    /// The first time the System section shows, read whether LG lists Luma as an input.
+    /// The first time the System section shows, read whether LG lists Astro as an input.
     pub fn tv_input_due(&mut self) -> Option<Effect> {
         if self.page != Page::Settings
             || self.section != SYSTEM_SECTION
@@ -1761,7 +1762,7 @@ impl State {
         match result {
             Ok(registered) => {
                 self.tv_input = TvInput::Known(registered);
-                // A change adds or removes the Luma card in the inputs row.
+                // A change adds or removes the Astro card in the inputs row.
                 if request.is_some() {
                     vec![Effect::Refresh]
                 } else {
@@ -1769,7 +1770,7 @@ impl State {
                 }
             }
             Err(error) => {
-                eprintln!("Luma TV input: {error}");
+                eprintln!("Astro TV input: {error}");
                 self.tv_input = TvInput::Unavailable;
                 if request.is_none() {
                     return vec![];
@@ -1789,7 +1790,7 @@ impl State {
         self.uninstalling = None;
         self.dirty = true;
         if let Err(error) = result {
-            eprintln!("Luma uninstall: {error}");
+            eprintln!("Astro uninstall: {error}");
             self.notify(self.preferences.language.t("deleteAppError"));
             if matches!(&self.overlay, Some(Overlay::Delete { id: current, .. } | Overlay::Options { id: current, .. }) if current == &id)
             {

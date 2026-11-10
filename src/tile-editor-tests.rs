@@ -62,7 +62,7 @@ fn post(route: &str, body: &str, headers: &str) -> impl FnOnce(&str) -> Vec<u8> 
     }
 }
 
-const WRITE: &str = "X-Luma-Token: secret\r\nContent-Type: application/json\r\n";
+const WRITE: &str = "X-Astro-Token: secret\r\nContent-Type: application/json\r\n";
 
 fn session_request(session: &Session, method: &str, route: &str, body: &str) -> serde_json::Value {
     let parts: Vec<_> = session.url.split('/').collect();
@@ -70,7 +70,7 @@ fn session_request(session: &Session, method: &str, route: &str, body: &str) -> 
     socket
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    write!(socket, "{method} /{}/{route} HTTP/1.1\r\nHost: {}\r\nX-Luma-Token: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", parts[3], parts[2], parts[3], body.len()).unwrap();
+    write!(socket, "{method} /{}/{route} HTTP/1.1\r\nHost: {}\r\nX-Astro-Token: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", parts[3], parts[2], parts[3], body.len()).unwrap();
     let mut response = String::new();
     socket.read_to_string(&mut response).unwrap();
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
@@ -242,7 +242,7 @@ fn every_choosable_icon_ships_its_markup() {
 #[test]
 fn page_assets_and_the_tile_list_are_served_under_the_token() {
     let mut tiles = vec![tile("custom.lights", "Lights")];
-    for route in ["", "app.js", "app.css", "tiles.js", "luma-mark.svg"] {
+    for route in ["", "app.js", "app.css", "tiles.js", "astro-mark.svg"] {
         let (response, changed) = http(&mut tiles, |host| {
             format!("GET /secret/{route} HTTP/1.1\r\nHost: {host}\r\n\r\n").into_bytes()
         });
@@ -274,12 +274,12 @@ fn only_the_session_origin_token_and_json_allow_changes() {
         ("save", "Content-Type: application/json\r\n", "403"),
         (
             "save",
-            "X-Luma-Token: wrong\r\nContent-Type: application/json\r\n",
+            "X-Astro-Token: wrong\r\nContent-Type: application/json\r\n",
             "403",
         ),
         (
             "save",
-            "X-Luma-Token: secret\r\nContent-Type: text/plain\r\n",
+            "X-Astro-Token: secret\r\nContent-Type: text/plain\r\n",
             "415",
         ),
         ("delete", WRITE, "403"),

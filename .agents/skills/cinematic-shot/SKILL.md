@@ -9,9 +9,9 @@ Shoot the real product as a readable object on a stage. Combine a short frontal 
 restrained angled shots, meaningful UI actions, and a brisk edit. The product is the subject;
 camera movement, blur, lighting, and sound must support understanding it.
 
-This local edition incorporates the approved Luma film direction. The latest user brief and
+This local edition incorporates the approved Astro film direction. The latest user brief and
 approved cut take precedence over every numeric recipe here. Generalize the filming principles;
-use Luma's exact app names, languages, backgrounds, and timings only for Luma work.
+use Astro's exact app names, languages, backgrounds, and timings only for Astro work.
 
 Read [look.md](references/look.md) for camera, blur, timing, and rendering recipes, and
 [shot-list-example.md](references/shot-list-example.md) for the approved flow and reusable examples.

@@ -90,7 +90,7 @@ impl Drop for Texture {
 }
 
 struct Glyph {
-    geometry: Vec<luma_vector_geometry::Vertex>,
+    geometry: Vec<astro_vector_geometry::Vertex>,
     frame: u64,
 }
 
@@ -274,12 +274,12 @@ fn plain_radius(radius: f32) -> f32 {
     if radius > 0. { radius } else { -1. }
 }
 
-/// Measurement aid: LUMA_PROFILE_SKIP=wallpaper,image,app,shape,gradient,shadow,text or all
+/// Measurement aid: ASTRO_PROFILE_SKIP=wallpaper,image,app,shape,gradient,shadow,text or all
 /// leaves those draws out, to find which part of the scene costs the GPU time.
 fn profile_skip(command: &Draw) -> bool {
     static SKIP: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     let skip = SKIP.get_or_init(|| {
-        std::env::var("LUMA_PROFILE_SKIP")
+        std::env::var("ASTRO_PROFILE_SKIP")
             .map(|value| value.split(',').map(str::to_owned).collect())
             .unwrap_or_default()
     });
@@ -312,7 +312,7 @@ fn embolden(physical_size: f32, strength: f32) -> f32 {
 
 fn snap_rect(rect: Rect, scale: f32) -> Rect {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ENABLED.get_or_init(|| std::env::var("LUMA_SNAP").as_deref() != Ok("0")) {
+    if !*ENABLED.get_or_init(|| std::env::var("ASTRO_SNAP").as_deref() != Ok("0")) {
         return rect;
     }
     let scale = scale.max(0.01);
@@ -498,7 +498,7 @@ impl Renderer {
         }
     }
 
-    fn glyph(&mut self, c: char, font: u16) -> Result<&[luma_vector_geometry::Vertex], String> {
+    fn glyph(&mut self, c: char, font: u16) -> Result<&[astro_vector_geometry::Vertex], String> {
         let key = (c, font);
         if !self.glyphs.contains_key(&key) {
             let started = Instant::now();
@@ -520,7 +520,7 @@ impl Renderer {
 
     fn trim_text_geometry(&mut self) {
         let glyph_bytes =
-            |glyph: &Glyph| glyph.geometry.len() * size_of::<luma_vector_geometry::Vertex>();
+            |glyph: &Glyph| glyph.geometry.len() * size_of::<astro_vector_geometry::Vertex>();
         let mut bytes: usize = self.glyphs.values().map(glyph_bytes).sum();
         if bytes > GLYPH_GEOMETRY_BUDGET || self.glyphs.len() > 4096 {
             let mut old: Vec<_> = self
@@ -901,7 +901,7 @@ impl Renderer {
                     }
                 }
                 Err(error) => {
-                    eprintln!("Luma glyph {c:?}: {error}");
+                    eprintln!("Astro glyph {c:?}: {error}");
                     failures += 1;
                 }
             }
@@ -912,7 +912,7 @@ impl Renderer {
             match vector::Mesh::upload(1., 1., &vertices) {
                 Ok(mesh) => Some(mesh),
                 Err(error) => {
-                    eprintln!("Luma text: {error}");
+                    eprintln!("Astro text: {error}");
                     failures += 1;
                     None
                 }
@@ -1030,7 +1030,7 @@ impl Renderer {
 
     /// Edges on whole drawable pixels. The TV scales its 1080p graphics plane up 2x, which
     /// turns a half-covered edge pixel into a soft 2-pixel band; whole pixels stay crisp.
-    /// LUMA_SNAP=0 keeps logical positions (for comparison).
+    /// ASTRO_SNAP=0 keeps logical positions (for comparison).
     fn snap(&self, rect: Rect) -> Rect {
         snap_rect(rect, self.stats.viewport.scale)
     }
@@ -1613,7 +1613,7 @@ impl Renderer {
         result.map(|_| stats)
     }
 
-    /// Verification aid (LUMA_DAMAGE_VERIFY=1): compares the window's back buffer after a
+    /// Verification aid (ASTRO_DAMAGE_VERIFY=1): compares the window's back buffer after a
     /// partial redraw with the same scene drawn in full offscreen at the window's sample count.
     /// Returns the pixels differing by more than 16 in a channel, and the largest difference.
     pub fn verify_window(
@@ -1732,7 +1732,7 @@ fn load_font(directory: &Path, id: u16) -> Result<Font, String> {
     let font = Font::from_bytes(bytes).map_err(|e| format!("Font {}: {e}", path.display()))?;
     if cfg!(feature = "webos") {
         eprintln!(
-            "Luma font: {name} loaded in {} ms",
+            "Astro font: {name} loaded in {} ms",
             started.elapsed().as_millis()
         );
     }

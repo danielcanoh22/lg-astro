@@ -39,7 +39,7 @@ jobs:
             const { isReleaseMerge } = await import(`${process.env.GITHUB_WORKSPACE}/tools/release-gate.mjs`);
             const publish = await isReleaseMerge({ github, context });
             await core.summary
-              .addHeading(`Luma ${process.env.RELEASE_TAG}`)
+              .addHeading(`Astro ${process.env.RELEASE_TAG}`)
               .addRaw(publish
                 ? 'Release authorized: this main commit merged Version Packages with a version increase. Publication waits for checks, all four smoke suites, and the verified ARM package.'
                 : 'Validation only: this run cannot publish. Merge the Version Packages PR to start the eligible main-commit release run.')
@@ -84,9 +84,9 @@ jobs:
       - name: Generate native assets
         run: pnpm assets
       - name: Build shared desktop preview
-        run: cargo build --locked --package luma --no-default-features
+        run: cargo build --locked --package astro --no-default-features
       - name: Bundle shared smoke inputs
-        run: tar -czf smoke-inputs.tar.gz .build/assets target/debug/luma
+        run: tar -czf smoke-inputs.tar.gz .build/assets target/debug/astro
       - uses: actions/upload-artifact@v7
         with:
           name: smoke-inputs
@@ -134,7 +134,7 @@ jobs:
       - name: Run isolated smoke suite
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
-          LUMA_SMOKE_SKIP_BUILD: '1'
+          ASTRO_SMOKE_SKIP_BUILD: '1'
         run: xvfb-run -a -s '-screen 0 1920x1080x24' node "${{ matrix.script }}"
       - name: Upload native rendering diagnostics
         if: always()
@@ -190,7 +190,7 @@ jobs:
       - name: Upload release files
         uses: actions/upload-artifact@v7
         with:
-          name: luma-release
+          name: astro-release
           if-no-files-found: error
           path: |
             dist/*.ipk
@@ -229,7 +229,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: luma-release
+          name: astro-release
           path: release
       - name: Publish tested release files
         env:
@@ -269,7 +269,7 @@ jobs:
             gh release create "$RELEASE_TAG" "${files[@]}" \
               --target "$COMMIT_SHA" \
               --generate-notes \
-              --title "Luma ${RELEASE_TAG#v}"
+              --title "Astro ${RELEASE_TAG#v}"
           fi
           echo "### Published [$RELEASE_TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -296,7 +296,7 @@ jobs:
             ? jobs.release.result === 'success' ? 'Publication job succeeded' : 'Release not published by this run'
             : gateFailed ? 'Release eligibility could not be determined. Publication is blocked.' : 'Validation only, no publication authorized';
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
-            `## Luma ${process.env.RELEASE_TAG} rollout`, '', status, '',
+            `## Astro ${process.env.RELEASE_TAG} rollout`, '', status, '',
             '| Stage | Result |', '| --- | --- |',
             ...Object.entries(jobs).map(([name, job]) => `| ${name} | ${job.result} |`), '',
             `[Run and artifacts](${repo}/actions/runs/${process.env.GITHUB_RUN_ID})`, '',

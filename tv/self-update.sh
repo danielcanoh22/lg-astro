@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs in its own systemd unit so installation can close/restart Luma safely.
+# Runs in its own systemd unit so installation can close/restart Astro safely.
 # Usage: self-update.sh IPK SHA256 VERSION APP_DIR ATTEMPT
 set -u
 IPK=$1
@@ -7,15 +7,15 @@ SHA=$2
 VERSION=$3
 APP_DIR=$4
 ATTEMPT=$5
-STATE=/var/lib/luma-update
-HOME_STATE=/var/lib/luma-home
+STATE=/var/lib/astro-update
+HOME_STATE=/var/lib/astro-home
 case "$ATTEMPT" in ''|*[!0-9a-f]*) exit 1 ;; esac
 [ ${#ATTEMPT} = 32 ] || exit 1
 case "$SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
 [ ${#SHA} = 64 ] || exit 1
 case "$VERSION" in ''|*[!0-9.]*) exit 1 ;; esac
 case "$APP_DIR" in
-  /media/developer/apps/usr/palm/applications/com.ecklf.luma|/media/cryptofs/apps/usr/palm/applications/com.ecklf.luma|/usr/palm/applications/com.ecklf.luma) ;;
+  /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro|/media/cryptofs/apps/usr/palm/applications/com.danielcanoh22.astro|/usr/palm/applications/com.danielcanoh22.astro) ;;
   *) exit 1 ;;
 esac
 [ "$(id -u)" = 0 ] || exit 1
@@ -53,11 +53,11 @@ publish starting 'Preparing the verified package.'
 cp "$IPK" "$WORK/package.ipk" || fail 'Cannot stage the downloaded package.'
 IPK="$WORK/package.ipk"
 [ "$(sha256sum "$IPK" | cut -d' ' -f1)" = "$SHA" ] || fail 'Package checksum mismatch.'
-publish installing 'Installing Luma.'
+publish installing 'Installing Astro.'
 log "installing $VERSION"
 OUT="$WORK/install"
 luna-send -i -w 240000 luna://com.webos.appInstallService/dev/install \
-  "{\"id\":\"com.ecklf.luma\",\"ipkUrl\":\"$IPK\",\"subscribe\":true}" >"$OUT" 2>&1 </dev/null &
+  "{\"id\":\"com.danielcanoh22.astro\",\"ipkUrl\":\"$IPK\",\"subscribe\":true}" >"$OUT" 2>&1 </dev/null &
 SEND=$!
 i=0
 while [ $i -lt 240 ]; do
@@ -71,7 +71,7 @@ kill "$SEND" 2>/dev/null || true
 wait "$SEND" 2>/dev/null || true
 SEND=
 head -c 4000 "$OUT" >>"$LOG"
-grep -q '"state": *"installed"' "$OUT" || fail 'Package installation failed or timed out; see /var/lib/luma-update/update.log.'
+grep -q '"state": *"installed"' "$OUT" || fail 'Package installation failed or timed out; see /var/lib/astro-update/update.log.'
 # A top-level string value from appinfo.json or state.json, minified or pretty-printed, without
 # Node. Neither file nests the key; callers compare or allowlist the value, so a miss fails safe.
 json_string() {
@@ -99,17 +99,17 @@ recover_home() {
   # Disable must complete, then independently verify both takeover methods are detached.
   if sh "$HOME_STATE/home.sh" disable >>"$LOG" 2>&1 </dev/null &&
      ! awk '$2 == "/usr/bin/com.webos.app.home" || $2 == "/usr/palm/applications/com.webos.app.home" || $2 == "/usr/bin/com.webos.app.fullhome" || $2 == "/usr/palm/applications/com.webos.app.fullhome" { found=1 } END { exit !found }' /proc/mounts &&
-     [ ! -e /var/run/luma-home ]; then
+     [ ! -e /var/run/astro-home ]; then
     launch "$HOME_ID" || fail 'LG Home was restored but could not be opened.'
-    fail 'Update installed, but Home takeover failed; LG Home restored. Enable Luma Home again to retry.'
+    fail 'Update installed, but Home takeover failed; LG Home restored. Enable Astro Home again to retry.'
   fi
-  fail 'Update installed, but Home recovery needs attention; see /var/lib/luma-update/update.log.'
+  fail 'Update installed, but Home recovery needs attention; see /var/lib/astro-update/update.log.'
 }
 if grep -q '"enabled": *true' "$HOME_STATE/state.json" 2>/dev/null; then
   # Use the NEW scripts: refresh copied helpers and staged manifest as well as the executable.
   if ! printf 'y\n' | sh "$APP_DIR/home.sh" enable "$APP_DIR" "$HOME_ID" >>"$LOG" 2>&1; then recover_home; fi
   launch "$HOME_ID" || recover_home
 else
-  launch com.ecklf.luma || fail 'Update installed, but Luma could not be opened.'
+  launch com.danielcanoh22.astro || fail 'Update installed, but Astro could not be opened.'
 fi
-publish success 'Luma was updated and reopened.'
+publish success 'Astro was updated and reopened.'

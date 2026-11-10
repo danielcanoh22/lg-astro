@@ -16,6 +16,7 @@ pub fn allowed(id: &str) -> bool {
             .any(|prefix| id.starts_with(prefix))
         && ![
             APP,
+            "com.ecklf.luma",
             "com.luma.native",
             "com.luma.launcher",
             "com.luma.launcher.native",

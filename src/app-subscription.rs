@@ -1,5 +1,5 @@
 //! A Luna subscription held by a child process (on the TV, a root `luna-send -a …`), for calls
-//! Luma's own LS2 connection may not make. Free of LS2, so the host tests can exercise it.
+//! Astro's own LS2 connection may not make. Free of LS2, so the host tests can exercise it.
 use serde_json::Value;
 use std::{
     io::{BufRead, BufReader},
@@ -54,7 +54,7 @@ fn end_child(child: &Mutex<Option<Child>>) {
 /// end the child, and then `on_end` runs once with whether the first reply was accepted.
 ///
 /// The child gets SIGKILL when the calling thread ends (call this from the main thread), so it
-/// never outlives Luma. A setup error after the child started kills and reaps it before
+/// never outlives Astro. A setup error after the child started kills and reaps it before
 /// returning; `on_end` does not run then.
 pub fn subscribe(
     mut command: Command,

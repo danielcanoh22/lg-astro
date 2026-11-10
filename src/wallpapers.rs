@@ -102,7 +102,7 @@ impl Service {
         let (sender, receiver) = mpsc::sync_channel(4);
         let (wake, updates) = mpsc::channel();
         thread::Builder::new()
-            .name("luma-wallpapers".into())
+            .name("astro-wallpapers".into())
             .spawn(move || {
                 worker(
                     &directory,
@@ -505,14 +505,14 @@ fn worker(
                             }
                         }
                         Ok(false) => {}
-                        Err(error) => eprintln!("Luma wallpaper upload: {error}"),
+                        Err(error) => eprintln!("Astro wallpaper upload: {error}"),
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(25))
                 }
                 Err(error) => {
-                    eprintln!("Luma wallpaper server: {error}");
+                    eprintln!("Astro wallpaper server: {error}");
                     break;
                 }
             }
@@ -601,7 +601,7 @@ fn serve(
                 "text/javascript; charset=utf-8",
                 include_bytes!("../assets/wallpaper-upload/storage.js"),
             ),
-            "luma-mark.svg" => ("image/svg+xml", include_bytes!("../assets/app-icon.svg")),
+            "astro-mark.svg" => ("image/svg+xml", include_bytes!("../assets/app-icon.svg")),
             _ => {
                 error_response(stream, "404 Not Found", "Not found")?;
                 return Ok(false);
@@ -612,7 +612,7 @@ fn serve(
     }
     if request.method != "POST"
         || route != "upload"
-        || request.headers.get("x-luma-upload").map(String::as_str) != Some(token)
+        || request.headers.get("x-astro-upload").map(String::as_str) != Some(token)
     {
         error_response(stream, "403 Forbidden", "Invalid upload request")?;
         return Ok(false);

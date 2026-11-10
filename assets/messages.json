@@ -140,8 +140,8 @@
     "es": "Analítico"
   },
   "textRenderingRestart": {
-    "en": "Restart Luma to apply changes.",
-    "es": "Reinicia Luma para aplicar los cambios."
+    "en": "Restart Astro to apply changes.",
+    "es": "Reinicia Astro para aplicar los cambios."
   },
   "recentEmpty": {
     "en": "No recent apps",
@@ -176,8 +176,8 @@
     "es": "Ajustes"
   },
   "settingsRegion": {
-    "en": "Luma settings",
-    "es": "Ajustes de Luma"
+    "en": "Astro settings",
+    "es": "Ajustes de Astro"
   },
   "mainNavigation": {
     "en": "Main navigation",
@@ -328,8 +328,8 @@
     "es": "La actualización no funcionó. Inténtalo más tarde."
   },
   "updateRestart": {
-    "en": "Luma restarts when the update is installed.",
-    "es": "Luma se reiniciará cuando se instale la actualización."
+    "en": "Astro restarts when the update is installed.",
+    "es": "Astro se reiniciará cuando se instale la actualización."
   },
   "quitApp": {
     "en": "Quit app",
@@ -1013,7 +1013,7 @@
   },
   "tvInput": {
     "en": "Show as TV input",
-    "es": "Luma como entrada de TV"
+    "es": "Astro como entrada de TV"
   },
   "tvInputError": {
     "en": "Could not change the TV input. This TV may not support it.",

@@ -1,10 +1,10 @@
 # Shot-list examples: readable, fast, real UI
 
-The first example records the approved Luma film after iteration. It is a worked example,
+The first example records the approved Astro film after iteration. It is a worked example,
 not a requirement to use a launcher, these apps, or these languages in unrelated products.
 Use [look.md](look.md) for the reusable numeric recipes.
 
-## Approved Luma film: 15.7 seconds
+## Approved Astro film: 15.7 seconds
 
 | Cut    | Length | Setup                                        | Actual action/result                                                                                           |
 | ------ | ------ | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -12,7 +12,7 @@ Use [look.md](look.md) for the reusable numeric recipes.
 | 2.1 s  | 2.2 s  | Same frontal pose, Recent Apps               | Browse Netflix → YouTube → Apple TV; retain all three entries                                                  |
 | 4.3 s  | 4.0 s  | Closer angled Settings, both columns visible | Enter Background, choose Forest from Slate, return to the sidebar, continue through Weather and Inputs         |
 | 8.3 s  | 5.4 s  | One continuous angled Home setup             | Nine finished configurations, faster with each change, small drift/rotation and brief blur-through transitions |
-| 13.7 s | 2.0 s  | Crisp static end card                        | Original Luma mark plus `Luma for webOS` in Inter                                                              |
+| 13.7 s | 2.0 s  | Crisp static end card                        | Original Astro mark plus `Astro for webOS` in Inter                                                              |
 
 ### Why these choices mattered
 
@@ -31,7 +31,7 @@ Use [look.md](look.md) for the reusable numeric recipes.
   softness and small transition blur preserve readability instead of obscuring the interface.
 - The silent file has no audio stream. A single two-second title/mark card finishes the short cut.
 
-## Exact Luma configuration montage
+## Exact Astro configuration montage
 
 Hold lengths at 30 fps are **30, 27, 24, 21, 18, 15, 12, 9, 6 frames**. These create the
 requested stagger: 1.0 s down to 0.2 s. Incoming transition times also shorten. The first and
@@ -57,7 +57,7 @@ use the selected locale.
 
 ## Capture and verification lessons
 
-1. **Use the renderer that exists.** Luma is Rust/SDL/OpenGL, so the film uses native 5760×3240
+1. **Use the renderer that exists.** Astro is Rust/SDL/OpenGL, so the film uses native 5760×3240
    captures, not a browser reconstruction. A separate capture worktree controls timing and phases.
 2. **Exercise the existing interaction.** Capture the native carousel, wallpaper fade, viewport
    clipping and scroll masks. Preserve fixed chrome. Verify the final app row was reached.

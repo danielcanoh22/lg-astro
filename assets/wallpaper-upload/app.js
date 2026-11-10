@@ -140,7 +140,7 @@ editor.addEventListener('submit', async (event) => {
     const token = location.pathname.split('/')[1];
     const response = await fetch('upload', {
       method: 'POST',
-      headers: { 'Content-Type': 'image/jpeg', 'X-Luma-Upload': token },
+      headers: { 'Content-Type': 'image/jpeg', 'X-Astro-Upload': token },
       body: blob,
       signal: controller.signal,
     });

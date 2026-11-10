@@ -1,17 +1,17 @@
 #[cfg(all(feature = "webos", target_os = "linux", target_arch = "arm"))]
 #[path = "../../src/webos-compat.rs"]
 mod webos_compat;
-use luma_tv_helper::{
+use astro_tv_helper::{
     files, home, input,
     system::{System, Tv},
     uninstall,
 };
 use serde_json::Value;
-fn run() -> luma_tv_helper::Result<Value> {
+fn run() -> astro_tv_helper::Result<Value> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|s| s == "--help") {
         println!(
-            "luma-helper: home COMMAND [APP_DIR] [HOME_ID] | read-app-icon JSON | sync-splash JSON | uninstall-app ID | tv-input COMMAND [APP_DIR]"
+            "astro-helper: home COMMAND [APP_DIR] [HOME_ID] | read-app-icon JSON | sync-splash JSON | uninstall-app ID | tv-input COMMAND [APP_DIR]"
         );
         return Ok(serde_json::json!({"returnValue":true}));
     }
@@ -31,12 +31,12 @@ fn run() -> luma_tv_helper::Result<Value> {
     let sys = Tv;
     match arg(0)? {
         "read-app-icon" => {
-            luma_tv_helper::system::root(&sys)?;
+            astro_tv_helper::system::root(&sys)?;
             let source = serde_json::from_str(arg(1)?).map_err(|e| e.to_string())?;
             files::read_icons(&sys, &source)
         }
         "sync-splash" => {
-            luma_tv_helper::system::root(&sys)?;
+            astro_tv_helper::system::root(&sys)?;
             let request: Value = serde_json::from_str(arg(1)?).map_err(|e| e.to_string())?;
             files::sync_splash(
                 &sys,
@@ -70,7 +70,7 @@ fn main() {
     match run() {
         Ok(reply) => println!("{reply}"),
         Err(error) => {
-            eprintln!("Luma TV helper: {error}");
+            eprintln!("Astro TV helper: {error}");
             std::process::exit(1);
         }
     }
