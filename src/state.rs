@@ -238,7 +238,9 @@ pub enum Effect {
     TvInput(Option<bool>),
     /// Open `com.ecklf.luma` from Home so the TV keeps Luma as its last input; with
     /// `if_home_in_front`, only while Home is the foreground app.
-    SelectLumaInput { if_home_in_front: bool },
+    SelectLumaInput {
+        if_home_in_front: bool,
+    },
     UpdateDownload(String),
 }
 

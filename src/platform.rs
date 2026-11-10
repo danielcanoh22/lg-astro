@@ -224,7 +224,9 @@ pub enum Request {
     TvInput(Option<bool>),
     /// Open `com.ecklf.luma` for its TV input, without the launch notice; with
     /// `if_home_in_front`, only while Home is the foreground app.
-    SelectLumaInput { if_home_in_front: bool },
+    SelectLumaInput {
+        if_home_in_front: bool,
+    },
     Recent {
         generation: u64,
         command: crate::recents::Command,
