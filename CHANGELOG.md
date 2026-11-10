@@ -1,5 +1,11 @@
 # lg-luma
 
+## 2.21.1
+
+### Patch Changes
+
+- e160fef: A Home that the TV starts behind another input or app (for example after powering on into Luma's input) no longer opens Luma's input copy over it a few seconds later. At start, Home switches only while it is the foreground app.
+
 ## 2.21.0
 
 ### Minor Changes
