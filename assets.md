@@ -1,7 +1,9 @@
 # Astro assets and references
 
-- `assets/mark.svg`, `assets/app-icon.svg`, and the Midnight/Slate/Prism SVG wallpapers:
-  original Luma artwork, MIT. webOS supplies the app icon panel using `iconColor`.
+- The Midnight/Slate/Prism SVG wallpapers: original Luma artwork, MIT.
+- `assets/app-icon.svg` and its copy `assets/ui-icons/astro-mark.svg`: the Astro logo by
+  danielcanoh22, MIT. It has no background: webOS supplies the app icon panel using `iconColor`
+  (`#09090B`).
 - `assets/wallpapers/dunes.jpg`: Unsplash photo `1509316785289-025f5b846b35`,
   https://images.unsplash.com/photo-1509316785289-025f5b846b35, [Unsplash License](https://unsplash.com/license).
 - `assets/wallpapers/san-francisco.jpg`: Unsplash photo `1501594907352-04cda38ebc29`,
@@ -23,7 +25,7 @@
   `assets/fonts/noto-ofl.txt`). Pinned the same way. Google Fonts ships Hangul only in this family,
   not in Noto Sans SC; generated Hangul-only regular/medium subsets are renamed Astro KR.
 - Lucide interface icons: exported standalone SVG sources in `assets/ui-icons/`, ISC license
-  bundled at `assets/licenses/lucide.txt`. The Astro upload icon and the small `astro-mark.svg` reuse
+  bundled at `assets/licenses/lucide.txt`. The Astro upload icon reuses
   original project artwork under MIT. PlayStation/Apple TV input paths were supplied by the user;
   the brand marks belong to Sony/Apple. The Shield and Xbox input icons are the NVIDIA eye and Xbox logo from Simple
   Icons (CC0); the marks belong to NVIDIA and Microsoft. The Switch and Switch 2 input icons are the
