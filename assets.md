@@ -1,7 +1,8 @@
 # Astro assets and references
 
-- `assets/mark.svg`, `assets/app-icon.svg`, and the Midnight/Slate/Prism SVG wallpapers:
-  original Luma artwork, MIT. webOS supplies the app icon panel using `iconColor`.
+- `assets/mark.svg` and the Midnight/Slate/Prism SVG wallpapers: original Luma artwork, MIT.
+- `assets/app-icon.svg`: the Astro logo by danielcanoh22, MIT. It has no background: webOS supplies
+  the app icon panel using `iconColor` (`#09090B`).
 - `assets/wallpapers/dunes.jpg`: Unsplash photo `1509316785289-025f5b846b35`,
   https://images.unsplash.com/photo-1509316785289-025f5b846b35, [Unsplash License](https://unsplash.com/license).
 - `assets/wallpapers/san-francisco.jpg`: Unsplash photo `1501594907352-04cda38ebc29`,

@@ -13,7 +13,7 @@
   "requiredACG": ["application.launcher", "application.query", "lunabus.query"],
   "supportGIP": true,
   "handlesRelaunch": false,
-  "iconColor": "#25272d",
+  "iconColor": "#09090B",
   "splashBackground": "splash.png",
   "bgColor": "#17191c"
 }
