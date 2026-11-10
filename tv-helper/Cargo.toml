@@ -1,5 +1,5 @@
 [package]
-name = "luma-tv-helper"
+name = "astro-tv-helper"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
@@ -7,7 +7,7 @@ publish = false
 license = "MIT"
 
 [[bin]]
-name = "luma-helper"
+name = "astro-helper"
 path = "src/main.rs"
 
 [features]

@@ -12,9 +12,9 @@ const run = (command, args) => {
   if (result.error) throw result.error;
   assert.equal(result.status, 0, `${command} failed`);
 };
-if (process.env.LUMA_SMOKE_SKIP_BUILD !== '1')
-  run('cargo', ['build', '--locked', '--package', 'luma']);
-const binary = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target', 'debug/luma');
+if (process.env.ASTRO_SMOKE_SKIP_BUILD !== '1')
+  run('cargo', ['build', '--locked', '--package', 'astro']);
+const binary = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target', 'debug/astro');
 const temporary = await fs.mkdtemp(path.join(out, 'smoke-'));
 try {
   const preferences = path.join(temporary, 'preferences.json');
@@ -366,7 +366,7 @@ try {
   );
   assert.deepEqual(system.focus, { Setting: 5 });
   assert.ok(system.ui_text.includes('Refresh apps & inputs'));
-  assert.ok(!system.ui_text.includes('Luma update'));
+  assert.ok(!system.ui_text.includes('Astro update'));
   assert.ok(system.ui_text.includes('Quit app'));
   assert.ok(system.ui_text.includes('Text rendering'));
   assert.ok(system.ui_text.includes('Show as TV input'));
@@ -406,14 +406,14 @@ try {
   assert.ok(latestPreview.ui_text.includes('No newer version found'));
   assert.ok(latestPreview.ui_text.includes('Check again'));
   assert.ok(latestPreview.ui_text.includes(`Current version: ${currentVersion}`));
-  assert.ok(!latestPreview.ui_text.some((label) => label.startsWith('Luma v')));
+  assert.ok(!latestPreview.ui_text.some((label) => label.startsWith('Astro v')));
   const textOptions = 'settings,down,down,down,down,right,down,down,enter';
   const textRendering = await scenario('text-rendering-options', textOptions);
   assert.equal(textRendering.subpage, 'TextRendering');
   assert.deepEqual(textRendering.focus, { Choice: 0 });
   assert.ok(textRendering.ui_text.includes('MSAA (default)'));
   assert.ok(textRendering.ui_text.includes('Analytic'));
-  assert.ok(textRendering.ui_text.includes('Restart Luma to apply changes.'));
+  assert.ok(textRendering.ui_text.includes('Restart Astro to apply changes.'));
   const analyticSaved = await scenario('text-rendering-saved', `${textOptions},down,enter`);
   assert.equal(analyticSaved.preferences.text_rendering, 'analytic');
   assert.deepEqual(analyticSaved.focus, { Setting: 7 });
@@ -438,7 +438,7 @@ try {
         {
           id: 'custom.sandmann',
           title: 'Sandmann',
-          url: 'http://127.0.0.1:9/api/webhook/luma',
+          url: 'http://127.0.0.1:9/api/webhook/astro',
           method: 'POST',
         },
       ],
@@ -453,7 +453,7 @@ try {
     {
       id: 'custom.sandmann',
       title: 'Sandmann',
-      url: 'http://127.0.0.1:9/api/webhook/luma',
+      url: 'http://127.0.0.1:9/api/webhook/astro',
       method: 'POST',
     },
   ]);
@@ -542,7 +542,7 @@ try {
   assert.equal(
     cycledAfterRestart.preferences.background,
     'san-francisco',
-    'enabled rotation advances to the next wallpaper when Luma restarts',
+    'enabled rotation advances to the next wallpaper when Astro restarts',
   );
   const cycleDisabled = await scenario(
     'wallpaper-cycle-disabled',

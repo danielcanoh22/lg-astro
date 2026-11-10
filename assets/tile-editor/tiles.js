@@ -30,7 +30,7 @@ export function checkListing(listing) {
 export async function post(fetcher, token, route, body, signal) {
   const response = await fetcher(route, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Luma-Token': token },
+    headers: { 'Content-Type': 'application/json', 'X-Astro-Token': token },
     body: JSON.stringify(body),
     signal,
   });

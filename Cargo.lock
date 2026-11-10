@@ -21,6 +21,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "astro"
+version = "2.21.3"
+dependencies = [
+ "astro-tv-helper",
+ "astro-vector-geometry",
+ "getrandom",
+ "gl",
+ "if-addrs",
+ "image",
+ "libc",
+ "owned_ttf_parser",
+ "qrcodegen",
+ "ring",
+ "sdl2",
+ "serde",
+ "serde_json",
+ "time",
+ "ureq",
+]
+
+[[package]]
+name = "astro-tv-helper"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "astro-vector-assets"
+version = "0.1.0"
+dependencies = [
+ "astro-vector-geometry",
+ "serde",
+ "serde_json",
+ "usvg",
+]
+
+[[package]]
+name = "astro-vector-geometry"
+version = "0.1.0"
+dependencies = [
+ "lyon_tessellation",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -287,53 +334,6 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
-
-[[package]]
-name = "luma"
-version = "2.21.3"
-dependencies = [
- "getrandom",
- "gl",
- "if-addrs",
- "image",
- "libc",
- "luma-tv-helper",
- "luma-vector-geometry",
- "owned_ttf_parser",
- "qrcodegen",
- "ring",
- "sdl2",
- "serde",
- "serde_json",
- "time",
- "ureq",
-]
-
-[[package]]
-name = "luma-tv-helper"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "luma-vector-assets"
-version = "0.1.0"
-dependencies = [
- "luma-vector-geometry",
- "serde",
- "serde_json",
- "usvg",
-]
-
-[[package]]
-name = "luma-vector-geometry"
-version = "0.1.0"
-dependencies = [
- "lyon_tessellation",
-]
 
 [[package]]
 name = "lyon_geom"

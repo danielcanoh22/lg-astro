@@ -1,8 +1,8 @@
-# Luma agent context
+# Astro agent context
 
 ## Project
 
-Luma is a native Rust/SDL2/OpenGL ES 2 launcher for rooted LG webOS TVs. Rust source is in
+Astro is a native Rust/SDL2/OpenGL ES 2 launcher for rooted LG webOS TVs. Rust source is in
 `src/`, original assets/translations in `assets/`, shared vector geometry in `vector-geometry/`,
 the host SVG compiler in `tools/vector-assets/`, packaging/tooling in `tools/`, and desktop smoke
 scripts in `tests/`. There is no React/JSX/browser application. Read `development.md` for details.
@@ -30,7 +30,7 @@ contact real weather APIs or a TV. Respect any user instruction to use manual TV
 instead of running automated tests. Builds/lint may still be run. Do not claim hardware behavior
 from desktop checks. Add a `pnpm changeset` file for release-worthy changes and leave version
 bumps to the automated Version Packages PR. Its `pnpm version:release` command synchronizes
-`package.json`, `appinfo.json`, the root `Cargo.toml`, the `luma` entry in `Cargo.lock` and README
+`package.json`, `appinfo.json`, the root `Cargo.toml`, the `astro` entry in `Cargo.lock` and README
 IPK examples. Supporting Rust crates retain independent versions. `pnpm version:check` checks
 consistency without writing files. Code or behavior changes should use semantic versioning:
 patch for backward-compatible fixes, minor for backward-compatible features, and major for
@@ -40,9 +40,10 @@ can omit a changeset.
 
 ## Build and identity
 
-`com.ecklf.luma` is the native app's ID and `luma` its executable. Root `appinfo.json` is the
-package metadata source. It installs separately from the former web app `com.luma.launcher` and
-prototypes `com.luma.launcher.native` and `com.luma.native`, all excluded from app inventory. Preferences are local JSON
+`com.danielcanoh22.astro` is the native app's ID and `astro` its executable. Root `appinfo.json`
+is the package metadata source. It installs separately from the previous native app ID
+`com.ecklf.luma`, the former web app `com.luma.launcher` and prototypes `com.luma.launcher.native`
+and `com.luma.native`, all excluded from app inventory. Preferences are local JSON
 per installation; browser local storage and preferences from other IDs are not migrated.
 
 ARM builds must use the NDK's gnueabi soft-float calling convention and explicit sysroot, with
@@ -89,7 +90,7 @@ backgrounds and QR-managed webhook shortcuts), not just languages. Avoid claims 
 behavior or features not yet implemented.
 
 SVG sources and fonts retain licenses in `assets/`. TV app artwork is resolved at runtime from
-inventory/installed manifests by `src/app_artwork.rs`, with a native Rust `luma-helper` elevated
+inventory/installed manifests by `src/app_artwork.rs`, with a native Rust `astro-helper` elevated
 reader for jailed installations. Reads/decoding stay on its worker; GPU uploads stay on SDL.
 Refresh invalidates cached results. No collected icon map or card-colour JSON is used or shipped.
 Desktop previews use curated vectors and generic/category fallbacks. Do not add dumped TV images

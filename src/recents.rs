@@ -48,6 +48,7 @@ fn excluded(id: &str) -> bool {
         APP_ID
             | HOME_ID
             | FULL_HOME_ID
+            | "com.ecklf.luma"
             | "com.luma.native"
             | "com.luma.launcher"
             | "com.luma.launcher.native"
@@ -346,7 +347,7 @@ impl State {
         self.dirty = true;
         match result {
             Err(error) => {
-                eprintln!("Luma recent apps: {error}");
+                eprintln!("Astro recent apps: {error}");
                 if let Command::Close(id) = &command {
                     for dismissal in &mut self.recents.dismissals {
                         if &dismissal.entry.app.id == id {

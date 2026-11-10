@@ -32,7 +32,8 @@ fn same_executable(a: &Path, b: &Path) -> bool {
 }
 
 fn owns_executable(directory: &Path, executable: &Path) -> bool {
-    if !directory.join("assets").is_dir() || !same_executable(&directory.join("luma"), executable) {
+    if !directory.join("assets").is_dir() || !same_executable(&directory.join("astro"), executable)
+    {
         return false;
     }
     let manifest = fs::read(directory.join("appinfo.json"))
@@ -41,7 +42,7 @@ fn owns_executable(directory: &Path, executable: &Path) -> bool {
     manifest.is_some_and(|manifest| {
         manifest.get("id").and_then(serde_json::Value::as_str) == Some(super::APP_ID)
             && manifest.get("type").and_then(serde_json::Value::as_str) == Some("native")
-            && manifest.get("main").and_then(serde_json::Value::as_str) == Some("luma")
+            && manifest.get("main").and_then(serde_json::Value::as_str) == Some("astro")
     })
 }
 
@@ -57,7 +58,7 @@ pub fn find_directory(
         .find(|directory| owns_executable(directory, executable))
         .ok_or_else(|| {
             format!(
-                "No installed native Luma package matches {}",
+                "No installed native Astro package matches {}",
                 executable.display()
             )
         })
@@ -73,7 +74,7 @@ mod tests {
         fn new() -> Self {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
             let root = std::env::temp_dir().join(format!(
-                "luma-install-{}-{}",
+                "astro-install-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
@@ -84,11 +85,11 @@ mod tests {
         fn install(&self, location: &str) -> PathBuf {
             let directory = self.0.join(location).join(super::super::APP_ID);
             fs::create_dir_all(directory.join("assets")).unwrap();
-            fs::write(directory.join("luma"), b"native executable").unwrap();
+            fs::write(directory.join("astro"), b"native executable").unwrap();
             fs::write(
                 directory.join("appinfo.json"),
                 serde_json::json!({
-                    "id": super::super::APP_ID, "type": "native", "main": "luma"
+                    "id": super::super::APP_ID, "type": "native", "main": "astro"
                 })
                 .to_string(),
             )
@@ -100,7 +101,7 @@ mod tests {
             let executable = self.0.join("usr/bin/com.webos.app.home");
             fs::create_dir_all(executable.parent().unwrap()).unwrap();
             // A hard link preserves the same device/inode relationship as a file bind mount.
-            fs::hard_link(directory.join("luma"), &executable).unwrap();
+            fs::hard_link(directory.join("astro"), &executable).unwrap();
             executable
         }
     }
@@ -119,7 +120,7 @@ mod tests {
         for directory in [&developer, &production] {
             assert_eq!(
                 find_directory(
-                    &directory.join("luma"),
+                    &directory.join("astro"),
                     [production.clone(), developer.clone()]
                 )
                 .unwrap(),
@@ -163,9 +164,9 @@ mod tests {
     fn home_mount_requires_the_matching_native_package_manifest() {
         for manifest in [
             "not json",
-            r#"{"id":"other","type":"native","main":"luma"}"#,
-            r#"{"id":"com.ecklf.luma","type":"web","main":"luma"}"#,
-            r#"{"id":"com.ecklf.luma","type":"native","main":"other"}"#,
+            r#"{"id":"other","type":"native","main":"astro"}"#,
+            r#"{"id":"com.danielcanoh22.astro","type":"web","main":"astro"}"#,
+            r#"{"id":"com.danielcanoh22.astro","type":"native","main":"other"}"#,
         ] {
             let fixture = Fixture::new();
             let directory = fixture.install("cryptofs");

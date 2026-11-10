@@ -70,7 +70,7 @@ pub mod discovery {
         let mut response = agent
             .get(url)
             .header("Accept", "application/json")
-            .header("User-Agent", "LumaNative")
+            .header("User-Agent", "AstroNative")
             .call()
             .map_err(|error| error.to_string())?;
         let mut bytes = Vec::new();
@@ -129,12 +129,12 @@ pub mod discovery {
         let mut matching = feed
             .packages
             .into_iter()
-            .filter(|package| package.id == "com.ecklf.luma");
+            .filter(|package| package.id == "com.danielcanoh22.astro");
         let package = matching
             .next()
-            .ok_or("Luma is missing from the release feed")?;
-        if matching.next().is_some() || package.manifest.id != "com.ecklf.luma" {
-            return Err("Ambiguous Luma release metadata".into());
+            .ok_or("Astro is missing from the release feed")?;
+        if matching.next().is_some() || package.manifest.id != "com.danielcanoh22.astro" {
+            return Err("Ambiguous Astro release metadata".into());
         }
         let latest = version(&package.manifest.version).ok_or("Invalid release version")?;
         Ok((latest > current).then_some(package.manifest.version))
@@ -170,7 +170,7 @@ pub mod discovery {
             }
         }
         fn feed(value: &str) -> Vec<u8> {
-            serde_json::to_vec(&serde_json::json!({"packages":[{"id":"com.ecklf.luma","manifest":{"id":"com.ecklf.luma","version":value}}]})).unwrap()
+            serde_json::to_vec(&serde_json::json!({"packages":[{"id":"com.danielcanoh22.astro","manifest":{"id":"com.danielcanoh22.astro","version":value}}]})).unwrap()
         }
         #[test]
         fn compares_numeric_versions_and_never_offers_equal_or_older_releases() {
@@ -202,7 +202,7 @@ pub mod discovery {
                 assert!(newer_version(&feed(value), "2.13.0").is_err());
             }
             assert!(newer_version(br#"{"packages":[]}"#, "2.13.0").is_err());
-            assert!(newer_version(br#"{"packages":[{"id":"com.ecklf.luma","manifest":{"id":"other","version":"9.0.0"}}]}"#, "2.13.0").is_err());
+            assert!(newer_version(br#"{"packages":[{"id":"com.danielcanoh22.astro","manifest":{"id":"other","version":"9.0.0"}}]}"#, "2.13.0").is_err());
             assert!(newer_version(b"not json", "2.13.0").is_err());
             let package: serde_json::Value = serde_json::from_slice(&feed("9.0.0")).unwrap();
             let entry = &package["packages"][0];
@@ -286,7 +286,7 @@ fn download_directory() -> Result<(String, PathBuf), String> {
         .fill(&mut random)
         .map_err(|_| "No secure randomness")?;
     let attempt: String = random.iter().map(|b| format!("{b:02x}")).collect();
-    let directory = std::env::temp_dir().join(format!("luma-update-{attempt}"));
+    let directory = std::env::temp_dir().join(format!("astro-update-{attempt}"));
     fs::DirBuilder::new()
         .mode(0o700)
         .create(&directory)
@@ -320,7 +320,7 @@ fn wait_for_install(attempt: &str) -> Result<(), String> {
         }
         if Instant::now() >= deadline {
             return Err(
-                "The update did not finish in time. Check /var/lib/luma-update before retrying."
+                "The update did not finish in time. Check /var/lib/astro-update before retrying."
                     .into(),
             );
         }
@@ -351,19 +351,19 @@ pub fn newer(current: &str, candidate: &str) -> bool {
     matches!((discovery::version(current), discovery::version(candidate)), (Some(a), Some(b)) if b > a)
 }
 
-/// The Luma package of a Homebrew Channel feed, checked before anything is downloaded.
+/// The Astro package of a Homebrew Channel feed, checked before anything is downloaded.
 pub fn parse_feed(feed: &Value) -> Result<Release, String> {
     let mut packages = feed["packages"]
         .as_array()
         .ok_or("The release feed has no packages")?
         .iter()
-        .filter(|package| package["id"] == "com.ecklf.luma");
+        .filter(|package| package["id"] == "com.danielcanoh22.astro");
     let manifest = packages
         .next()
         .map(|package| &package["manifest"])
-        .ok_or("The release feed has no Luma package")?;
-    if packages.next().is_some() || manifest["id"] != "com.ecklf.luma" {
-        return Err("Ambiguous Luma release metadata".into());
+        .ok_or("The release feed has no Astro package")?;
+    if packages.next().is_some() || manifest["id"] != "com.danielcanoh22.astro" {
+        return Err("Ambiguous Astro release metadata".into());
     }
     let text = |key: &str| manifest[key].as_str().unwrap_or_default().to_owned();
     let release = Release {
@@ -380,7 +380,7 @@ pub fn parse_feed(feed: &Value) -> Result<Release, String> {
     }
     let file = release.url.strip_prefix(RELEASES).unwrap_or_default();
     if !file.ends_with("_arm.ipk") || file.contains(['?', '#', '\\']) || file.contains("..") {
-        return Err("The release feed points outside Luma's releases".into());
+        return Err("The release feed points outside Astro's releases".into());
     }
     if release.sha256.len() != 64 || !release.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("The release feed has no valid checksum".into());
@@ -419,7 +419,7 @@ fn agent() -> ureq::Agent {
 fn check(agent: &ureq::Agent) -> Result<Option<Release>, String> {
     let mut response = agent
         .get(FEED)
-        .header("User-Agent", "LumaNative")
+        .header("User-Agent", "AstroNative")
         .call()
         .map_err(|_| "GitHub is unavailable. Try again shortly.")?;
     let mut bytes = Vec::new();
@@ -446,7 +446,7 @@ fn download(
 ) -> Result<(), String> {
     let mut response = agent
         .get(&release.url)
-        .header("User-Agent", "LumaNative")
+        .header("User-Agent", "AstroNative")
         .call()
         .map_err(|_| "The update could not be downloaded")?;
     let mut reader = response.body_mut().as_reader().take(release.size + 1);
@@ -497,13 +497,13 @@ impl Worker {
         let (requests, incoming) = mpsc::channel::<Request>();
         let (responses, receiver) = mpsc::channel();
         thread::Builder::new()
-            .name("luma-update".into())
+            .name("astro-update".into())
             .spawn(move || {
                 let agent = agent();
                 for request in incoming {
                     let response = match request {
                         Request::Recover if enabled => {
-                            // A package install can close Luma. Surface a persisted failure on
+                            // A package install can close Astro. Surface a persisted failure on
                             // its next launch, or continue watching the still-running attempt.
                             match crate::platform::update_result_for(None) {
                                 Ok(Some(result)) => {
@@ -582,12 +582,12 @@ mod tests {
     use serde_json::json;
 
     fn feed(version: &str, url: &str, sha: &str, size: u64) -> Value {
-        json!({"packages": [{"id": "com.ecklf.luma", "manifest": {
-            "id": "com.ecklf.luma", "version": version, "ipkUrl": url, "ipkHash": {"sha256": sha}, "ipkSize": size
+        json!({"packages": [{"id": "com.danielcanoh22.astro", "manifest": {
+            "id": "com.danielcanoh22.astro", "version": version, "ipkUrl": url, "ipkHash": {"sha256": sha}, "ipkSize": size
         }}]})
     }
 
-    const URL: &str = "https://github.com/danielcanoh22/lg-astro/releases/download/v9.0.0/com.ecklf.luma_9.0.0_arm.ipk";
+    const URL: &str = "https://github.com/danielcanoh22/lg-astro/releases/download/v9.0.0/com.danielcanoh22.astro_9.0.0_arm.ipk";
 
     #[test]
     fn attempt_paths_are_private_unique_and_results_are_terminal_only_when_finished() {
@@ -656,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn only_luma_release_assets_with_a_checksum_are_accepted() {
+    fn only_astro_release_assets_with_a_checksum_are_accepted() {
         let sha = "a".repeat(64);
         let release = parse_feed(&feed("9.0.0", URL, &sha.to_uppercase(), 1000)).unwrap();
         assert_eq!(release.version, "9.0.0");
@@ -664,7 +664,7 @@ mod tests {
         for bad in [
             feed(
                 "9.0.0",
-                "https://example.com/com.ecklf.luma_9.0.0_arm.ipk",
+                "https://example.com/com.danielcanoh22.astro_9.0.0_arm.ipk",
                 &sha,
                 1000,
             ),
@@ -677,14 +677,14 @@ mod tests {
             // Upstream releases must never replace this build.
             feed(
                 "9.0.0",
-                "https://github.com/ecklf/lg-luma/releases/download/v9.0.0/com.ecklf.luma_9.0.0_arm.ipk",
+                "https://github.com/ecklf/lg-luma/releases/download/v9.0.0/com.danielcanoh22.astro_9.0.0_arm.ipk",
                 &sha,
                 1000,
             ),
             // Nor the former fork's, once updates come from lg-astro.
             feed(
                 "9.0.0",
-                "https://github.com/danielcanoh22/lg-luma/releases/download/v9.0.0/com.ecklf.luma_9.0.0_arm.ipk",
+                "https://github.com/danielcanoh22/lg-luma/releases/download/v9.0.0/com.danielcanoh22.astro_9.0.0_arm.ipk",
                 &sha,
                 1000,
             ),

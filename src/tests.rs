@@ -164,12 +164,12 @@ fn the_app_copy_returns_to_its_home_page_with_recents_closed_but_home_keeps_its_
     assert_eq!(home.page, Page::Apps);
 }
 
-fn with_luma_input(state: &mut State) {
+fn with_astro_input(state: &mut State) {
     let mut inventory = state.inventory.clone();
     inventory.inputs.push(Input {
         id: crate::platform::APP_ID.into(),
-        title: "Luma".into(),
-        port: "Luma".into(),
+        title: "Astro".into(),
+        port: "Astro".into(),
         connected: Some(true),
         signal: None,
     });
@@ -177,104 +177,104 @@ fn with_luma_input(state: &mut State) {
 }
 
 #[test]
-fn home_switches_to_lumas_input_once_per_open_and_never_twice_within_the_interval() {
-    use crate::state::{LUMA_INPUT_INTERVAL, LumaInput};
+fn home_switches_to_astros_input_once_per_open_and_never_twice_within_the_interval() {
+    use crate::state::{ASTRO_INPUT_INTERVAL, AstroInput};
     use std::time::{Duration, Instant};
-    let relaunch = Some(Effect::SelectLumaInput {
+    let relaunch = Some(Effect::SelectAstroInput {
         if_home_in_front: false,
     });
     let now = Instant::now();
     let mut state = ready();
-    with_luma_input(&mut state);
+    with_astro_input(&mut state);
     state.home_opened(false);
-    assert_eq!(state.luma_input_due(now), relaunch);
-    assert_eq!(state.luma_input, LumaInput::Idle);
-    assert_eq!(state.luma_input_due(now), None);
+    assert_eq!(state.astro_input_due(now), relaunch);
+    assert_eq!(state.astro_input, AstroInput::Idle);
+    assert_eq!(state.astro_input_due(now), None);
     // A Home key relaunch within the interval does not switch again.
     state.home_opened(false);
-    assert_eq!(state.luma_input_due(now + Duration::from_secs(1)), None);
-    assert_eq!(state.luma_input, LumaInput::Idle);
+    assert_eq!(state.astro_input_due(now + Duration::from_secs(1)), None);
+    assert_eq!(state.astro_input, AstroInput::Idle);
     // Focus coming back (the app copy exited or crashed) never arms it.
     assert!(state.returned_to_foreground(true).is_empty());
-    let later = now + LUMA_INPUT_INTERVAL;
-    assert_eq!(state.luma_input_due(later), None);
+    let later = now + ASTRO_INPUT_INTERVAL;
+    assert_eq!(state.astro_input_due(later), None);
     state.home_opened(false);
-    assert_eq!(state.luma_input_due(later), relaunch);
+    assert_eq!(state.astro_input_due(later), relaunch);
 }
 
 #[test]
 fn a_home_start_switches_only_if_home_is_in_front_and_leaves_the_relaunch_limits_alone() {
-    use crate::state::LumaInput;
+    use crate::state::AstroInput;
     let now = std::time::Instant::now();
-    let start = Some(Effect::SelectLumaInput {
+    let start = Some(Effect::SelectAstroInput {
         if_home_in_front: true,
     });
     let mut state = ready();
-    // A start waits for the first inventory that lists Luma's input.
+    // A start waits for the first inventory that lists Astro's input.
     state.home_opened(true);
-    assert_eq!(state.luma_input_due(now), None);
-    with_luma_input(&mut state);
-    assert_eq!(state.luma_input, LumaInput::Started);
-    assert_eq!(state.luma_input_due(now), start);
-    assert_eq!(state.luma_input_due(now), None);
-    assert_eq!(state.luma_input_switched, None);
-    assert_eq!(state.luma_input_streak, 0);
+    assert_eq!(state.astro_input_due(now), None);
+    with_astro_input(&mut state);
+    assert_eq!(state.astro_input, AstroInput::Started);
+    assert_eq!(state.astro_input_due(now), start);
+    assert_eq!(state.astro_input_due(now), None);
+    assert_eq!(state.astro_input_switched, None);
+    assert_eq!(state.astro_input_streak, 0);
     // The Home key right after a start still switches, without the foreground check.
     state.home_key();
     assert_eq!(
-        state.luma_input_due(now),
-        Some(Effect::SelectLumaInput {
+        state.astro_input_due(now),
+        Some(Effect::SelectAstroInput {
             if_home_in_front: false,
         })
     );
     // Hidden after its inventory but before the switch: a start behind another app stays.
     let mut hidden = ready();
     hidden.home_opened(true);
-    with_luma_input(&mut hidden);
+    with_astro_input(&mut hidden);
     hidden.home_hidden();
-    assert_eq!(hidden.luma_input_due(now), None);
+    assert_eq!(hidden.astro_input_due(now), None);
 }
 
 #[test]
 fn home_stops_after_three_quick_switches_until_the_home_key_and_settles_after_a_pause() {
-    use crate::state::{LUMA_INPUT_INTERVAL, LUMA_INPUT_LIMIT, LUMA_INPUT_SETTLE};
-    let relaunch = Some(Effect::SelectLumaInput {
+    use crate::state::{ASTRO_INPUT_INTERVAL, ASTRO_INPUT_LIMIT, ASTRO_INPUT_SETTLE};
+    let relaunch = Some(Effect::SelectAstroInput {
         if_home_in_front: false,
     });
     let mut now = std::time::Instant::now();
     let mut state = ready();
-    with_luma_input(&mut state);
-    for _ in 0..LUMA_INPUT_LIMIT {
+    with_astro_input(&mut state);
+    for _ in 0..ASTRO_INPUT_LIMIT {
         state.home_opened(false);
-        assert_eq!(state.luma_input_due(now), relaunch);
-        now += LUMA_INPUT_INTERVAL;
+        assert_eq!(state.astro_input_due(now), relaunch);
+        now += ASTRO_INPUT_INTERVAL;
     }
     // The input copy keeps exiting and SAM keeps relaunching Home: stop.
     state.home_opened(false);
-    assert_eq!(state.luma_input_due(now), None);
+    assert_eq!(state.astro_input_due(now), None);
     // The Home key in Home is user input and starts a new streak.
     state.home_key();
-    assert_eq!(state.luma_input_due(now), relaunch);
+    assert_eq!(state.astro_input_due(now), relaunch);
     // After a quiet pause, Home switches again without the key.
-    now += LUMA_INPUT_SETTLE;
+    now += ASTRO_INPUT_SETTLE;
     state.home_opened(false);
-    assert_eq!(state.luma_input_due(now), relaunch);
-    assert_eq!(state.luma_input_streak, 1);
+    assert_eq!(state.astro_input_due(now), relaunch);
+    assert_eq!(state.astro_input_streak, 1);
 }
 
 #[test]
 fn a_home_start_waits_past_a_failed_input_read_and_a_hidden_start_never_switches() {
-    use crate::state::LumaInput;
+    use crate::state::AstroInput;
     let now = std::time::Instant::now();
     let mut state = ready();
     let inventory = state.inventory.clone();
     state.home_opened(true);
     state.set_inventory(inventory, Some("inputs unavailable".into()));
-    assert_eq!(state.luma_input, LumaInput::AfterInventory);
-    with_luma_input(&mut state);
+    assert_eq!(state.astro_input, AstroInput::AfterInventory);
+    with_astro_input(&mut state);
     assert_eq!(
-        state.luma_input_due(now),
-        Some(Effect::SelectLumaInput {
+        state.astro_input_due(now),
+        Some(Effect::SelectAstroInput {
             if_home_in_front: true,
         })
     );
@@ -282,21 +282,21 @@ fn a_home_start_waits_past_a_failed_input_read_and_a_hidden_start_never_switches
     let mut hidden = ready();
     hidden.home_opened(true);
     hidden.home_hidden();
-    with_luma_input(&mut hidden);
-    assert_eq!(hidden.luma_input_due(now), None);
+    with_astro_input(&mut hidden);
+    assert_eq!(hidden.astro_input_due(now), None);
     // Hiding does not cancel a relaunch switch that is already due.
     hidden.home_opened(false);
     hidden.home_hidden();
     assert_eq!(
-        hidden.luma_input_due(now),
-        Some(Effect::SelectLumaInput {
+        hidden.astro_input_due(now),
+        Some(Effect::SelectAstroInput {
             if_home_in_front: false,
         })
     );
 }
 
 #[test]
-fn home_stays_when_lumas_input_is_not_registered() {
+fn home_stays_when_astros_input_is_not_registered() {
     let mut state = ready();
     assert!(
         !state
@@ -306,12 +306,12 @@ fn home_stays_when_lumas_input_is_not_registered() {
             .any(|input| input.id == crate::platform::APP_ID)
     );
     state.home_opened(false);
-    assert_eq!(state.luma_input_due(std::time::Instant::now()), None);
-    assert_eq!(state.luma_input, crate::state::LumaInput::Idle);
+    assert_eq!(state.astro_input_due(std::time::Instant::now()), None);
+    assert_eq!(state.astro_input, crate::state::AstroInput::Idle);
     let inventory = state.inventory.clone();
     state.home_opened(true);
     state.set_inventory(inventory, None);
-    assert_eq!(state.luma_input_due(std::time::Instant::now()), None);
+    assert_eq!(state.astro_input_due(std::time::Instant::now()), None);
 }
 
 #[test]
@@ -326,30 +326,32 @@ fn preload_launch_metadata_is_recognized_and_ordinary_launches_are_not() {
     assert!(preloaded(&json!({"preload": "partial"})));
     assert!(preloaded(&json!({"preload": true})));
     assert!(!preloaded(
-        &json!({"@system_native_app": true, "nid": "com.ecklf.luma"})
+        &json!({"@system_native_app": true, "nid": "com.danielcanoh22.astro"})
     ));
     assert!(!preloaded(&json!({"preload": ""})));
     assert!(!preloaded(&json!({"preload": false})));
 }
 
 #[test]
-fn only_lumas_own_launch_carries_the_home_parameter_and_both_metadata_shapes_are_read() {
+fn only_astros_own_launch_carries_the_home_parameter_and_both_metadata_shapes_are_read() {
     use crate::platform::{LAUNCHED_BY_HOME, launch_payload, launched_by_home};
     assert_eq!(
-        launch_payload("com.ecklf.luma"),
-        json!({"id": "com.ecklf.luma", "params": {LAUNCHED_BY_HOME: true}})
+        launch_payload("com.danielcanoh22.astro"),
+        json!({"id": "com.danielcanoh22.astro", "params": {LAUNCHED_BY_HOME: true}})
     );
     assert_eq!(
         launch_payload("com.webos.app.hdmi3"),
         json!({"id": "com.webos.app.hdmi3"})
     );
     assert!(launched_by_home(
-        &json!({"nid": "com.ecklf.luma", LAUNCHED_BY_HOME: true})
+        &json!({"nid": "com.danielcanoh22.astro", LAUNCHED_BY_HOME: true})
     ));
     assert!(launched_by_home(
         &json!({"params": {LAUNCHED_BY_HOME: true}})
     ));
-    assert!(!launched_by_home(&json!({"nid": "com.ecklf.luma"})));
+    assert!(!launched_by_home(
+        &json!({"nid": "com.danielcanoh22.astro"})
+    ));
     assert!(!launched_by_home(&json!({LAUNCHED_BY_HOME: "true"})));
 }
 
@@ -547,6 +549,7 @@ fn inventory_filters_system_apps_duplicates_and_unsafe_identifiers() {
         {"id":"netflix","title":" Netflix\n"}, {"id":"netflix","title":"Duplicate"},
         {"id":"bad;command","title":"Bad"}, {"id":"com.webos.app.hidden","title":"Internal"},
         {"id":"com.webos.app.livetv","visible":false,"title":"Live TV"},
+        {"id":"com.ecklf.luma","visible":true},
         {"id":"com.luma.launcher.native","visible":true},
         {"id":"com.webos.app.hdmi1","visible":true},
         {"id":"hidden","visible":"false"}
@@ -589,7 +592,7 @@ fn inventory_visibility_cases_match_the_launcher_filters() {
 
 #[test]
 fn asset_loading_and_unknown_app_cards_do_not_require_collected_artwork() {
-    let root = std::env::temp_dir().join(format!("luma-assets-no-dumps-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("astro-assets-no-dumps-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("version.txt"), "test").unwrap();
     std::fs::write(root.join("font-metrics.json"), "{}").unwrap();
@@ -644,8 +647,8 @@ fn auto_input_visibility_requires_a_positive_connection_report() {
 }
 
 #[test]
-fn a_save_by_the_other_luma_copy_is_reloaded_once_and_a_broken_file_keeps_preferences() {
-    let directory = std::env::temp_dir().join(format!("luma-reload-test-{}", std::process::id()));
+fn a_save_by_the_other_astro_copy_is_reloaded_once_and_a_broken_file_keeps_preferences() {
+    let directory = std::env::temp_dir().join(format!("astro-reload-test-{}", std::process::id()));
     let path = directory.join("preferences.json");
     let mut state = ready();
     storage::save(&path, &state.preferences).unwrap();
@@ -675,7 +678,7 @@ fn a_save_by_the_other_luma_copy_is_reloaded_once_and_a_broken_file_keeps_prefer
 
 #[test]
 fn preferences_round_trip_and_corrupt_data_is_not_silently_overwritten() {
-    let directory = std::env::temp_dir().join(format!("luma-native-test-{}", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("astro-native-test-{}", std::process::id()));
     let path = directory.join("preferences.json");
     let mut preferences = Preferences {
         favorites: Some(vec![]),
@@ -1206,7 +1209,7 @@ fn text_rendering_choices_persist_and_back_restores_the_system_row() {
     assert_eq!(state.focus, Target::Choice(0));
     assert!(scene(&state).draw.iter().any(|draw| matches!(
         draw,
-        crate::renderer::Draw::Text(label, ..) if label == "Restart Luma to apply changes."
+        crate::renderer::Draw::Text(label, ..) if label == "Restart Astro to apply changes."
     )));
     state.direction(Direction::Down, &controls(&state));
     assert_eq!(state.focus, Target::Choice(1));
@@ -1486,6 +1489,7 @@ fn protected_apps_cannot_be_deleted_through_ui_or_worker() {
         "com.palm.app.input",
         "com.lge.app.store",
         "com.lge.service.example",
+        "com.ecklf.luma",
         "com.luma.launcher",
         "com.luma.native",
         "com.luma.launcher.native",
@@ -3450,18 +3454,18 @@ fn update_card_shows_progress_restores_retry_and_ignores_presses_while_busy() {
 }
 
 #[test]
-fn lumas_registered_input_is_listed_once_after_the_hdmi_ports() {
+fn astros_registered_input_is_listed_once_after_the_hdmi_ports() {
     let inputs = normalize_inputs(&json!([
-        {"appId":"com.ecklf.luma", "id":"MVPD_IP-com.ecklf.luma", "label":"Luma", "port":1},
-        {"appId":"com.ecklf.luma", "id":"MVPD_IP-com.ecklf.luma", "label":"Luma"},
-        {"appId":"com.ecklf.luma", "id":"LUMA", "label":"Luma"},
+        {"appId":"com.danielcanoh22.astro", "id":"MVPD_IP-com.danielcanoh22.astro", "label":"Astro", "port":1},
+        {"appId":"com.danielcanoh22.astro", "id":"MVPD_IP-com.danielcanoh22.astro", "label":"Astro"},
+        {"appId":"com.danielcanoh22.astro", "id":"ASTRO", "label":"Astro"},
         {"appId":"com.webos.app.hdmi1", "id":"HDMI_1", "port":1}
     ]))
     .unwrap();
     let ids: Vec<_> = inputs.iter().map(|input| input.id.as_str()).collect();
-    assert_eq!(ids, ["com.ecklf.luma", "com.webos.app.hdmi1"]);
-    assert_eq!(inputs[0].title, "Luma");
-    assert_eq!(inputs[0].port, "Luma");
+    assert_eq!(ids, ["com.danielcanoh22.astro", "com.webos.app.hdmi1"]);
+    assert_eq!(inputs[0].title, "Astro");
+    assert_eq!(inputs[0].port, "Astro");
     assert_eq!(inputs[0].connected, Some(true));
     assert_eq!(inputs[0].signal, None);
     // Without a registration the row only has the HDMI ports.

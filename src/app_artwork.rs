@@ -375,7 +375,7 @@ fn load(source: &Source) -> Option<Artwork> {
     match crate::platform::read_app_icons(source) {
         Ok(icons) => icons.iter().find_map(|bytes| decode(bytes)),
         Err(error) => {
-            eprintln!("Luma installed icon {}: {error}", source.id);
+            eprintln!("Astro installed icon {}: {error}", source.id);
             None
         }
     }

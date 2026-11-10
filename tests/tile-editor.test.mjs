@@ -51,7 +51,7 @@ test('changes are posted as JSON with the session token and report the TV’s er
       assert.equal(options.method, 'POST');
       assert.deepEqual(options.headers, {
         'Content-Type': 'application/json',
-        'X-Luma-Token': 'AbCd1234',
+        'X-Astro-Token': 'AbCd1234',
       });
       assert.deepEqual(JSON.parse(options.body), { title: 'Gate' });
       return { ok: true, json: async () => listing };

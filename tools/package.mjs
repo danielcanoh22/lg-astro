@@ -11,15 +11,15 @@ const manifest = JSON.parse(await fs.readFile(path.join(root, 'appinfo.json'), '
 const project = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
 if (
   project.version !== manifest.version ||
-  manifest.id !== 'com.ecklf.luma' ||
+  manifest.id !== 'com.danielcanoh22.astro' ||
   manifest.type !== 'native' ||
-  manifest.main !== 'luma'
+  manifest.main !== 'astro'
 ) {
   throw new Error(
-    'Native package metadata must use com.ecklf.luma, main luma, and synchronized versions.',
+    'Native package metadata must use com.danielcanoh22.astro, main astro, and synchronized versions.',
   );
 }
-const binary = path.join(root, 'target/armv7-unknown-linux-gnueabi/release/luma');
+const binary = path.join(root, 'target/armv7-unknown-linux-gnueabi/release/astro');
 const bytes = await fs.readFile(binary);
 if (
   bytes.length < 52 ||
@@ -59,7 +59,7 @@ for (const file of vectorManifest.assets) {
   const mesh = await fs.readFile(path.join(out, 'assets', file));
   if (
     mesh.length < 20 ||
-    mesh.subarray(0, 8).toString() !== 'LUMAVEC1' ||
+    mesh.subarray(0, 8).toString() !== 'ASTRVEC1' ||
     mesh.readUInt32LE(16) === 0 ||
     mesh.readUInt32LE(16) % 3 !== 0 ||
     mesh.length !== 20 + mesh.readUInt32LE(16) * 36
@@ -96,11 +96,11 @@ for (const file of await fs.readdir(path.join(out, 'assets/splash')))
   await fs.copyFile(path.join(out, 'assets/splash', file), path.join(stage, 'splash', file));
 await fs.copyFile(path.join(out, 'assets/splash/dunes.png'), path.join(stage, 'splash.png'));
 await fs.chmod(path.join(stage, 'autostart.sh'), 0o755);
-for (const file of ['home.sh', 'luma-helper']) {
+for (const file of ['home.sh', 'astro-helper']) {
   await fs.copyFile(
     path.join(
       root,
-      file === 'luma-helper' ? 'target/armv7-unknown-linux-gnueabi/release' : 'tv',
+      file === 'astro-helper' ? 'target/armv7-unknown-linux-gnueabi/release' : 'tv',
       file,
     ),
     path.join(stage, file),

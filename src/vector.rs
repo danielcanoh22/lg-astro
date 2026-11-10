@@ -14,7 +14,7 @@ impl Mesh {
     pub fn load(path: &Path) -> Result<Self, String> {
         let bytes =
             fs::read(path).map_err(|e| format!("Vector artwork {}: {e}", path.display()))?;
-        if bytes.len() < 20 || &bytes[..8] != b"LUMAVEC1" {
+        if bytes.len() < 20 || &bytes[..8] != b"ASTRVEC1" {
             return Err(format!("Invalid vector artwork header: {}", path.display()));
         }
         let float = |offset| f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());

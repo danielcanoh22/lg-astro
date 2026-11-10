@@ -28,12 +28,12 @@ pub fn configure(system: &impl System, command: &str, directory: &Path) -> Resul
         "enable" => {
             let app = system::json(system, directory.join("appinfo.json"))?;
             if app["id"] != APP || app["supportGIP"] != true {
-                return Err("Install the Luma package with supportGIP first".into());
+                return Err("Install the Astro package with supportGIP first".into());
             }
             if listed(system)? {
                 return Ok(json!({"returnValue":true,"registered":true}));
             }
-            let result=eim(system,"addDevice",json!({"appId":APP,"pigImage":"","mvpdIcon":"","label":"Luma","description":"Luma Home"})).and_then(|_|if listed(system)?{Ok(())}else{Err("This firmware did not list Luma as an input".into())});
+            let result=eim(system,"addDevice",json!({"appId":APP,"pigImage":"","mvpdIcon":"","label":"Astro","description":"Astro Home"})).and_then(|_|if listed(system)?{Ok(())}else{Err("This firmware did not list Astro as an input".into())});
             if let Err(error) = result {
                 return match eim(system, "deleteDevice", json!({"appId":APP})) {
                     Ok(_) => Err(format!("{error}; registration removed")),
@@ -46,7 +46,7 @@ pub fn configure(system: &impl System, command: &str, directory: &Path) -> Resul
         "disable" => {
             eim(system, "deleteDevice", json!({"appId":APP}))?;
             if listed(system)? {
-                return Err("Luma is still registered as an input".into());
+                return Err("Astro is still registered as an input".into());
             }
         }
         _ => return Err("Unknown TV-input command".into()),

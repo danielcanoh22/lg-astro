@@ -1,4 +1,4 @@
-// Inspect the actual IPK, and normalize only Luma-owned entries. The webOS CLI
+// Inspect the actual IPK, and normalize only Astro-owned entries. The webOS CLI
 // emits world-writable directories; boot scripts need app-owned 0755 parents.
 import { gunzipSync, gzipSync } from 'node:zlib';
 
@@ -53,7 +53,7 @@ export function normalizeAndVerifyPackage(bytes, manifest) {
   const tar = gunzipSync(member.data);
   const files = entries(tar);
   const owned = files.filter((file) => file.name.split('/').includes(manifest.id));
-  if (!owned.length) throw new Error('The IPK contains no Luma app directory.');
+  if (!owned.length) throw new Error('The IPK contains no Astro app directory.');
   if (
     owned.some((file) => /\/assets\/(app-icons(?:\/|$)|icons\.json$|colors\.json$)/.test(file.name))
   )
@@ -85,7 +85,7 @@ export function normalizeAndVerifyPackage(bytes, manifest) {
     manifest.largeIcon,
     'autostart.sh',
     'home.sh',
-    'luma-helper',
+    'astro-helper',
     'splash.png',
     'lib/libSDL2-2.0.so.0',
     'licenses/sdl2.txt',
@@ -126,7 +126,7 @@ export function normalizeAndVerifyPackage(bytes, manifest) {
     if (!owned.some((file) => file.name.endsWith(`/${required}`) && file.data.length > 0))
       throw new Error(`Package is missing ${required}.`);
   }
-  for (const name of [manifest.main, 'luma-helper']) {
+  for (const name of [manifest.main, 'astro-helper']) {
     const executable = owned.find((file) => file.name.endsWith(`/${name}`))?.data;
     if (
       !executable ||
@@ -155,7 +155,7 @@ export function normalizeAndVerifyPackage(bytes, manifest) {
   for (const file of vectorFiles) {
     if (
       file.data.length < 20 ||
-      file.data.subarray(0, 8).toString() !== 'LUMAVEC1' ||
+      file.data.subarray(0, 8).toString() !== 'ASTRVEC1' ||
       file.data.readUInt32LE(16) === 0 ||
       file.data.readUInt32LE(16) % 3 !== 0 ||
       file.data.length !== 20 + file.data.readUInt32LE(16) * 36
@@ -169,7 +169,7 @@ export function normalizeAndVerifyPackage(bytes, manifest) {
       file.type === '5' ||
       file.name.endsWith('/autostart.sh') ||
       file.name.endsWith('/home.sh') ||
-      file.name.endsWith('/luma-helper') ||
+      file.name.endsWith('/astro-helper') ||
       file.name.endsWith(`/${manifest.main}`);
     file.header.write(executable ? '0000755\0' : '0000644\0', 100, 8, 'ascii');
     file.header.fill(32, 148, 156);
@@ -184,7 +184,7 @@ export function normalizeAndVerifyPackage(bytes, manifest) {
     if (entry.data.length % 2) parts.push(Buffer.from('\n'));
   }
   console.log(
-    `Verified IPK contents: ${owned.length} Luma entries; app metadata, assets and modes checked.`,
+    `Verified IPK contents: ${owned.length} Astro entries; app metadata, assets and modes checked.`,
   );
   return Buffer.concat(parts);
 }

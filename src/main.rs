@@ -63,7 +63,7 @@ use time::OffsetDateTime;
 #[derive(Default)]
 struct Options {
     webos_home: bool,
-    /// Opened by Home for Luma's TV input: run instead of redirecting to Home.
+    /// Opened by Home for Astro's TV input: run instead of redirecting to Home.
     launched_by_home: bool,
     /// Started by sam in the background (`preload`): stay off screen until a relaunch.
     preloaded: bool,
@@ -89,7 +89,7 @@ impl Options {
         let mut result = Self::default();
         let mut args = std::env::args().skip(1).peekable();
         // SAM/jailer puts native launch metadata (e.g. @system_native_app and
-        // nid) in argv[1]. It is not a Luma CLI option. Keep the original argv
+        // nid) in argv[1]. It is not an Astro CLI option. Keep the original argv
         // intact for SDL/libhelpers, which also read the process launch data.
         if cfg!(feature = "webos")
             && args.peek().is_some_and(|argument| {
@@ -100,7 +100,7 @@ impl Options {
             if let Some(argument) = args.next() {
                 let metadata: serde_json::Value =
                     serde_json::from_str(&argument).map_err(|error| error.to_string())?;
-                // Luma's own Home manifest passes "nid"; LG's Home manifest (Luma run in
+                // Astro's own Home manifest passes "nid"; LG's Home manifest (Astro run in
                 // place of LG's Home executable) passes "appId" with lifecycle v2.
                 result.webos_home = metadata
                     .get("nid")
@@ -114,18 +114,18 @@ impl Options {
                 result.launched_by_home = platform::launched_by_home(&metadata);
                 result.preloaded = platform::preloaded(&metadata);
             }
-            eprintln!("Luma webOS launch parameters accepted");
+            eprintln!("Astro webOS launch parameters accepted");
         }
         while let Some(arg) = args.next() {
             if arg == "--help" {
                 println!(
-                    "Luma native\n\n  --assets PATH       Generated artwork directory\n  --preferences PATH  Isolated preferences file\n  --fullscreen        Fullscreen desktop preview\n  --resolution SIZE   Request 1080p, 4k, or WIDTHxHEIGHT; verify actual drawable\n  --frames N          Exit after N event-loop frames\n  --profile-frames N  Force N presentations (20+) and report pacing after warmup\n  --script ACTIONS    Comma-separated home/apps/settings/up/down/left/right/enter/back/menu/hold/type:TEXT/click:X:Y/wait\n  --time RFC3339      Fix the preview's clock and date\n  --screenshot PATH   Save an offscreen PNG\n  --capture-scale N   Capture at 1x/1080p (default) or 2x/4k\n  --diagnostics PATH  Save actual drawable, GPU, font-cache and timing information\n  --dump-state PATH   Save final UI state as JSON\n\nCompile with --features webos for the TV backend. Desktop builds never call TV services."
+                    "Astro native\n\n  --assets PATH       Generated artwork directory\n  --preferences PATH  Isolated preferences file\n  --fullscreen        Fullscreen desktop preview\n  --resolution SIZE   Request 1080p, 4k, or WIDTHxHEIGHT; verify actual drawable\n  --frames N          Exit after N event-loop frames\n  --profile-frames N  Force N presentations (20+) and report pacing after warmup\n  --script ACTIONS    Comma-separated home/apps/settings/up/down/left/right/enter/back/menu/hold/type:TEXT/click:X:Y/wait\n  --time RFC3339      Fix the preview's clock and date\n  --screenshot PATH   Save an offscreen PNG\n  --capture-scale N   Capture at 1x/1080p (default) or 2x/4k\n  --diagnostics PATH  Save actual drawable, GPU, font-cache and timing information\n  --dump-state PATH   Save final UI state as JSON\n\nCompile with --features webos for the TV backend. Desktop builds never call TV services."
                 );
                 println!(
                     "\n  --test-extra-apps N  Explicit scroll preview with up to 300 non-launchable extra cards; separate preferences"
                 );
                 println!(
-                    "  --test-update-version VERSION  Preview an available update without HTTP; also LUMA_TEST_UPDATE_VERSION"
+                    "  --test-update-version VERSION  Preview an available update without HTTP; also ASTRO_TEST_UPDATE_VERSION"
                 );
                 println!(
                     "\n  Press Back / Escape on Home, or hold for 600 ms, to open Recent apps.\n  --script recents,await-recents  Open the desktop recent-app preview."
@@ -194,7 +194,7 @@ impl Options {
             }
         }
         if result.test_update_version.is_none() {
-            result.test_update_version = std::env::var("LUMA_TEST_UPDATE_VERSION").ok();
+            result.test_update_version = std::env::var("ASTRO_TEST_UPDATE_VERSION").ok();
         }
         if let Some(version) = &result.test_update_version {
             update::validate_preview(version, env!("CARGO_PKG_VERSION"))?;
@@ -388,8 +388,8 @@ fn effects(
             }
             Effect::Weather(command) => weather.send(command),
             Effect::TvInput(request) => platform.send(Request::TvInput(request)),
-            Effect::SelectLumaInput { if_home_in_front } => {
-                platform.send(Request::SelectLumaInput { if_home_in_front })
+            Effect::SelectAstroInput { if_home_in_front } => {
+                platform.send(Request::SelectAstroInput { if_home_in_front })
             }
         }
     }
@@ -458,7 +458,7 @@ fn script(
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Luma native: {error}");
+        eprintln!("Astro native: {error}");
         std::process::exit(1);
     }
 }
@@ -581,7 +581,7 @@ fn log_home_output() {
         .create(true)
         .write(true)
         .truncate(true)
-        .open("/tmp/luma-home.log")
+        .open("/tmp/astro-home.log")
     {
         unsafe { libc::dup2(file.into_raw_fd(), 2) };
     }
@@ -618,7 +618,7 @@ fn run() -> Result<(), String> {
     let startup_stage = |stage: &str| {
         if webos {
             eprintln!(
-                "Luma startup: {stage} after {} ms",
+                "Astro startup: {stage} after {} ms",
                 startup.elapsed().as_millis()
             );
         }
@@ -630,7 +630,7 @@ fn run() -> Result<(), String> {
         if !options.webos_home && !options.launched_by_home && platform::redirect_to_home()? {
             return Ok(());
         }
-        // Before any window or GL work, so failures there count too: a Luma that keeps failing
+        // Before any window or GL work, so failures there count too: an Astro that keeps failing
         // as Home gives LG Home back until reboot instead of leaving the TV without one.
         if options.webos_home && platform::home_fallback_due() {
             return Ok(());
@@ -647,10 +647,10 @@ fn run() -> Result<(), String> {
             std::env::set_var("APPID", surface_id);
             std::env::set_var("SDL_VIDEO_WAYLAND_WMCLASS", surface_id);
         }
-        eprintln!("Luma webOS surface: {surface_id}");
+        eprintln!("Astro webOS surface: {surface_id}");
         sdl2::hint::set("SDL_WEBOS_ACCESS_POLICY_KEYS_BACK", "true");
         // Magic Remotes send the separate Exit key for a long Back press.
-        // Claim it before video init so the compositor does not close Luma.
+        // Claim it before video init so the compositor does not close Astro.
         sdl2::hint::set("SDL_WEBOS_ACCESS_POLICY_KEYS_EXIT", "true");
         // SAM may not relaunch Home when its surface is already foreground. Handle the
         // physical key ourselves only as Home; normal tile launches keep LG's routing.
@@ -659,10 +659,10 @@ fn run() -> Result<(), String> {
         }
         // SDL-webOS answers tvpower's screen saver requests with `ack: !suspend_screensaver`, and
         // SDL suspends the screen saver unless this hint allows it: LG's screen saver never
-        // started while Luma was in front. A launcher has no video to protect.
+        // started while Astro was in front. A launcher has no video to protect.
         sdl2::hint::set("SDL_VIDEO_ALLOW_SCREENSAVER", "1");
         // In place of LG's Home executable, SDL's own registration cannot reach the bus under
-        // LG's Home role; Luma registers with sam itself below (lifecycle v2).
+        // LG's Home role; Astro registers with sam itself below (lifecycle v2).
         if platform::runs_as_lg_home() {
             sdl2::hint::set("SDL_WEBOS_REGISTER_APP", "0");
         }
@@ -710,7 +710,7 @@ fn run() -> Result<(), String> {
     }
     if let Some(version) = &options.test_update_version {
         eprintln!(
-            "Luma update preview: simulated version {version}; public release check disabled"
+            "Astro update preview: simulated version {version}; public release check disabled"
         );
         state.available_update = (version != env!("CARGO_PKG_VERSION")).then(|| version.clone());
         state.update_status = update::Status::Checked;
@@ -723,7 +723,7 @@ fn run() -> Result<(), String> {
     let mut tile_editor_service = tile_editor::Service::new(!webos && !options.script.is_empty())?;
     if options.test_extra_apps > 0 {
         eprintln!(
-            "Luma scroll preview: explicit {}-app expansion; preferences {}",
+            "Astro scroll preview: explicit {}-app expansion; preferences {}",
             options.test_extra_apps,
             preferences_path.display()
         );
@@ -773,7 +773,7 @@ fn run() -> Result<(), String> {
             std::env::var_os("WAYLAND_DISPLAY"),
         )
     })?;
-    eprintln!("Luma SDL video driver: {}", video.current_video_driver());
+    eprintln!("Astro SDL video driver: {}", video.current_video_driver());
     startup_stage("SDL video");
     let attributes = video.gl_attr();
     if webos {
@@ -793,7 +793,7 @@ fn run() -> Result<(), String> {
         Size::new(1280, 720)
     });
     let create_window = || {
-        let mut builder = video.window("Luma", requested.width, requested.height);
+        let mut builder = video.window("Astro", requested.width, requested.height);
         builder.opengl().allow_highdpi().position_centered();
         if options.fullscreen || (webos && options.resolution.is_none()) {
             builder.fullscreen_desktop();
@@ -811,11 +811,11 @@ fn run() -> Result<(), String> {
     // MSAA is the default on TV and desktop. The System setting is applied only at launch.
     let text_config = text_rendering::Configuration::new(
         state.preferences.text_rendering,
-        std::env::var("LUMA_MSAA").ok().as_deref(),
-        std::env::var("LUMA_EMBOLDEN").ok().as_deref(),
+        std::env::var("ASTRO_MSAA").ok().as_deref(),
+        std::env::var("ASTRO_EMBOLDEN").ok().as_deref(),
     );
     eprintln!(
-        "Luma text rendering: {:?}, embolden {} px",
+        "Astro text rendering: {:?}, embolden {} px",
         text_config.mode, text_config.embolden
     );
     for &samples in text_config.sample_counts {
@@ -836,7 +836,7 @@ fn run() -> Result<(), String> {
     }
     let mut samples = 0;
     unsafe { gl::GetIntegerv(gl::SAMPLES, &mut samples) };
-    eprintln!("Luma GL multisampling: {samples} samples");
+    eprintln!("Astro GL multisampling: {samples} samples");
     startup_stage("window and GL context");
     if let Err(error) = video.gl_set_swap_interval(1) {
         eprintln!("VSync: {error}");
@@ -844,12 +844,12 @@ fn run() -> Result<(), String> {
     let mut renderer =
         renderer::Renderer::new(&assets.root.join("font.ttf"), webos, text_config.embolden)?;
     startup_stage("renderer");
-    // Redraw only what changed since the back buffer's frame (LUMA_PARTIAL=0 draws in full).
-    let partial = (std::env::var("LUMA_PARTIAL").as_deref() != Ok("0"))
+    // Redraw only what changed since the back buffer's frame (ASTRO_PARTIAL=0 draws in full).
+    let partial = (std::env::var("ASTRO_PARTIAL").as_deref() != Ok("0"))
         .then(egl_damage::PartialUpdate::load)
         .flatten();
     eprintln!(
-        "Luma partial redraw: {}",
+        "Astro partial redraw: {}",
         partial
             .as_ref()
             .map_or("off", egl_damage::PartialUpdate::describe)
@@ -859,7 +859,7 @@ fn run() -> Result<(), String> {
     let mut prewarm: Vec<state::Page> = Vec::new();
     let mut prewarm_now = false;
     let mut last_present = Instant::now();
-    let verify_damage = std::env::var("LUMA_DAMAGE_VERIFY").as_deref() == Ok("1");
+    let verify_damage = std::env::var("ASTRO_DAMAGE_VERIFY").as_deref() == Ok("1");
     // Partial frames: verified, mismatched, worst pixels, largest difference; full frames alike.
     let mut damage_report = (0usize, 0usize, 0usize, 0u8);
     let mut full_report = (0usize, 0usize, 0usize, 0u8);
@@ -869,8 +869,8 @@ fn run() -> Result<(), String> {
     let mut captured = None;
     let mut last_drawable = None;
     let mut events = sdl.event_pump()?;
-    // Lifecycle as Home: sam sends "relaunch" (bring the running Luma to the front) instead of
-    // killing and restarting it, and "close" when it wants Luma to exit. `end_registration`
+    // Lifecycle as Home: sam sends "relaunch" (bring the running Astro to the front) instead of
+    // killing and restarting it, and "close" when it wants Astro to exit. `end_registration`
     // drops a staged Home's registration (webOS 10/11) if a relaunch did not reach the front.
     type EndRegistration = Box<dyn Fn()>;
     #[cfg(not(all(feature = "webos", target_os = "linux", target_arch = "arm")))]
@@ -901,7 +901,7 @@ fn run() -> Result<(), String> {
             let as_root = unsafe { libc::geteuid() } == 0;
             if platform::runs_as_lg_home() {
                 // In place of LG's Home executable (webOS 5/6), LG's role is bound to that path,
-                // so Luma registers through lifecycle v2 on its own connection.
+                // so Astro registers through lifecycle v2 on its own connection.
                 let push = pusher(subsystem.event_sender());
                 luna::subscribe(
                     Some(platform::home_id()),
@@ -910,7 +910,7 @@ fn run() -> Result<(), String> {
                     // sam answers "registered" at once; without it sam would end Home later.
                     Duration::from_secs(10),
                     move |message| {
-                        eprintln!("Luma lifecycle: {message}");
+                        eprintln!("Astro lifecycle: {message}");
                         let refused = message
                             .get("returnValue")
                             .and_then(serde_json::Value::as_bool)
@@ -929,13 +929,13 @@ fn run() -> Result<(), String> {
                 (None, None)
             } else if std::path::Path::new(platform::HOME_LIFECYCLE_OFF).exists() {
                 eprintln!(
-                    "Luma lifecycle: {} exists; Home stays unregistered",
+                    "Astro lifecycle: {} exists; Home stays unregistered",
                     platform::HOME_LIFECYCLE_OFF
                 );
                 (None, None)
             } else {
-                // A staged Home manifest (webOS 10/11) runs Luma's own executable as root under
-                // LG's app-ID based Home role, which Luma's connection cannot claim. Hold the
+                // A staged Home manifest (webOS 10/11) runs Astro's own executable as root under
+                // LG's app-ID based Home role, which Astro's connection cannot claim. Hold the
                 // registration as that app through `luna-send -a`; sam then expects lifecycle v1.
                 // This does not wait for sam: until it answers, Home is simply unregistered.
                 let push = pusher(subsystem.event_sender());
@@ -946,7 +946,7 @@ fn run() -> Result<(), String> {
                     &serde_json::json!({}),
                     Duration::from_secs(10),
                     move |message| {
-                        eprintln!("Luma lifecycle: {message}");
+                        eprintln!("Astro lifecycle: {message}");
                         if let Some(lifecycle) = platform::Lifecycle::from_reply(&message) {
                             push(lifecycle);
                         }
@@ -964,7 +964,7 @@ fn run() -> Result<(), String> {
                         Some(Box::new(move || subscription.end()) as EndRegistration),
                     ),
                     Err(error) => {
-                        eprintln!("Luma lifecycle: {error}; Home stays unregistered");
+                        eprintln!("Astro lifecycle: {error}; Home stays unregistered");
                         (None, None)
                     }
                 }
@@ -980,7 +980,7 @@ fn run() -> Result<(), String> {
     let mut preloaded =
         webos && options.webos_home && options.preloaded && lifecycle_event.is_some();
     if preloaded {
-        eprintln!("Luma Home: preloaded; staying off screen until a relaunch");
+        eprintln!("Astro Home: preloaded; staying off screen until a relaunch");
     }
     let mut focused = !preloaded;
     let mut press: Option<Press> = None;
@@ -1031,7 +1031,7 @@ fn run() -> Result<(), String> {
         state.tick();
         if webos
             && options.webos_home
-            && let Some(effect) = state.luma_input_due(Instant::now())
+            && let Some(effect) = state.astro_input_due(Instant::now())
         {
             running &= effects(
                 vec![effect],
@@ -1069,7 +1069,7 @@ fn run() -> Result<(), String> {
                         && matches!(state.overlay, Some(Overlay::WallpaperUpload)) =>
                 {
                     if let Err(error) = &result {
-                        eprintln!("Luma wallpaper upload: {error}");
+                        eprintln!("Astro wallpaper upload: {error}");
                     }
                     state.wallpaper_upload = Some(result);
                     state.dirty = true;
@@ -1110,7 +1110,7 @@ fn run() -> Result<(), String> {
                         && matches!(state.overlay, Some(Overlay::TileEditor)) =>
                 {
                     if let Err(error) = &result {
-                        eprintln!("Luma tile editor: {error}");
+                        eprintln!("Astro tile editor: {error}");
                     }
                     state.tile_editor = Some(result);
                     state.dirty = true;
@@ -1196,7 +1196,7 @@ fn run() -> Result<(), String> {
                 Response::Inventory(Err(error)) => {
                     if let Some(delay) = state.inventory_failed(error) {
                         eprintln!(
-                            "Luma TV inventory: retry {} in {} s",
+                            "Astro TV inventory: retry {} in {} s",
                             state.inventory_failures,
                             delay.as_secs()
                         );
@@ -1208,7 +1208,7 @@ fn run() -> Result<(), String> {
                 }
                 Response::Inputs(result) => {
                     if let Err(error) = input_refresh.completed(Instant::now(), result) {
-                        eprintln!("Luma HDMI refresh: {error}");
+                        eprintln!("Astro HDMI refresh: {error}");
                     }
                 }
                 Response::Launched(result) => {
@@ -1224,9 +1224,9 @@ fn run() -> Result<(), String> {
                         }
                     }
                 }
-                Response::LumaInputSelected(result) => {
+                Response::AstroInputSelected(result) => {
                     if let Err(error) = result {
-                        eprintln!("Luma TV input: {error}");
+                        eprintln!("Astro TV input: {error}");
                     }
                 }
                 Response::TvInput { request, result } => {
@@ -1288,7 +1288,7 @@ fn run() -> Result<(), String> {
             let key = match result {
                 Ok(()) => "tileSent",
                 Err(error) => {
-                    eprintln!("Luma webhook {title}: {error}");
+                    eprintln!("Astro webhook {title}: {error}");
                     "tileFailed"
                 }
             };
@@ -1343,7 +1343,7 @@ fn run() -> Result<(), String> {
                 focused = true;
                 foreground.confirmed();
             }
-            // As Home, these go to /tmp/luma-home.log and show whether a relaunch reached the
+            // As Home, these go to /tmp/astro-home.log and show whether a relaunch reached the
             // compositor.
             if options.webos_home
                 && let Event::Window { win_event, .. } = &event
@@ -1357,7 +1357,7 @@ fn run() -> Result<(), String> {
                         | WindowEvent::FocusLost
                 )
             {
-                eprintln!("Luma window: {win_event:?}");
+                eprintln!("Astro window: {win_event:?}");
             }
             let mut pending = vec![];
             match event {
@@ -1484,7 +1484,7 @@ fn run() -> Result<(), String> {
                             && i32::from(key) == sdl_events::WEBOS_HOME_KEYCODE =>
                         {
                             if !repeat {
-                                eprintln!("Luma Home key: returning to Home tab");
+                                eprintln!("Astro Home key: returning to Home tab");
                                 press = None;
                                 back_button.cancel();
                                 pending = state.return_home();
@@ -1868,7 +1868,7 @@ fn run() -> Result<(), String> {
                         &mut full_report
                     };
                     let save = (damage.is_some() && report.1 == 0)
-                        .then(|| std::path::Path::new("/tmp/luma-damage-check"));
+                        .then(|| std::path::Path::new("/tmp/astro-damage-check"));
                     let (differing, largest) =
                         renderer.verify_window(&scene.draw, width, height, save);
                     report.0 += 1;
@@ -1876,7 +1876,7 @@ fn run() -> Result<(), String> {
                         report.1 += 1;
                         if damage.is_some() {
                             eprintln!(
-                                "Luma damage check: frame {presented}: {differing} pixels differ (max {largest})"
+                                "Astro damage check: frame {presented}: {differing} pixels differ (max {largest})"
                             );
                         }
                     }
@@ -1894,7 +1894,7 @@ fn run() -> Result<(), String> {
                     if webos {
                         let stats = renderer.stats();
                         eprintln!(
-                            "Luma vector text: {} glyphs, {} text runs, {} KiB glyph geometry, {} KiB GPU text",
+                            "Astro vector text: {} glyphs, {} text runs, {} KiB glyph geometry, {} KiB GPU text",
                             stats.cached_glyphs,
                             stats.cached_text_runs,
                             stats.glyph_geometry_bytes / 1024,
@@ -1925,7 +1925,7 @@ fn run() -> Result<(), String> {
                 if last_drawable != Some(drawable) {
                     if options.diagnostics.is_some() || options.resolution.is_some() {
                         eprintln!(
-                            "Luma drawable: {}x{}, density {:.3}x, 4K buffer: {}",
+                            "Astro drawable: {}x{}, density {:.3}x, 4K buffer: {}",
                             width,
                             height,
                             drawable.scale(),
@@ -1949,13 +1949,13 @@ fn run() -> Result<(), String> {
             && let Some(end_registration) = &end_registration
         {
             // Fall back to the restart sam does for an unregistered Home: remember that and
-            // end the registration, which quits Luma so sam starts it afresh.
+            // end the registration, which quits Astro so sam starts it afresh.
             eprintln!(
-                "Luma lifecycle: a relaunch did not bring Luma to the front; creating {}",
+                "Astro lifecycle: a relaunch did not bring Astro to the front; creating {}",
                 platform::HOME_LIFECYCLE_OFF
             );
             if let Err(error) = std::fs::write(platform::HOME_LIFECYCLE_OFF, b"") {
-                eprintln!("Luma lifecycle: {error}");
+                eprintln!("Astro lifecycle: {error}");
             }
             end_registration();
         }
@@ -1974,7 +1974,7 @@ fn run() -> Result<(), String> {
                 renderer.prepare(&hidden.draw, width, height);
                 if webos {
                     eprintln!(
-                        "Luma prewarm: {page:?} in {} ms",
+                        "Astro prewarm: {page:?} in {} ms",
                         started.elapsed().as_millis()
                     );
                 }

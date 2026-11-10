@@ -64,7 +64,7 @@ jobs:
                 '',
                 '## Solution',
                 '',
-                `Release Luma **${version}** with the accumulated Changesets changelog.`,
+                `Release Astro **${version}** with the accumulated Changesets changelog.`,
                 '',
                 'Synchronize package.json, appinfo.json, the root Cargo.toml, Cargo.lock and the README IPK examples.',
                 'Merging this PR into main publishes the verified IPK and Homebrew feed after CI passes.',
@@ -86,7 +86,7 @@ jobs:
               workflow_id: 'ci.yml',
               ref: pull.head.ref,
             });
-            await core.summary.addHeading(`Luma ${version}: Version Packages`)
+            await core.summary.addHeading(`Astro ${version}: Version Packages`)
               .addLink(`Review PR #${pull_number}`, pull.html_url)
               .addRaw('\n\nVersion-branch validation dispatched. This does not publish. Merge the PR to start release eligibility, parallel validation/package jobs, and guarded publication on main.\n')
               .addLink('Follow CI rollout', `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/workflows/ci.yml`)

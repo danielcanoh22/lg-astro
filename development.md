@@ -1,4 +1,4 @@
-# Luma development
+# Astro development
 
 ## Layout
 
@@ -11,14 +11,14 @@ tools/vector-assets/         Host-only SVG compiler
 tools/                       Asset preparation, SDK/runtime setup, packaging and release feed
 tests/                       Desktop rendering and mocked HTTP smoke scripts
 tv/autostart.sh              Optional cold-boot launch hook
-tv/home.sh / luma-helper         Optional root-only native Home integration
+tv/home.sh / astro-helper         Optional root-only native Home integration
 dist/                        Generated ARM IPK, checksum and Homebrew feed
 .build/                      Generated assets, SDK/runtime caches and rendering diagnostics
 ```
 
 The launcher is rendered natively, without React, JSX, Vite or a browser runtime. Node/pnpm
 remain build/deployment tools for Sharp, the webOS CLI and formatting/linting. The installed app
-is the Rust executable `luma`, with app ID `com.ecklf.luma`. The companion pages in
+is the Rust executable `astro`, with app ID `com.danielcanoh22.astro`. The companion pages in
 `assets/wallpaper-upload/` and `assets/tile-editor/` are plain HTML/CSS/JavaScript, embedded in the
 native executable and served temporarily to the owner's phone or computer; they do not render the
 TV interface.
@@ -90,7 +90,7 @@ It does not execute the test suites. A desktop display is required; on headless 
 | Hold OK for 600 ms            | Reorder Home favorite or open app options                     |
 | OK or Back in move mode       | Finish reordering without launching                           |
 | Escape / Back / Backspace     | Parent navigation, overlay dismissal or Recent apps from Home |
-| Hold Back / Escape for 600 ms | Open Recent apps while Luma is focused                        |
+| Hold Back / Escape for 600 ms | Open Recent apps while Astro is focused                       |
 | Menu / M / right-click        | App or background options side popup                          |
 | Pointer / wheel               | Hover, click, hold and scrolling                              |
 | F5                            | Refresh inventory                                             |
@@ -113,17 +113,17 @@ Deletion opens a separate confirmation with **Cancel** focused by default. Cance
 to the side popup. Once deletion is sent, dismissal does not cancel the platform operation.
 The popup has action icons on the far right, without a title, close button or embedded shortcut hints. The
 confirmation has no heading and identifies the app in its warning text.
-Luma (including former app IDs and the Home identity), Homebrew Channel, test-preview cards and
+Astro (including former app IDs and the Home identity), Homebrew Channel, test-preview cards and
 all apps in the `com.webos.*`, `com.palm.*` and `com.lge.*` namespaces cannot be deleted. This
 conservative vendor protection includes Live TV, Web Browser, Settings and potentially removable
 LG apps, rather than relying on firmware to reject unsafe removals. The worker calls
 `org.webosbrew.hbchannel.service/exec` once to run the packaged native Rust
-`luma-helper uninstall-app` command. It sends one `com.webos.appInstallService/remove` subscription with
+`astro-helper uninstall-app` command. It sends one `com.webos.appInstallService/remove` subscription with
 `{"id":"APP_ID","subscribe":true}` and waits for status 31, not the initial acceptance reply.
 The normal endpoint was manually verified removing Content Store DAZN on webOS 26, whereas
 Homebrew's `uninstall` endpoint (`dev/remove`) returned `FAILED_REMOVE` for that app. The helper
 rechecks protected IDs, bounds output to 64 KiB/64 replies, terminates luna-send after completion
-or a 15-second deadline and has a separate 20-second native transport budget. Luma refreshes inventory after
+or a 15-second deadline and has a separate 20-second native transport budget. Astro refreshes inventory after
 success. After a failed or timed-out request the worker makes up to three bounded, read-only
 inventory checks. An app absent from a complete inventory confirms removal even if its completion
 reply was lost. Otherwise the error closes the popup and refreshes inventory without deleting
@@ -193,7 +193,7 @@ System text events update app/location queries; Done/Back stops editing and rest
 Press Back on Home to open Recent apps, or hold Back (Escape on desktop) for 600 ms from any page.
 Short Back navigates on release. Back in an overlay, the system keyboard or
 move mode keeps its immediate dismissal behavior; Backspace keeps its editing/navigation role.
-Losing window focus cancels an unfinished hold. This is an app-local shortcut while Luma is focused.
+Losing window focus cancels an unfinished hold. This is an app-local shortcut while Astro is focused.
 SDL-webOS Back (scancode 482) and long-Back Exit (505) are normalized before rust-sdl2 decodes the
 event, since the native keymap can leave their keycodes unset and the Rust scancode enum does not
 include them. Both Back and Exit access policies are claimed before video initialization. The
@@ -241,7 +241,7 @@ is refreshed. They are not automatically retried after an ambiguous timeout. One
 per overlay; generation IDs discard late replies after dismissal or reopening. Read/action errors
 stay in the overlay with a read-only Retry action and diagnostic details in stderr.
 
-History order is preserved, including input entries, with Luma/Home identities and duplicates
+History order is preserved, including input entries, with Astro/Home identities and duplicates
 excluded. The native integration still needs manual verification in both normal-tile and
 Home-takeover modes, including app/input launching, closing individual apps, short/long Back,
 focus restoration and service-denial handling.
@@ -302,7 +302,7 @@ defaulting to Off, without opening a subpage. All available images participate i
 deleted and pending-deletion entries are excluded. The fixed 15-minute interval uses a persisted
 Unix timestamp; manual selection or enabling cycling restarts it, and a clock behind the last
 change waits. On process start, rotation advances once after the gallery catalog loads, or after
-three seconds if the catalog is delayed. Changes wait until Luma is focused, visible, idle, and outside overlays. Automatic
+three seconds if the catalog is delayed. Changes wait until Astro is focused, visible, idle, and outside overlays. Automatic
 changes use a 1.6-second fade (instant with reduced motion) and save without refreshing LG's splash.
 `splash_background` preserves the manual selection across unrelated saves, package restaging, and
 process restarts; old preferences fall back to `background`. Old duration preferences load as On,
@@ -310,7 +310,7 @@ while former per-image exclusions are ignored.
 
 The native process binds an ephemeral port on one private/link-local IPv4 interface only while
 the upload modal is open and visible, with a fixed ten-minute session lifetime. Closing the modal,
-hiding Luma or exiting invalidates the session. On TV, losing focus also closes the modal and
+hiding Astro or exiting invalidates the session. On TV, losing focus also closes the modal and
 invalidates the session; desktop previews keep it alive when switching to a browser. An unpredictable 128-bit capability
 URL, exact Host/Origin checks, a custom upload header, no CORS, and restrictive browser security
 headers limit access. The 8-character case-sensitive base-58 token has about 47 bits of entropy;
@@ -318,7 +318,7 @@ each session accepts at most 64 local requests and expires after ten minutes. HT
 encrypted**; use a trusted local network. The URL is not logged.
 The branded code follows the small center-logo approach shown in
 [Vercel's QR example](https://github.com/vercel/examples/tree/main/container-images/demo/apps/qr):
-Luma uses high error correction, light modules on the modal's dark background, and a compact center
+Astro uses high error correction, light modules on the modal's dark background, and a compact center
 mark. QR readers vary in their support for inverted polarity; the URL remains visible as a manual
 fallback.
 Requests are serialized and bounded by header/body sizes and a deadline, with cancellation checks
@@ -344,7 +344,7 @@ the upload page.
 
 When the modal opens, the worker takes a copy of the saved tiles and serves `tiles.json` (tiles,
 choosable icons with their bundled SVG markup, and the limit). `POST save`, `remove` and `send`
-need the session token in `X-Luma-Token` and a JSON body of at most 4 KiB. Saves are validated with
+need the session token in `X-Astro-Token` and a JSON body of at most 4 KiB. Saves are validated with
 the preference validation rules (`clean_input_name`, `valid_tile_url`, `TILE_ICONS`, `TILE_LIMIT`,
 `new_tile_id`).
 Creation and editing are available only on this companion page, which uses a flat background.
@@ -372,7 +372,7 @@ wallpapers. `tools/package.mjs` ships them under `splash/` plus `splash.png` (th
 which `appinfo.json` names as `splashBackground`, with `bgColor` set to the UI base colour so the
 frame between the splash and the first draw is not black. On a normal TV launch and after successful
 preference saves, the native platform worker passes the loaded background to the native
-`luma-helper sync-splash` command through Homebrew Channel's elevated `exec` service. It atomically updates
+`astro-helper sync-splash` command through Homebrew Channel's elevated `exec` service. It atomically updates
 the installed `splash.png` and the matching enabled Home stage, skipping identical images. Desktop
 and isolated `--preferences` / `--test-extra-apps` runs do not update launch splashes. The first launch
 after installation or a package update can still show the packaged default until this sync completes;
@@ -382,7 +382,7 @@ preferences from the TV storage candidates in `storage.rs`. Production installat
 storage; developer installations prefer developer storage, with existing files taking precedence over
 the legacy installation-local preferences. Reapplying an active Home mount also refreshes the splash.
 `pnpm test:home` checks splash selection, runtime updates and mounted refreshes with a mocked filesystem
-and no TV calls. Verify the system-rendered splash on a real TV by changing Background, quitting Luma,
+and no TV calls. Verify the system-rendered splash on a real TV by changing Background, quitting Astro,
 and relaunching its normal tile; desktop checks cannot establish SAM/compositor image caching behavior.
 
 ## Vector rendering
@@ -400,21 +400,21 @@ images and the webOS installation icon remain raster assets. See [assets.md](ass
 TV and desktop windows default to 4× MSAA with 2×/single-sample fallbacks and no text
 emboldening, restoring the text treatment used in v2.8.0. **Settings → System → Text rendering**
 offers **MSAA (default)** and **Analytic**. The `text_rendering` preference (`msaa` or `analytic`)
-is saved immediately and applies when Luma next starts because SDL selects MSAA when it creates
+is saved immediately and applies when Astro next starts because SDL selects MSAA when it creates
 the window. Missing or invalid preferences use MSAA. The setting shows a restart reminder.
 
 Analytic mode uses a single-sample window and analytic text/logo edge filters. Text up to 16
 physical pixels is emboldened by 0.25 px per edge, fading out by 28 px. The choice is visual:
 analytic rendering was preferred on a contributor's webOS 5 TV, while MSAA was preferred in
-manual Mali-G52 TV comparisons. `LUMA_MSAA=4` or `0` overrides the saved mode and its default
-emboldening. `LUMA_EMBOLDEN` overrides the strength independently. Diagnostics report the
+manual Mali-G52 TV comparisons. `ASTRO_MSAA=4` or `0` overrides the saved mode and its default
+emboldening. `ASTRO_EMBOLDEN` overrides the strength independently. Diagnostics report the
 startup `text_rendering` configuration, and `last_presented.multisample_samples` reports the
 actual window's samples. Offscreen captures can still be single-sample.
 
 Shape edges use a one-drawable-pixel box filter centred on the edge, and rectangles (and logo
 placement) snap to whole drawable pixels. A straight edge is then a single step, and a one-pixel
 border is fully opaque. On TVs that scale a 1080p graphics plane up to the panel, half-covered
-edge pixels would otherwise become soft two-pixel bands. `LUMA_SNAP=0` keeps logical positions
+edge pixels would otherwise become soft two-pixel bands. `ASTRO_SNAP=0` keeps logical positions
 for comparison.
 
 ### Installed app artwork
@@ -428,7 +428,7 @@ sampled card colour. Missing, corrupt or unsupported artwork uses the existing g
 
 Discovery, bounded file reads, decoding and colour sampling run on a dedicated worker. If the
 jailed app cannot read an asset directly, the native process calls Homebrew Channel's elevated
-`exec` service with the packaged native `luma-helper read-app-icon` command. It returns bounded
+`exec` service with the packaged native `astro-helper read-app-icon` command. It returns bounded
 image bytes without writing collected files or changing filesystem permissions. PNG, JPEG and WebP
 are supported; runtime SVG parsing is not required. Source files are limited to 512 KiB and
 2048×2048 pixels; decoded icons are at most 256×256 with a 16 MiB/256-entry CPU cache. GPU uploads
@@ -547,7 +547,7 @@ restarted `surface-manager-daemon.service`. Systemd scheduled restoration after 
 | Visible picture              | Normal             | Flickering lines and corruption |
 
 Restoring the original configuration returned the picture to normal. This was a system compositor
-experiment, not a supported Luma setting or installation procedure.
+experiment, not a supported Astro setting or installation procedure.
 
 **Mode acceptance, a 4K drawable or screenshot, and even matching 4K framebuffer/plane/CRTC
 dimensions do not prove correct panel presentation.** Check the visible output and use a
@@ -572,7 +572,7 @@ distinguish 1080p graphics from 4K video on UHD TVs. Native media players can ro
 through a separate video plane while drawing their UI at 1080p. For example,
 [PlxNative documents its default 1080p UI drawable](https://github.com/GLinnik21/plx-native/blob/13bed25004df4c89f8bcba9558b571b8ed962bd0/rust-modules/base/src/surface.rs#L10-L25)
 alongside 4K video support. That media path does not demonstrate a usable 4K OpenGL graphics path
-for Luma; bypassing the browser does not by itself reconfigure LG's graphics output pipeline.
+for Astro; bypassing the browser does not by itself reconfigure LG's graphics output pipeline.
 
 ### Frame profiling
 
@@ -581,7 +581,7 @@ presentations. Hidden windows pause profiling. Capture stalls are excluded. CPU 
 not a GPU timestamp, and `--frames` counts event-loop iterations, not presentation rate.
 Inspect `window`, `drawable`, `drawable_is_4k`, `last_presented`, `capture` and `profile` in JSON.
 Do not infer 60 fps from a successful VSync request; measure actual TV pacing and transitions.
-`LUMA_PROFILE_SKIP=wallpaper,image,app,shape,gradient,shadow,text` (or `all`) leaves those draws
+`ASTRO_PROFILE_SKIP=wallpaper,image,app,shape,gradient,shadow,text` (or `all`) leaves those draws
 out, to find which part of a scene costs GPU time. On an LG webOS 5 TV (Mali-TDVX) the cost
 tracks covered area: a full-screen layer takes about 7 ms at 1080p, and MSAA costs nothing
 measurable.
@@ -596,10 +596,10 @@ it are not laid out. `EGL_KHR_partial_update` also tells the driver which tiles 
 Mali); `EGL_EXT_buffer_age` alone still allows the smaller redraw. The EGL entry points come from
 the libEGL SDL loaded, and only with a current EGL context, so GLX/CGL/WGL contexts always draw in
 full. Unknown buffer ages, changed clip or fade state, a new drawable and screenshot captures draw
-the whole frame, as does `LUMA_PARTIAL=0`. The startup log names the mode
-(`Luma partial redraw: …`).
+the whole frame, as does `ASTRO_PARTIAL=0`. The startup log names the mode
+(`Astro partial redraw: …`).
 
-`LUMA_DAMAGE_VERIFY=1` compares every frame with the same scene drawn in full offscreen at the
+`ASTRO_DAMAGE_VERIFY=1` compares every frame with the same scene drawn in full offscreen at the
 window's sample count and reports differing pixels in the diagnostics (`damage_verify`, with the
 full frames as baseline). `--profile-frames` diagnostics include `redrawn_fraction_mean` and a
 per-frame `timeline` of interval, compose, render and swap time and redrawn share.
@@ -613,22 +613,22 @@ beneath the outgoing interface rather than over it, so they fold in while both f
 ### Idle preparation
 
 The first visit to a page pays for laying out its text, outlining new glyphs, loading logo meshes
-and uploading icons. After each inventory, once the screen has been still for 1.5 s, Luma builds
+and uploading icons. After each inventory, once the screen has been still for 1.5 s, Astro builds
 the other pages' scenes without drawing them (`Renderer::prepare`), one page per idle wake; the TV
-log reports each (`Luma prewarm: …`). The script action `prewarm` triggers it at once, and the
+log reports each (`Astro prewarm: …`). The script action `prewarm` triggers it at once, and the
 profiling timeline records first-use work per frame (`glyph_ms`, `vector_ms`, `image_ms`).
 
 ## TV startup diagnostics
 
 SAM passes launch metadata as a JSON object in `argv[1]`. The CLI skips that object while leaving
 the original process arguments available to SDL/libhelpers. To expose the actual developer-mode
-sandbox's stdout/stderr, close Luma and run in the TV's root SSH shell:
+sandbox's stdout/stderr, close Astro and run in the TV's root SSH shell:
 
 ```sh
-APP=/media/developer/apps/usr/palm/applications/com.ecklf.luma
+APP=/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro
 XDG_RUNTIME_DIR=/tmp/xdg RUST_BACKTRACE=1 /usr/bin/jailer \
-  -t native_devmode -i com.ecklf.luma -p "$APP" \
-  "$APP/luma" '{"@system_native_app":true,"nid":"com.ecklf.luma"}'
+  -t native_devmode -i com.danielcanoh22.astro -p "$APP" \
+  "$APP/astro" '{"@system_native_app":true,"nid":"com.danielcanoh22.astro"}'
 ```
 
 Startup prints accepted launch parameters, SDL driver, actual sample count, cumulative stage
@@ -650,15 +650,15 @@ failures preserve the last valid inputs. No failed inventory read substitutes de
 
 ### Optional native Home integration
 
-`tv/home.sh` and the native Rust `luma-helper` executable are packaged beside `luma`. They are a root-only, explicit integration
+`tv/home.sh` and the native Rust `astro-helper` executable are packaged beside `astro`. They are a root-only, explicit integration
 for webOS 10/25 and 11/26 (and webOS 5/6 and 9/24, see below). `enable` stages a native manifest with ID `com.webos.app.home` and
-symlinks to the installed executable, libraries and assets under `/var/lib/luma-home/app`, then
+symlinks to the installed executable, libraries and assets under `/var/lib/astro-home/app`, then
 bind-mounts it over `/usr/palm/applications/com.webos.app.home`. SAM rereads that one app through
 `blockSystemApp` followed by `releaseBlockSystemApp`, including `forceBlockSystemApp: false` when
 the TV schema requires it. The script verifies the reported manifest before stopping the previous
 Home process. It attempts to restore LG Home if applying the mount or refreshing SAM fails.
 
-Before staging, `enable` closes the normal Luma instance with `closeByAppId` and waits up to five
+Before staging, `enable` closes the normal Astro instance with `closeByAppId` and waits up to five
 seconds for it to leave the running list. The TV's `close` endpoint identifies a process, so passing
 the package ID there can return `no app matched by pid`. If closing reports an error, the script
 rechecks the running list and proceeds only if the normal instance has already exited.
@@ -674,36 +674,36 @@ proceeds. `n`/`N` or end-of-input cancels, and other input repeats the prompt. T
 
 The native CLI accepts SAM's Home `nid` and gives SDL the matching Home surface identity. The
 executable itself stays at its installed path for LS2 authentication, `$ORIGIN/lib`, asset discovery
-and preference selection. Opening Luma's normal tile while the Home mount is active redirects to
+and preference selection. Opening Astro's normal tile while the Home mount is active redirects to
 the Home instance. The scripts do not create a browser wrapper or change the package's app ID.
 
-`64-luma-home` reapplies the mount from a detached boot hook. Homebrew Channel runs `init.d` late
+`64-astro-home` reapplies the mount from a detached boot hook. Homebrew Channel runs `init.d` late
 in boot, after LG Home is already shown (about 43 s after kernel start on a webOS 25 TV), so
 `apply` starts at once. A failed `apply` is tried up to three times, 2 s apart; a failure after
-mounting attempts to restore LG Home before the next try. `/var/lib/luma-home/boot.log` records the seconds since boot when the hook ran
+mounting attempts to restore LG Home before the next try. `/var/lib/astro-home/boot.log` records the seconds since boot when the hook ran
 and when each `apply` attempt started and ended, plus the milliseconds `apply` took to mount,
-reread the manifest, stop the previous Home and launch Luma. Waiting for the previous Home to
+reread the manifest, stop the previous Home and launch Astro. Waiting for the previous Home to
 exit checks every 200 ms within the same 5 s limit.
 The existing TV Home Auto Launch
 and Quick Start+ settings determine whether power-on opens Home. Until the hook applies, LG Home
 can still appear. This integration does not change those settings or install a remote-key filter.
 `disable` (also `restore`) removes the mount, refreshes LG's manifest, stops the native Home
-instance and removes the boot hook. The copied restore scripts remain in `/var/lib/luma-home`
-even if the installed package is removed. Disable the standalone `65-luma` cold-boot hook before
+instance and removes the boot hook. The copied restore scripts remain in `/var/lib/astro-home`
+even if the installed package is removed. Disable the standalone `65-astro` cold-boot hook before
 enabling this integration.
 
-A crash-loop guard keeps a failing Luma from leaving the TV without a Home. On each start as Home,
-before any window or GL work, Luma (as root) counts the start in `/var/run/luma-home-failures`.
-A start stays counted as failed until Luma has run 10 seconds after its first presented frame,
+A crash-loop guard keeps a failing Astro from leaving the TV without a Home. On each start as Home,
+before any window or GL work, Astro (as root) counts the start in `/var/run/astro-home-failures`.
+A start stays counted as failed until Astro has run 10 seconds after its first presented frame,
 which removes the file. After three failed starts in a row, the next start runs the installed
-package's `home.sh fallback` (not the copy in `/var/lib/luma-home`, which only `enable` refreshes)
-in its own `luma-home-fallback` systemd unit and exits. This happens once per boot: `systemd-run`
+package's `home.sh fallback` (not the copy in `/var/lib/astro-home`, which only `enable` refreshes)
+in its own `astro-home-fallback` systemd unit and exits. This happens once per boot: `systemd-run`
 cannot report whether the fallback succeeded, so later starts continue normally rather than exit
 with no Home left. `fallback` removes the
 mount, refreshes LG's manifest, stops the native Home instance and always opens LG Home, but keeps
 `state.json` enabled and the boot hook in place. The counter lives on tmpfs, so the next cold boot
-applies Luma again; any `apply` (boot, `enable` or manual) also clears it. A binary that cannot
-execute at all, or a Luma that hangs without exiting, is not detected.
+applies Astro again; any `apply` (boot, `enable` or manual) also clears it. A binary that cannot
+execute at all, or an Astro that hangs without exiting, is not detected.
 
 Build and script checks cannot establish native Home compatibility. Manually verify Home, Back
 out of the last app, standby wake with the TV's chosen Quick Start+ setting, a full cold boot,
@@ -713,17 +713,17 @@ not establish Home-replacement support on older firmware.
 ### Running in place of LG's Home executable (webOS 5/6/24)
 
 On webOS 5 the manifest takeover above does not apply: SAM restarts a v1 native Home on every
-Home launch. A root integration can instead bind-mount the installed `luma` executable over LG's
+Home launch. A root integration can instead bind-mount the installed `astro` executable over LG's
 `/usr/bin/com.webos.app.home`. SAM then starts it with LG's own Home manifest and LS2 role, which
-is bound to that executable path. Luma detects this (`platform::runs_as_lg_home`) and:
+is bound to that executable path. Astro detects this (`platform::runs_as_lg_home`) and:
 
 - disables SDL's own app registration, which cannot reach the bus under LG's Home role, and
   registers with SAM itself through `registerApp` (lifecycle v2) on its own LS2 connection.
   `luna::subscribe` waits up to 10 s for SAM's first reply (`registered`); a failed connection,
-  call or refused registration is a startup error, so Luma exits and SAM starts Home afresh.
+  call or refused registration is a startup error, so Astro exits and SAM starts Home afresh.
   Home-replacement mode also claims SDL-webOS's Home key, returning directly to the Home tab
   when SAM does not relaunch an already-foreground Home. Normal app-tile launches do not claim it.
-  `relaunch` returns to Luma's Home tab, dismisses overlays, raises the window and refreshes
+  `relaunch` returns to Astro's Home tab, dismisses overlays, raises the window and refreshes
   the inventory. Keyboard edits are saved before leaving their subpage. `close` and a later
   `returnValue: false` (registration lost) quit. SAM keeps the process across Home launches and
   standby (`pause`, reason `keepAlive`) instead of restarting it;
@@ -735,7 +735,7 @@ is bound to that executable path. Luma detects this (`platform::runs_as_lg_home`
   discovery validates the package manifest and matches the executable by device/inode, so assets
   and splash updates use the source package even when developer and production copies both exist.
   A missing or unrelated source package is an explicit startup error;
-- writes its stderr to `/tmp/luma-home.log`, because SAM discards a system app's output;
+- writes its stderr to `/tmp/astro-home.log`, because SAM discards a system app's output;
 - skips the per-icon elevated-service fallback for installed artwork: as root every file is
   readable, so that fallback would only spend seconds per icon to fail the same way.
 
@@ -743,16 +743,16 @@ is bound to that executable path. Luma detects this (`platform::runs_as_lg_home`
 Home's manifest is native, starts `file:///usr/bin/com.webos.app.home` and declares
 `nativeLifeCycleInterfaceVersion: 2`. `enable` and the boot hook bind-mount the installed
 executable over that path, stop the previous Home process and open Home if it was in front (or
-on `enable`). Luma in front within about 15 s is the success condition, with one repeated launch
+on `enable`). Astro in front within about 15 s is the success condition, with one repeated launch
 after 6 s, because SAM can accept the first launch right after the old process stopped without
-starting anything; otherwise the mount is removed again. A mount whose source is Luma's executable
+starting anything; otherwise the mount is removed again. A mount whose source is Astro's executable
 counts as its own also after a package update (`//deleted`) and is replaced; any other mount over
-LG's executable is refused. `disable` unmounts (lazily while Home runs), stops Luma and reopens LG
-Home if Home was in front. While mounted, `/var/run/luma-home` names Luma, so a normal
+LG's executable is refused. `disable` unmounts (lazily while Home runs), stops Astro and reopens LG
+Home if Home was in front. While mounted, `/var/run/astro-home` names Astro, so a normal
 tile launch redirects to the Home instance: the tile's jail sees `/usr/bin` without the mount but
 shares `/var/run`, which is volatile like the mount itself. LG's file stays underneath, and a cold boot
 without the hook gives LG's Home back. Verified on an LG 49UN7100
-(webOS 5): Home key to Luma in about 0.4 s instead of a restart of about 2 s.
+(webOS 5): Home key to Astro in about 0.4 s instead of a restart of about 2 s.
 
 webOS 24 (9.x) also uses this method because its SAM has no `releaseBlockSystemApp` to reread a
 mounted Home manifest. The author verified takeover, same-process Home-key relaunch and cold-boot
@@ -761,16 +761,16 @@ tested; treat this path as experimental rather than a claim of support for every
 
 ### Home lifecycle on webOS 10/11
 
-With the staged manifest (see [Optional native Home integration](#optional-native-home-integration)), SAM starts Luma's own executable for `com.webos.app.home`, but
-never as a registered app: on every Home key it kills Luma and starts it again. Running in place
+With the staged manifest (see [Optional native Home integration](#optional-native-home-integration)), SAM starts Astro's own executable for `com.webos.app.home`, but
+never as a registered app: on every Home key it kills Astro and starts it again. Running in place
 of LG's executable is not an option here, because LG Home's role
 (`/usr/share/luna-service2/roles.d/com.webos.app.home.app.json`) is app-ID based
-(`"appId": "com.webos.app.home"`, names `com.webos.app.home-*`), not bound to a path, and Luma's
-role only allows `com.ecklf.luma` or an anonymous name.
+(`"appId": "com.webos.app.home"`, names `com.webos.app.home-*`), not bound to a path, and Astro's
+role only allows `com.danielcanoh22.astro` or an anonymous name.
 
 The staged Home runs as root, and as root the system-bus `luna-send -a` may act for an app ID.
 So when `options.webos_home` is set outside LG's executable path and the effective user is root,
-Luma calls `luna::subscribe_as_app`, which runs `app_subscription::subscribe` with a child
+Astro calls `luna::subscribe_as_app`, which runs `app_subscription::subscribe` with a child
 `luna-send -a com.webos.app.home -i` that holds
 `registerNativeApp`. SAM expects lifecycle v1 for this manifest and refuses `registerApp` with
 "unmatched method with nativeLifeCycleInterfaceVersion". v1 names its events in `message` rather
@@ -781,37 +781,37 @@ handling as v2.
 - No answer within 10 s, a refused answer or the child ending before an answer kills and reaps
   the child and leaves Home unregistered, as before this integration: SAM restarts it per Home
   key. Once SAM has accepted the registration, losing it (a later `returnValue: false` or the
-  child ending) quits Luma, as on the v2 path, so SAM starts Home afresh.
-- The child gets `SIGKILL` when the thread that started it (Luma's main thread) ends
+  child ending) quits Astro, as on the v2 path, so SAM starts Home afresh.
+- The child gets `SIGKILL` when the thread that started it (Astro's main thread) ends
   (`PR_SET_PDEATHSIG`, re-checked against the parent PID after arming). A registration left with
   nobody handling its events leaves the Home key dead and a black screen after leaving an app.
-- On `relaunch` Luma restores, shows and raises its window (on both lifecycle paths). If a
-  relaunch arrives while Luma is not both focused and visible, `platform::ForegroundCheck` waits
+- On `relaunch` Astro restores, shows and raises its window (on both lifecycle paths). If a
+  relaunch arrives while Astro is not both focused and visible, `platform::ForegroundCheck` waits
   3 s for `FocusGained` or a remote key, which only reach the focused surface. `Shown` and
   `Restored` do not count, because `SDL_ShowWindow` emits `Shown` itself whether or not the raise
-  reached the screen. Without confirmation, Luma assumes it cannot bring itself forward on this
-  firmware: it creates `/var/lib/luma-home/no-lifecycle` and ends the registration, which quits
-  it, so SAM starts Home afresh. While that file exists, Luma does not register and Home behaves
+  reached the screen. Without confirmation, Astro assumes it cannot bring itself forward on this
+  firmware: it creates `/var/lib/astro-home/no-lifecycle` and ends the registration, which quits
+  it, so SAM starts Home afresh. While that file exists, Astro does not register and Home behaves
   as before. Delete it to try again.
 - A setup error after the child started (e.g. a thread cannot be created) kills and reaps the
-  child before returning the error, so no registration is left behind while Luma keeps running.
-- stderr goes to `/tmp/luma-home.log` in this mode too. Replies are logged as
-  `Luma lifecycle: …`, the helper's end as `Luma app subscription ended (was registered: …)`,
-  and window visibility and focus changes as `Luma window: …`.
+  child before returning the error, so no registration is left behind while Astro keeps running.
+- stderr goes to `/tmp/astro-home.log` in this mode too. Replies are logged as
+  `Astro lifecycle: …`, the helper's end as `Astro app subscription ended (was registered: …)`,
+  and window visibility and focus changes as `Astro window: …`.
 - `app_subscription` has no LS2 dependency, so its host tests run it against fake `luna-send`
   scripts: replies and noise, refusal, silence, an early exit, a registration lost later, and
   failed thread starts. `ForegroundCheck` has its own tests, including relaunch → `Shown` without
   focus.
 - SDL's own app registration (`SDL_WEBOS_REGISTER_APP`) is left as it was for the staged
-  manifest. It does not register Home there (SAM restarted Luma per Home key with it enabled),
+  manifest. It does not register Home there (SAM restarted Astro per Home key with it enabled),
   and disabling it would change startup on a path without a reason seen on a TV.
 
-Verified on an LG OLED65C36LC (webOS 26, 11.2.0-3701): without registration the Luma PID changes
+Verified on an LG OLED65C36LC (webOS 26, 11.2.0-3701): without registration the Astro PID changes
 on every Home key. With it, the PID stays the same across Home presses and Back out of apps, SAM
-sends `relaunch` with `launchType: homeKey`, Luma comes to the front, and it registers again after
+sends `relaunch` with `launchType: homeKey`, Astro comes to the front, and it registers again after
 a cold boot. SDL's own registration logs `Failed to register app: Failed to get
 nativeLifeCycleInterfaceVersion` at startup there, without effect. That the compositor sends
-`FocusGained` after such a relaunch, which the watchdog relies on, shows in the `Luma window:` log.
+`FocusGained` after such a relaunch, which the watchdog relies on, shows in the `Astro window:` log.
 
 ## Manual extra-app preview
 
@@ -842,8 +842,8 @@ method uses its source installation for storage precedence and legacy migration,
 `/usr/bin` executable path. Existing JSON preferences and a
 valid weather cache from beside this installation's old executable are imported once, without
 overwriting the chosen destination. Invalid existing preferences still report an error.
-Startup prints `Luma persistent storage:` with the chosen path. Desktop preview retains the legacy
-`$XDG_CONFIG_HOME/luma-native/preferences.json` path, or `~/.config/luma-native/preferences.json`,
+Startup prints `Astro persistent storage:` with the chosen path. Desktop preview retains the legacy
+`$XDG_CONFIG_HOME/astro-native/preferences.json` path, or `~/.config/astro-native/preferences.json`,
 so existing preview choices survive flattening. `--preferences PATH` isolates a manual run.
 Invalid preference files report an error rather than being overwritten. Writes use atomic
 temporary-file renames; use one instance per preferences file. Browser local storage is not
@@ -869,7 +869,7 @@ runtime font/translation services or telemetry are used. Weather attribution: Op
 On interactive desktop or TV startup a separate worker checks
 `https://github.com/danielcanoh22/lg-astro/releases/latest/download/repo.json` once per process automatically.
 **Settings → System → Check again** retries on the same worker, with one request in flight at a time.
-It only reads the `com.ecklf.luma` package/manifest version and compares numeric major/minor/patch
+It only reads the `com.danielcanoh22.astro` package/manifest version and compares numeric major/minor/patch
 components with the compiled version. Equal, older, malformed or prerelease versions do not offer
 updates. HTTP is HTTPS-only with bounded redirects, a ten-second timeout, a 256 KiB reply limit and
 no proxy; failures are logged without interrupting launch and the status card offers retry.
@@ -885,9 +885,9 @@ to `tv/self-update.sh`, detached through Homebrew Channel's root service into a 
 The handoff escapes dollar signs for systemd as well as quoting for the
 exec service's shell, so systemd cannot expand the embedded script before `/bin/sh` runs it.
 The installer locks, stages and re-verifies a root-owned copy, waits for installation completion and
-checks the installed version before reopening Luma. Home takeover refreshes from the new package;
+checks the installed version before reopening Astro. Home takeover refreshes from the new package;
 failed reapplication attempts verified LG Home recovery. Atomic attempt-specific results and a log
-persist in `/var/lib/luma-update`. The card displays progress, ignores repeated presses while busy,
+persist in `/var/lib/astro-update`. The card displays progress, ignores repeated presses while busy,
 and returns to **Check again** after failure. On restart the installer worker observes an unfinished
 attempt or reports its persisted failure. Desktop and scripted/simulated runs cannot install.
 
@@ -895,7 +895,7 @@ Preview the update card without a network request:
 
 ```sh
 cargo run -- --test-update-version 99.0.0 --script settings,down,down,down,down,right
-# Alternatively: LUMA_TEST_UPDATE_VERSION=99.0.0 cargo run
+# Alternatively: ASTRO_TEST_UPDATE_VERSION=99.0.0 cargo run
 ```
 
 The flag overrides the environment variable and accepts the current or a newer numeric version.
@@ -906,7 +906,7 @@ package installation in these previews.
 
 ## Compatibility
 
-Luma's native startup, rendering and app/input discovery have been verified on rooted webOS 26.
+Astro's native startup, rendering and app/input discovery have been verified on rooted webOS 26.
 External testing confirms compatibility with webOS 6 and newer. On webOS 26 use elevated Homebrew Channel
 0.8.0-rc1+ for `lunabus.query`. Root SSH execution does not establish the normal jailed caller
 permissions; check TV-menu startup, launching/reopening and remote/pointer behavior manually.
@@ -916,7 +916,7 @@ versions. Its [library guide](https://www.webosbrew.org/develop/guides/library-v
 internal releases to marketing names: 7/22, 8/23, 9/24, 10/25, 11/26. SDL-webOS's newer
 [`2.30.12-webos.6`](https://github.com/webosbrew/SDL-webOS/releases/tag/release-2.30.12-webos.6)
 reports hotplug verification on webOS 3.4, 4 and 10. That is subsystem evidence for a newer
-prerelease than the pinned `.5` library, not a full Luma compatibility guarantee.
+prerelease than the pinned `.5` library, not a full Astro compatibility guarantee.
 
 ## Checks and CI
 
@@ -936,7 +936,7 @@ xvfb-run -a pnpm test:smoke
 CI prepares checks, unit tests, native assets and the desktop binary once. Four independent
 jobs run navigation/rendering, the brand gallery, mocked weather and translations in parallel,
 each with its own Xvfb display, scratch preferences and diagnostic artifact. They consume a
-same-run tar archive that preserves the binary's executable mode and use `LUMA_SMOKE_SKIP_BUILD=1`
+same-run tar archive that preserves the binary's executable mode and use `ASTRO_SMOKE_SKIP_BUILD=1`
 to avoid compiling the same executable again. Local smoke commands still build by default.
 The ARM package job runs alongside these suites using the shared assets, cross-links with a
 pinned Linux SDK, inspects/normalizes the actual IPK and generates checksums/feed. The existing
@@ -964,8 +964,8 @@ or rerun a workflow to rebuild the same commit.
 Only the build job checks out PR code. It has read-only repository access, no persisted
 checkout credentials and no shared build caches. A separate job with comment-writing permission
 uses the trusted base-branch workflow and GitHub's artifact API without checking out PR code.
-The package keeps the normal `com.ecklf.luma` identity and version, so installing it replaces
-the existing Luma app. These builds are for manual TV verification; the ordinary CI checks still
+The package keeps the normal `com.danielcanoh22.astro` identity and version, so installing it replaces
+the existing Astro app. These builds are for manual TV verification; the ordinary CI checks still
 run independently.
 
 ## Releases
@@ -976,7 +976,7 @@ Add a changeset to feature/fix PRs that should be included in the next app relea
 pnpm changeset
 ```
 
-Select `lg-luma`, choose patch/minor/major and describe the change. Commit the generated file
+Select `lg-astro`, choose patch/minor/major and describe the change. Commit the generated file
 under `.changeset/` with the PR. Documentation-only and maintenance PRs that do not need a release
 can omit it. Keep the existing app version in ordinary PRs.
 
@@ -994,7 +994,7 @@ installing dependencies or running code from the PR.
 After changesets merge into `main`, `.github/workflows/release-pr.yml` creates or updates the
 **Version Packages** PR on `changeset-release/main`. Changesets combines the pending notes using
 the highest requested bump. The custom `pnpm version:release` command updates `package.json`
-and `CHANGELOG.md`, then synchronizes `appinfo.json`, the root `Cargo.toml`, the `luma` entry in
+and `CHANGELOG.md`, then synchronizes `appinfo.json`, the root `Cargo.toml`, the `astro` entry in
 `Cargo.lock`, and the versioned IPK examples in `readme.md`. Dependency pins and supporting Rust
 crate versions are preserved. The package stays private and is never published to npm.
 
@@ -1041,14 +1041,14 @@ Key modules: `state.rs` focus/preferences, `view.rs` geometry, `renderer.rs` GPU
 `home.sh status` reports the selected `homeId` and installed Home candidates. `mounted`,
 `enabled` and `bootHook` describe integration files, not a successful remote Home-key test;
 `homeKeyVerified` therefore remains `null` (unknown). LG Home can be an overlay, so foreground app
-identity alone is not sufficient evidence that Luma rendered or received the Home key.
+identity alone is not sufficient evidence that Astro rendered or received the Home key.
 
 If diagnostics on the affected TV establish that Home opens `com.webos.app.fullhome`, disable
 existing takeover first, then explicitly select that target:
 
 ```sh
-sh /var/lib/luma-home/home.sh disable
-sh /media/developer/apps/usr/palm/applications/com.ecklf.luma/home.sh enable /media/developer/apps/usr/palm/applications/com.ecklf.luma com.webos.app.fullhome
+sh /var/lib/astro-home/home.sh disable
+sh /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro/home.sh enable /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro com.webos.app.fullhome
 ```
 
 Use the installed package directory on production installations. The selected target is saved
@@ -1060,7 +1060,7 @@ receives the key. Do not infer support for webOS 4 from this option.
 
 ### Native TV helper
 
-The `tv-helper/` workspace crate ports the former `tv/*.cjs` operations. Its `luma-helper` binary
+The `tv-helper/` workspace crate ports the former `tv/*.cjs` operations. Its `astro-helper` binary
 contains no GUI initialization, SDL dependency or persistent service. Root Home synchronizes its
 splash directly through the same Rust library on the platform worker. Normal jailed launches
 retain Homebrew Channel as the privilege boundary, executing the installed helper with individually
@@ -1070,7 +1070,7 @@ root-side LS2 operations; Node is no longer required by these helpers or by `tv/
 which reads its two JSON fields with POSIX tools.
 
 `home.sh` retains its explicit confirmation and filesystem lock. Enabling Home copies both that
-script and the native helper into `/var/lib/luma-home`, so recovery remains available after the
+script and the native helper into `/var/lib/astro-home`, so recovery remains available after the
 source package is removed. When upgrading an existing integration from the interpreter helper,
 run the packaged `home.sh enable` again to replace its copied recovery/boot files. Configurations
 from the former scripts keep their method, installation and original stock manifest. Both `home`
@@ -1079,11 +1079,11 @@ support from #142. Manifest takeover remains limited to webOS
 10/11. The optional `tv-input` subcommand implements the #124 registration/verification contract;
 **Settings → System → Show as TV input** runs it through Homebrew Channel's root service, and the
 package declares the required `supportGIP`. With the input registered, the Home copy opens
-`com.ecklf.luma` on start, only if `getForegroundAppInfo` shows Home in front, and on each
-lifecycle relaunch or Home key (`State::home_opened`/`luma_input_due`,
-at most once per `LUMA_INPUT_INTERVAL` and `LUMA_INPUT_LIMIT` times in a row within
-`LUMA_INPUT_SETTLE` until the Home key is pressed in Home), adding the launch parameter
-`lumaFromHome` so that copy skips `redirect_to_home`; the Luma input card sends it too. When sam
+`com.danielcanoh22.astro` on start, only if `getForegroundAppInfo` shows Home in front, and on each
+lifecycle relaunch or Home key (`State::home_opened`/`astro_input_due`,
+at most once per `ASTRO_INPUT_INTERVAL` and `ASTRO_INPUT_LIMIT` times in a row within
+`ASTRO_INPUT_SETTLE` until the Home key is pressed in Home), adding the launch parameter
+`astroFromHome` so that copy skips `redirect_to_home`; the Astro input card sends it too. When sam
 preloads Home (argv[1] `"preload": "full"`, seen about 45 s after the boot takeover stops LG's
 Home), the registered Home draws no frame and ignores SDL's own Shown until its first relaunch,
 so it never takes the screen from the input or app in front; staying alive counts as healthy. Both copies reload `preferences.json` when it changed since they last
@@ -1092,7 +1092,7 @@ copy returns to its Home page with recents closed when shown again.
 
 The former VM tests for interpreter code are replaced by filesystem and service fixtures in
 `tv-helper/src/tests.rs`. They do not call a TV, real LS2 service or network. Host helper executables
-reject TV operations; only ARM webOS builds can perform them. Use `cargo test -p luma-tv-helper`
+reject TV operations; only ARM webOS builds can perform them. Use `cargo test -p astro-tv-helper`
 for focused checks. The workspace tests include the helper, and ARM builds/package verification
 require both native binaries with executable permissions. `tests/home-wrapper.test.mjs` runs
 `home.sh` itself through absolute and relative boot-hook symlinks in a temporary root, so the copied

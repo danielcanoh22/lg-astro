@@ -10,7 +10,7 @@ impl Fixture {
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
-            "luma-wallpapers-{}-{}",
+            "astro-wallpapers-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -378,7 +378,7 @@ fn browser_assets_are_local_and_a_real_http_upload_needs_no_name() {
         "crop.js",
         "storage.js",
         "app.css",
-        "luma-mark.svg",
+        "astro-mark.svg",
         "info.json",
     ] {
         let (response, changed) = http(&fixture.wallpapers(), |host| {
@@ -388,7 +388,7 @@ fn browser_assets_are_local_and_a_real_http_upload_needs_no_name() {
         assert!(response.contains("Cache-Control: no-store"));
         assert!(response.contains("frame-ancestors 'none'"));
         assert!(!changed);
-        if route == "luma-mark.svg" {
+        if route == "astro-mark.svg" {
             assert!(response.starts_with("HTTP/1.1 200"));
             assert!(response.contains("image/svg+xml"));
             assert!(response.contains("<svg"));
@@ -400,7 +400,7 @@ fn browser_assets_are_local_and_a_real_http_upload_needs_no_name() {
     }
     let bytes = image(1920, 1080);
     let (response, changed) = http(&fixture.wallpapers(), |host| {
-        let mut wire = format!("POST /secret/upload HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nX-Luma-Upload: secret\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", bytes.len()).into_bytes();
+        let mut wire = format!("POST /secret/upload HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nX-Astro-Upload: secret\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", bytes.len()).into_bytes();
         wire.extend_from_slice(&bytes);
         wire
     });
@@ -536,7 +536,7 @@ fn cancelling_a_slow_request_releases_the_worker_without_waiting_for_the_body() 
     };
     let parts: Vec<_> = info.url.split('/').collect();
     let mut socket = TcpStream::connect(parts[2]).unwrap();
-    write!(socket, "POST /{}/upload HTTP/1.1\r\nHost: {}\r\nX-Luma-Upload: {}\r\nContent-Type: image/jpeg\r\nContent-Length: 100000\r\n\r\npartial", parts[3], parts[2], parts[3]).unwrap();
+    write!(socket, "POST /{}/upload HTTP/1.1\r\nHost: {}\r\nX-Astro-Upload: {}\r\nContent-Type: image/jpeg\r\nContent-Length: 100000\r\n\r\npartial", parts[3], parts[2], parts[3]).unwrap();
     service.set_active(false);
     assert!(matches!(
         service

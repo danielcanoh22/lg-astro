@@ -6,14 +6,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, path::Path};
 
-const STATE: &str = "/var/lib/luma-home";
-const CONFIG: &str = "/var/lib/luma-home/state.json";
-const STAGE: &str = "/var/lib/luma-home/app";
-const HOOK: &str = "/var/lib/webosbrew/init.d/64-luma-home";
-const MARKER: &str = "/var/run/luma-home";
-/// Luma starts as Home that have not become healthy yet. tmpfs: a reboot clears it, and with it
+const STATE: &str = "/var/lib/astro-home";
+const CONFIG: &str = "/var/lib/astro-home/state.json";
+const STAGE: &str = "/var/lib/astro-home/app";
+const HOOK: &str = "/var/lib/webosbrew/init.d/64-astro-home";
+const MARKER: &str = "/var/run/astro-home";
+/// Astro starts as Home that have not become healthy yet. tmpfs: a reboot clears it, and with it
 /// any fallback to LG Home.
-pub const FAILURES: &str = "/var/run/luma-home-failures";
+pub const FAILURES: &str = "/var/run/astro-home-failures";
 /// Consecutive unhealthy starts after which the next start gives LG Home back until reboot.
 pub const FAILURE_LIMIT: u32 = 3;
 pub const HOME: &str = "com.webos.app.home";
@@ -128,7 +128,7 @@ impl<'a, S: System> Home<'a, S> {
             .next_back())
     }
     fn exe_mounted(&self, app: &str) -> bool {
-        system::same_file(self.system, Path::new(app).join("luma"), &self.exe)
+        system::same_file(self.system, Path::new(app).join("astro"), &self.exe)
     }
     fn owned_mount(&self) -> Result<Option<String>> {
         let root = self.exe_mount()?;
@@ -139,7 +139,7 @@ impl<'a, S: System> Home<'a, S> {
     }
     fn unmount(&self, path: &str) -> Result<()> {
         if let Err(error) = system::command(self.system, "/bin/umount", &[path]) {
-            eprintln!("Luma Home: {error}; detaching mount");
+            eprintln!("Astro Home: {error}; detaching mount");
             system::command(self.system, "/bin/umount", &["-l", path])?;
         }
         Ok(())
@@ -190,7 +190,7 @@ impl<'a, S: System> Home<'a, S> {
             if (i == 0 || i == 6)
                 && let Err(error) = self.launch()
             {
-                eprintln!("Luma Home: {error}");
+                eprintln!("Astro Home: {error}");
             }
             if self.foreground()? == self.id {
                 return Ok(());
@@ -259,7 +259,7 @@ impl<'a, S: System> Home<'a, S> {
                     Path::new(info["main"].as_str().unwrap_or("")).file_name()
                         == Path::new(main).file_name()
                 })
-                && (main != Some("luma")
+                && (main != Some("astro")
                     || info["appCategory"]
                         .as_array()
                         .is_some_and(|a| a.iter().any(|v| v == "home")))
@@ -297,13 +297,13 @@ impl<'a, S: System> Home<'a, S> {
                 self.system.pause();
             }
         }
-        Err("Close Luma before enabling Home integration".into())
+        Err("Close Astro before enabling Home integration".into())
     }
     pub fn restore(&self, config: &Config) -> Result<()> {
         self.restore_home(config, false)
     }
     /// Gives LG Home back without disabling the integration: state.json and the boot hook stay,
-    /// so the next cold boot applies Luma again. A failing Luma may not be in front, so LG Home
+    /// so the next cold boot applies Astro again. A failing Astro may not be in front, so LG Home
     /// is always opened.
     pub fn fallback(&self, config: &Config) -> Result<()> {
         self.restore_home(config, true)
@@ -312,7 +312,7 @@ impl<'a, S: System> Home<'a, S> {
         let was_home = match self.foreground() {
             Ok(id) => id == self.id,
             Err(e) => {
-                eprintln!("Luma Home: {e}; restoring files first");
+                eprintln!("Astro Home: {e}; restoring files first");
                 false
             }
         };
@@ -348,18 +348,18 @@ impl<'a, S: System> Home<'a, S> {
         Ok(())
     }
     pub fn apply(&self, config: &Config, open: bool) -> Result<()> {
-        // Stage timings land in boot.log at cold boot, to see where the delay before Luma goes.
+        // Stage timings land in boot.log at cold boot, to see where the delay before Astro goes.
         let started = std::time::Instant::now();
         let stage = |name: &str| {
             eprintln!(
-                "Luma Home: {name} after {} ms",
+                "Astro Home: {name} after {} ms",
                 started.elapsed().as_millis()
             );
         };
-        if !self.exists(Path::new(&config.app_dir).join("luma")) {
-            return Err("Luma is no longer installed".into());
+        if !self.exists(Path::new(&config.app_dir).join("astro")) {
+            return Err("Astro is no longer installed".into());
         }
-        // Every apply (boot, enable, manual) gives Luma a fresh set of attempts.
+        // Every apply (boot, enable, manual) gives Astro a fresh set of attempts.
         system::remove(self.system, FAILURES)?;
         let root = if config.method == "executable" {
             self.owned_mount()?
@@ -372,7 +372,7 @@ impl<'a, S: System> Home<'a, S> {
         if config.method != "executable"
             && let Err(e) = files::stage_splash(self.system, Path::new(&config.app_dir))
         {
-            eprintln!("Luma Home: splash not staged: {e}");
+            eprintln!("Astro Home: splash not staged: {e}");
         }
         let front = self.foreground()?;
         let result = (|| {
@@ -384,7 +384,7 @@ impl<'a, S: System> Home<'a, S> {
                     system::command(
                         self.system,
                         "/bin/mount",
-                        &["--bind", &format!("{}/luma", config.app_dir), &self.exe],
+                        &["--bind", &format!("{}/astro", config.app_dir), &self.exe],
                     )?;
                 }
                 if !self.exe_mounted(&config.app_dir) {
@@ -431,7 +431,7 @@ impl<'a, S: System> Home<'a, S> {
     }
     fn install_scripts(&self, app: &Path) -> Result<()> {
         // The copied native helper lets disable/recovery work after an app package was removed.
-        for (name, mode) in [("home.sh", 0o755), ("luma-helper", 0o755)] {
+        for (name, mode) in [("home.sh", 0o755), ("astro-helper", 0o755)] {
             let bytes = system::read(self.system, app.join(name), 16 * 1024 * 1024)?;
             system::write(self.system, format!("{STATE}/{name}"), &bytes, mode)?;
         }
@@ -452,8 +452,8 @@ impl<'a, S: System> Home<'a, S> {
             )
         };
         let mut manifest = system::json(self.system, app.join("appinfo.json"))?;
-        if manifest["id"] != APP || manifest["type"] != "native" || manifest["main"] != "luma" {
-            return Err("Enable this from an installed native Luma package".into());
+        if manifest["id"] != APP || manifest["type"] != "native" || manifest["main"] != "astro" {
+            return Err("Enable this from an installed native Astro package".into());
         }
         let previous = load(self.system)?;
         if previous
@@ -478,21 +478,21 @@ impl<'a, S: System> Home<'a, S> {
         }
         self.owned_mount()?;
         if self.exists(HOOK) && !hook_owned(self.system) {
-            return Err("64-luma-home is already in use".into());
+            return Err("64-astro-home is already in use".into());
         }
-        if self.exists("/var/lib/webosbrew/init.d/65-luma") {
+        if self.exists("/var/lib/webosbrew/init.d/65-astro") {
             return Err(
                 "Disable the standalone cold-boot hook with autostart.sh disable first".into(),
             );
         }
-        if stock["id"] != self.id || stock["main"] == "luma" {
+        if stock["id"] != self.id || stock["main"] == "astro" {
             return Err("Could not identify the original LG Home manifest".into());
         }
         self.close_normal()?;
         if method == "manifest" {
             system::mkdir(self.system, STAGE)?;
             let mut links = vec![
-                "luma".to_owned(),
+                "astro".to_owned(),
                 "assets".into(),
                 "lib".into(),
                 "splash".into(),
@@ -531,7 +531,7 @@ impl<'a, S: System> Home<'a, S> {
             system::write_json(self.system, format!("{STAGE}/appinfo.json"), &manifest)?;
             system::write(
                 self.system,
-                format!("{STAGE}/.luma-home"),
+                format!("{STAGE}/.astro-home"),
                 format!("{APP}\n").as_bytes(),
                 0o644,
             )?;
@@ -565,7 +565,7 @@ fn unescape(s: &str) -> String {
 pub fn exe_owned(root: &str) -> bool {
     root.strip_suffix("//deleted")
         .unwrap_or(root)
-        .ends_with("/com.ecklf.luma/luma")
+        .ends_with("/com.danielcanoh22.astro/astro")
 }
 pub fn home_process(
     args: &[String],
@@ -580,14 +580,14 @@ pub fn home_process(
         .file_name()
         .is_some_and(|name| name == "flutter-client")
         && args.windows(2).any(|pair| pair[0] == "-i" && pair[1] == id);
-    let luma = executable.is_some_and(|path| {
+    let astro = executable.is_some_and(|path| {
         Path::new(path.to_str().unwrap_or("").trim_end_matches(" (deleted)"))
-            == system.path(&Path::new(app).join("luma"))
+            == system.path(&Path::new(app).join("astro"))
     });
     let metadata = args
         .get(1)
         .and_then(|arg| serde_json::from_str::<Value>(arg).ok());
-    native || flutter || (luma && metadata.is_some_and(|m| m["nid"] == id || m["appId"] == id))
+    native || flutter || (astro && metadata.is_some_and(|m| m["nid"] == id || m["appId"] == id))
 }
 pub fn method<'a>(release: &str, stock: &Value, id: &str) -> Result<&'a str> {
     target(id)?;
@@ -614,7 +614,7 @@ pub fn method<'a>(release: &str, stock: &Value, id: &str) -> Result<&'a str> {
 }
 pub fn hook_owned(system: &impl System) -> bool {
     fs::read_link(system.path(Path::new(HOOK)))
-        .is_ok_and(|p| p == system.path(Path::new("/var/lib/luma-home/home.sh")))
+        .is_ok_and(|p| p == system.path(Path::new("/var/lib/astro-home/home.sh")))
 }
 pub fn load(system: &impl System) -> Result<Option<Config>> {
     if !system::exists(system, CONFIG) {
@@ -647,7 +647,7 @@ pub fn dispatch(
             Ok(json!({"returnValue":true}))
         }
         "apply" | "disable" | "restore" => {
-            let mut config = saved.ok_or("Luma Home has not been enabled")?;
+            let mut config = saved.ok_or("Astro Home has not been enabled")?;
             if command == "apply" && config.enabled {
                 home.apply(&config, false)?;
             } else {
@@ -661,7 +661,7 @@ pub fn dispatch(
             Ok(json!({"returnValue":true}))
         }
         "fallback" => {
-            let config = saved.ok_or("Luma Home has not been enabled")?;
+            let config = saved.ok_or("Astro Home has not been enabled")?;
             if config.enabled {
                 home.fallback(&config)?;
             }
@@ -677,9 +677,9 @@ pub enum Start {
     /// Too many starts never became healthy: give LG Home back until reboot.
     Fallback,
 }
-/// Called by Luma as Home before it opens its window. A start counts as failed until
+/// Called by Astro as Home before it opens its window. A start counts as failed until
 /// `record_healthy`; after FAILURE_LIMIT failed starts in a row, the next one falls back.
-/// Only once per boot: the caller cannot observe whether the fallback succeeded, and a Luma
+/// Only once per boot: the caller cannot observe whether the fallback succeeded, and an Astro
 /// that exits on every start without one would leave the TV with no Home at all.
 pub fn record_start(system: &impl System) -> Result<Start> {
     let failures = system::read(system, FAILURES, 16)
@@ -702,7 +702,7 @@ pub fn record_start(system: &impl System) -> Result<Start> {
         Start::Continue
     })
 }
-/// Luma has been running long enough: its next start begins a new count.
+/// Astro has been running long enough: its next start begins a new count.
 pub fn record_healthy(system: &impl System) -> Result<()> {
     system::remove(system, FAILURES)
 }

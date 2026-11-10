@@ -1,4 +1,4 @@
-# Luma
+# Astro
 
 A native launcher for rooted LG webOS TVs, inspired by Apple TV.
 
@@ -13,18 +13,18 @@ https://github.com/user-attachments/assets/2156d640-b8fa-4ea4-a02c-0db4c93bcc5a
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/home.png" alt="Luma native Home screen, desktop preview">
+      <img src="docs/home.png" alt="Astro native Home screen, desktop preview">
     </td>
     <td width="50%" align="center">
-      <img src="docs/apps.png" alt="Luma native app library, desktop preview">
+      <img src="docs/apps.png" alt="Astro native app library, desktop preview">
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/settings.png" alt="Luma native General settings, desktop preview">
+      <img src="docs/settings.png" alt="Astro native General settings, desktop preview">
     </td>
     <td width="50%" align="center">
-      <img src="docs/inputs.png" alt="Luma native input settings, desktop preview">
+      <img src="docs/inputs.png" alt="Astro native input settings, desktop preview">
     </td>
   </tr>
 </table>
@@ -34,7 +34,7 @@ https://github.com/user-attachments/assets/2156d640-b8fa-4ea4-a02c-0db4c93bcc5a
 ## Compatibility
 
 > [!NOTE]
-> Luma should start on any TV running webOS 4 or newer. The following configurations have been
+> Astro should start on any TV running webOS 4 or newer. The following configurations have been
 > confirmed to work by the community. Home takeover support varies, as noted below:
 
 <details>
@@ -126,7 +126,7 @@ https://github.com/danielcanoh22/lg-astro/releases/latest/download/repo.json
 On your computer, replace `TV_IP`:
 
 ```sh
-scp -O dist/com.ecklf.luma_2.21.3_arm.ipk root@TV_IP:/tmp/luma.ipk
+scp -O dist/com.danielcanoh22.astro_2.21.3_arm.ipk root@TV_IP:/tmp/astro.ipk
 ssh root@TV_IP
 ```
 
@@ -134,7 +134,7 @@ In the TV's root shell:
 
 ```sh
 luna-send -i luna://com.webos.appInstallService/dev/install \
-  '{"id":"com.ecklf.luma","ipkUrl":"/tmp/luma.ipk","subscribe":true}'
+  '{"id":"com.danielcanoh22.astro","ipkUrl":"/tmp/astro.ipk","subscribe":true}'
 ```
 
 ## Replacing LG Home
@@ -143,52 +143,52 @@ luna-send -i luna://com.webos.appInstallService/dev/install \
 
 > [!NOTE]
 > Takeover is supported on **webOS 5, 6, 24, 25 and 26**.\
-> On 5, 6 and 24 it replaces the Home executable; on 25 and 26 it mounts Luma's Home app.\
+> On 5, 6 and 24 it replaces the Home executable; on 25 and 26 it mounts Astro's Home app.\
 > The takeover does not delete LG Home: it remains underneath a temporary mount, which is cleared by
-> a reboot. If Luma is uninstalled first, LG Home returns on reboot, but the separate takeover boot
-> hook remains and logs an error because it can no longer find Luma. No TV reset is needed. For
+> a reboot. If Astro is uninstalled first, LG Home returns on reboot, but the separate takeover boot
+> hook remains and logs an error because it can no longer find Astro. No TV reset is needed. For
 > clean removal, disable takeover before uninstalling.
 
-Install Luma and verify that it opens normally. Disable any Home-button mapping in
+Install Astro and verify that it opens normally. Disable any Home-button mapping in
 [LG Input Hook](https://github.com/Simon34545/lginputhook) (remove its Home-key action) and any
 other Home replacement, then run in the TV's root SSH shell:
 
-If you enabled Lumas autostart method earlier, disable it first:
+If you enabled Astro's autostart method earlier, disable it first:
 
 ```sh
-APP=/media/developer/apps/usr/palm/applications/com.ecklf.luma
+APP=/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro
 sh "$APP/autostart.sh" disable
 ```
 
 To enable the takeover run:
 
 ```sh
-APP=/media/developer/apps/usr/palm/applications/com.ecklf.luma
+APP=/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro
 sh "$APP/home.sh" enable
 ```
 
 To see the status or disable the home override use:
 
 ```sh
-sh /var/lib/luma-home/home.sh status
-sh /var/lib/luma-home/home.sh disable
+sh /var/lib/astro-home/home.sh status
+sh /var/lib/astro-home/home.sh disable
 ```
 
 `restore` is an alias for `disable`.
 
-If Luma fails to start as Home three times in a row, it gives LG Home back automatically so the TV
+If Astro fails to start as Home three times in a row, it gives LG Home back automatically so the TV
 and remote stay usable. The takeover stays enabled: the next full reboot (not a Quick Start+ wake)
-applies Luma again.
+applies Astro again.
 
-Boot log: `/var/lib/luma-home/boot.log`. See the
+Boot log: `/var/lib/astro-home/boot.log`. See the
 [development guide](development.md#optional-native-home-integration) for implementation details.
 
 <details>
 <summary>Method for webOS 5 / 6 / 24</summary>
 
 On **webOS 5, 6 and 24**, SAM cannot reread a mounted Home manifest, so `home.sh enable` instead
-bind-mounts Luma's executable over LG's `/usr/bin/com.webos.app.home`. LG's Home manifest stays
-in place and Luma registers with SAM itself, so the Home key brings the running Luma back instead
+bind-mounts Astro's executable over LG's `/usr/bin/com.webos.app.home`. LG's Home manifest stays
+in place and Astro registers with SAM itself, so the Home key brings the running Astro back instead
 of restarting it. The commands and the cold-boot hook are the same.
 
 webOS 24 belongs here rather than with 25/26 because its SAM has no `releaseBlockSystemApp`, so a
@@ -201,11 +201,11 @@ have not been tested yet.
 <details>
 <summary>Method for webOS 25 / 26</summary>
 
-Mounts Luma over the system Home app and reapplies the mount at cold boot. The LG splash
-shown before Luma's window opens is the wallpaper you selected in **Settings → Background**, staged
+Mounts Astro over the system Home app and reapplies the mount at cold boot. The LG splash
+shown before Astro's window opens is the wallpaper you selected in **Settings → Background**, staged
 from the saved preferences at each boot. Normal app launches also use your selected wallpaper:
-Luma updates the launch splash through Homebrew Channel's root service after loading or saving your
-settings. Open Luma once after installing or updating so subsequent launches use your saved background.
+Astro updates the launch splash through Homebrew Channel's root service after loading or saving your
+settings. Open Astro once after installing or updating so subsequent launches use your saved background.
 LG Home's original files remain underneath, using the same approach as
 [Glasshouse Home](https://github.com/rorygallagher2024/glasshouse/blob/main/server/lib/home-takeover.js).
 
@@ -213,18 +213,18 @@ LG Home's original files remain underneath, using the same approach as
 
 ### Autostart Method
 
-Open Luma 25 seconds after a full cold boot. Run in the TV's root SSH shell:
+Open Astro 25 seconds after a full cold boot. Run in the TV's root SSH shell:
 
 ```sh
-sh /media/developer/apps/usr/palm/applications/com.ecklf.luma/autostart.sh enable
+sh /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro/autostart.sh enable
 ```
 
-Use this when takeover is disabled. It launches Luma as a regular app and does not remap the Home button.
+Use this when takeover is disabled. It launches Astro as a regular app and does not remap the Home button.
 
-Disable before enabling takeover or uninstalling Luma:
+Disable before enabling takeover or uninstalling Astro:
 
 ```sh
-sh /media/developer/apps/usr/palm/applications/com.ecklf.luma/autostart.sh disable
+sh /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro/autostart.sh disable
 ```
 
 ### LG Input Hook Method
@@ -232,40 +232,40 @@ sh /media/developer/apps/usr/palm/applications/com.ecklf.luma/autostart.sh disab
 You can use [LG Input Hook](https://repo.webosbrew.org/apps/org.webosbrew.inputhook/), configure an Execute action with this one-line command:
 
 ```sh
-/usr/bin/luna-send -n 1 -w 5000 luna://com.webos.service.applicationmanager/launch '{"id":"com.ecklf.luma"}'
+/usr/bin/luna-send -n 1 -w 5000 luna://com.webos.service.applicationmanager/launch '{"id":"com.danielcanoh22.astro"}'
 ```
 
 Test on a spare button first. Disable the mapping in Input Hook to restore normal Home behavior.
 
 ### TV Input Method
 
-Turn on **Settings → System → Show as TV input** to list Luma in LG's input picker. Luma runs
-`luma-helper tv-input` through Homebrew Channel's root service; over SSH,
-`/media/developer/apps/usr/palm/applications/com.ecklf.luma/luma-helper tv-input enable` does the
-same (use `/media/cryptofs/apps/usr/palm/applications/com.ecklf.luma` for Homebrew installs). The helper
-verifies that LG actually lists Luma, and undoes registration if it does not. Use `status` to
+Turn on **Settings → System → Show as TV input** to list Astro in LG's input picker. Astro runs
+`astro-helper tv-input` through Homebrew Channel's root service; over SSH,
+`/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro/astro-helper tv-input enable` does the
+same (use `/media/cryptofs/apps/usr/palm/applications/com.danielcanoh22.astro` for Homebrew installs). The helper
+verifies that LG actually lists Astro, and undoes registration if it does not. Use `status` to
 inspect it or `disable` to remove it. This is separate from takeover and never changes Home Auto
 Launch, HDMI selection, or the power-on preference automatically.
 
-Select Luma from LG's input picker and use the TV's last-input startup option where available.
-On an LG 49UN71006LB (webOS 5.6.2), Luma returned after standby and a full software reboot, with
-takeover and Home Auto Launch disabled. On an LG OLED77C34LA (webOS 26), Luma came back at
+Select Astro from LG's input picker and use the TV's last-input startup option where available.
+On an LG 49UN71006LB (webOS 5.6.2), Astro returned after standby and a full software reboot, with
+takeover and Home Auto Launch disabled. On an LG OLED77C34LA (webOS 26), Astro came back at
 power-on only when it was the last active input before power-off. Other firmware remains untested;
 registration alone does not prove startup support. With takeover on, pressing Home before the
 takeover applies at cold boot still opens LG Home. Select HDMI or Live TV before removing the entry.
 On an LG NANO80ASA (webOS 25), LG's input picker does not show the registered input, but opening
-`com.ecklf.luma` makes it the last input. Once registered, Luma lists a **Luma** card in its own
-inputs row for that: select it before turning the TV off to power on into Luma.
+`com.danielcanoh22.astro` makes it the last input. Once registered, Astro lists an **Astro** card in its own
+inputs row for that: select it before turning the TV off to power on into Astro.
 
 With takeover on and the input registered, opening Home (the Home key, or Home starting in front)
-also opens Luma's input copy, so pressing Home before turning the TV off is enough. A Home that
-the TV starts behind another input or app, for example after powering on into Luma's input, leaves
+also opens Astro's input copy, so pressing Home before turning the TV off is enough. A Home that
+the TV starts behind another input or app, for example after powering on into Astro's input, leaves
 the screen alone. When that copy is
 already running the switch is seamless; when it has to start there is one short flicker. Both
 copies share the same preferences: each reloads them when it comes back to the screen, and the
 input copy reopens on its Home page with Recent apps closed. Home switches only when it is opened,
 at most once every 5 seconds, and after three quick switches in a row it stops until you press
-Home in Luma, so an input copy that keeps exiting does not keep reopening. The Luma card opens the
+Home in Astro, so an input copy that keeps exiting does not keep reopening. The Astro card opens the
 same full input copy.
 Thanks to phranklins in [#79](https://github.com/ecklf/lg-luma/issues/79#issuecomment-6416333882)
 and [Hearth](https://github.com/rudra-avatar/Hearth/blob/b9f0a1c8240303b7cd52fdc820e2f840ac6d3a0e/src/lib/tvinput.ts)
@@ -281,7 +281,7 @@ its 16:9 crop before choosing **Save to TV**.
 
 The upload link works only while its TV dialog is open and focused.
 
-Enable **Rotation** beside **Upload** to cycle through backgrounds on each Luma restart and every
+Enable **Rotation** beside **Upload** to cycle through backgrounds on each Astro restart and every
 15 minutes with a slow cross-fade. Rotation is off by default and leaves your manually chosen
 LG splash unchanged.
 
@@ -298,7 +298,7 @@ Press **Back** on Home, or hold **Back** for 0.6 seconds from any page, to open 
 - **Up** closes the selected app and removes its card.
 - **Back** dismisses the switcher and restores the previous page and focus.
 
-These shortcuts work while Luma is focused. From another app, return to Luma first.
+These shortcuts work while Astro is focused. From another app, return to Astro first.
 
 ### Shortcut tiles
 
@@ -326,23 +326,24 @@ checksum-pinned SDL-webOS library; both downloads are cached under `.build/`.
 Output:
 
 ```text
-dist/com.ecklf.luma_2.21.3_arm.ipk
+dist/com.danielcanoh22.astro_2.21.3_arm.ipk
 dist/sha256sums
 dist/repo.json
 dist/app-icon-large.png
 ```
 
 Open [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop), connect to the TV's
-IP on port **22** as **root**, and install the IPK. Open **Luma** from the TV menu. Homebrew
+IP on port **22** as **root**, and install the IPK. Open **Astro** from the TV menu. Homebrew
 Channel must be elevated; on webOS 26 use **0.8.0-rc1 or newer** for its `lunabus.query` mapping.
 
-The native package uses **`com.ecklf.luma`** and installs separately from the old
-`com.luma.launcher` web app and the former `com.luma.launcher.native` / `com.luma.native` prototypes. Native preferences
+The native package uses **`com.danielcanoh22.astro`** and installs separately from the previous
+native app ID `com.ecklf.luma`, the old `com.luma.launcher` web app and the former
+`com.luma.launcher.native` / `com.luma.native` prototypes. Native preferences
 are local JSON files and are separate for each installation; browser preferences are not migrated.
 Homebrew Channel treats this ID as a separate app rather than an update to the old launcher.
 
 Wait for installation success; Ctrl+C closes an ongoing subscription. Fully close and reopen
-Luma after updating. The [development guide](development.md#tv-startup-diagnostics) has a jailed
+Astro after updating. The [development guide](development.md#tv-startup-diagnostics) has a jailed
 launch command that exposes errors hidden by the normal menu launch.
 
 ## Preview
@@ -370,5 +371,5 @@ See [Releases](development.md#releases) for the workflow and repository setup.
 
 ## License
 
-Luma is licensed under MIT.\
-Luma is not affiliated with LG, Apple, or any other brands shown in its UI.
+Astro is licensed under MIT.\
+Astro is not affiliated with LG, Apple, or any other brands shown in its UI.

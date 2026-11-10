@@ -406,7 +406,7 @@ fn companion(
                 8.5 * scale,
                 8.5 * scale,
             );
-            out.icon(assets, "luma-mark", mark, WHITE);
+            out.icon(assets, "astro-mark", mark, WHITE);
             out.text(
                 language.t("wallpaperUploadBrowser"),
                 Rect::new(604., 670., 712., 32.),

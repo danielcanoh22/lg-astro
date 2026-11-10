@@ -18,7 +18,7 @@ function run({
   homeId = 'com.webos.app.home',
   pretty = false,
 } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luma-installer-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astro-installer-'));
   const app = `${dir}/app`;
   const state = `${dir}/update`;
   const homeState = `${dir}/home`;
@@ -27,9 +27,12 @@ function run({
   const write = (file, contents) => fs.writeFileSync(file, contents, { mode: 0o755 });
   write(`${dir}/package.ipk`, 'test package');
   // tools/package.mjs and the native helper pretty-print; the saved stock manifest has its own
-  // "version" and "id", which must not be mistaken for Luma's version or the Home target.
+  // "version" and "id", which must not be mistaken for Astro's version or the Home target.
   const json = (value) => (pretty ? `${JSON.stringify(value, null, 2)}\n` : JSON.stringify(value));
-  write(`${app}/appinfo.json`, json({ id: 'com.ecklf.luma', version: '9.0.0', type: 'native' }));
+  write(
+    `${app}/appinfo.json`,
+    json({ id: 'com.danielcanoh22.astro', version: '9.0.0', type: 'native' }),
+  );
   write(
     `${homeState}/state.json`,
     json({ enabled: home, method, homeId, appDir: app, stock: { id: 'x', version: '1.0.0' } }),
@@ -56,11 +59,11 @@ esac
     `#!/bin/sh\necho restore >> '${dir}/calls'\nexit ${recover ? 0 : 1}\n`,
   );
   const script = source
-    .replaceAll('/var/lib/luma-update', state)
-    .replaceAll('/var/lib/luma-home', homeState)
-    .replaceAll('/media/developer/apps/usr/palm/applications/com.ecklf.luma', app)
+    .replaceAll('/var/lib/astro-update', state)
+    .replaceAll('/var/lib/astro-home', homeState)
+    .replaceAll('/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro', app)
     .replaceAll('/proc/mounts', `${dir}/mounts`)
-    .replaceAll('/var/run/luma-home', `${dir}/marker`);
+    .replaceAll('/var/run/astro-home', `${dir}/marker`);
   write(`${dir}/installer.sh`, script);
   const attempt = 'a'.repeat(32);
   const sha = checksum ? createHash('sha256').update('test package').digest('hex') : '0'.repeat(64);
@@ -88,7 +91,7 @@ test('normal app update verifies the package and reports completion after launch
   const result = run();
   assert.equal(result.exit, 0);
   assert.equal(result.status.state, 'success');
-  assert.match(result.calls, /launch.*com.ecklf.luma/);
+  assert.match(result.calls, /launch.*com.danielcanoh22.astro/);
 });
 test('checksum and install failures publish retryable failure, never launch', () => {
   for (const options of [{ checksum: false }, { install: false }]) {
