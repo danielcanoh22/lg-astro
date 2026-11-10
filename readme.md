@@ -254,7 +254,7 @@ power-on only when it was the last active input before power-off. Other firmware
 registration alone does not prove startup support. With takeover on, pressing Home before the
 takeover applies at cold boot still opens LG Home. Select HDMI or Live TV before removing the entry.
 On an LG NANO80ASA (webOS 25), LG's input picker does not show the registered input, but opening
-`com.danielcanoh22.astro` makes it the last input. Once registered, Astro lists a **Astro** card in its own
+`com.danielcanoh22.astro` makes it the last input. Once registered, Astro lists an **Astro** card in its own
 inputs row for that: select it before turning the TV off to power on into Astro.
 
 With takeover on and the input registered, opening Home (the Home key, or Home starting in front)
