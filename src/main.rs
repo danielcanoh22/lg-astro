@@ -65,6 +65,8 @@ struct Options {
     webos_home: bool,
     /// Opened by Home for Luma's TV input: run instead of redirecting to Home.
     launched_by_home: bool,
+    /// Started by sam in the background (`preload`): stay off screen until a relaunch.
+    preloaded: bool,
     assets: Option<PathBuf>,
     preferences: Option<PathBuf>,
     screenshot: Option<PathBuf>,
@@ -110,6 +112,7 @@ impl Options {
                         .is_some_and(platform::is_home_id)
                     || platform::runs_as_lg_home();
                 result.launched_by_home = platform::launched_by_home(&metadata);
+                result.preloaded = platform::preloaded(&metadata);
             }
             eprintln!("Luma webOS launch parameters accepted");
         }
@@ -701,7 +704,8 @@ fn run() -> Result<(), String> {
     );
     let mut preferences_stamp = storage::stamp(&preferences_path);
     let mut state = State::new(initial_preferences);
-    if webos && options.webos_home {
+    // A preloaded Home is behind another app by definition: only its relaunch switches.
+    if webos && options.webos_home && !options.preloaded {
         state.home_opened(true);
     }
     if let Some(version) = &options.test_update_version {
@@ -970,7 +974,15 @@ fn run() -> Result<(), String> {
         };
     // Whether a staged Home's relaunch reached the front; see platform::ForegroundCheck.
     let mut foreground = platform::ForegroundCheck::default();
-    let mut focused = true;
+    // A Home that sam preloaded draws nothing until its relaunch: a first frame would map its
+    // surface, and webOS then gives it the screen over the input or app in front. Without a
+    // lifecycle registration no relaunch would arrive, so it shows as before.
+    let mut preloaded =
+        webos && options.webos_home && options.preloaded && lifecycle_event.is_some();
+    if preloaded {
+        eprintln!("Luma Home: preloaded; staying off screen until a relaunch");
+    }
+    let mut focused = !preloaded;
     let mut press: Option<Press> = None;
     let mut back_button = BackButton::default();
     let initial_nav = view::navigation(&assets, state.preferences.language);
@@ -979,7 +991,7 @@ fn run() -> Result<(), String> {
     let mut last_frame = Instant::now();
     let mut last_minute = None;
     let mut frame = 0u64;
-    let mut visible = true;
+    let mut visible = !preloaded;
     let mut running = true;
     let mut queued_event = None;
     let mut text_active = false;
@@ -987,8 +999,10 @@ fn run() -> Result<(), String> {
     let mut startup_cycle_pending = state.preferences.wallpaper_cycle;
     let mut wallpapers_scanned = false;
     let launched = Instant::now();
-    // When this start as Home counts as healthy (platform::record_home_healthy).
-    let mut healthy_at: Option<Instant> = None;
+    // When this start as Home counts as healthy (platform::record_home_healthy). A preloaded
+    // Home presents no frame until its relaunch, so staying alive counts.
+    let mut healthy_at: Option<Instant> =
+        preloaded.then(|| Instant::now() + platform::HOME_HEALTHY_AFTER);
     // When to ask for the inventory again after a failed load (State::inventory_failed).
     let mut inventory_retry: Option<Instant> = None;
     let mut input_refresh = input_refresh::Refresh::default();
@@ -1350,6 +1364,7 @@ fn run() -> Result<(), String> {
                 Event::Quit { .. } => running = false,
                 Event::User { type_, code, .. } if Some(type_) == lifecycle_event => {
                     if code == 1 {
+                        preloaded = false;
                         press = None;
                         back_button.cancel();
                         reload_changed_preferences(
@@ -1416,7 +1431,10 @@ fn run() -> Result<(), String> {
                         press = None;
                         back_button.cancel();
                     }
+                    // SDL emits Shown for the new window itself: a preloaded Home ignores it.
+                    WindowEvent::Shown | WindowEvent::Restored if preloaded => {}
                     WindowEvent::Shown | WindowEvent::Restored | WindowEvent::FocusGained => {
+                        preloaded = false;
                         let returned = !visible;
                         visible = true;
                         // Shown and Restored can come from SDL itself; only focus confirms.

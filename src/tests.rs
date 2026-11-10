@@ -315,6 +315,24 @@ fn home_stays_when_lumas_input_is_not_registered() {
 }
 
 #[test]
+fn preload_launch_metadata_is_recognized_and_ordinary_launches_are_not() {
+    use crate::platform::preloaded;
+    // As sam started Home in the background on a webOS 25 TV.
+    assert!(preloaded(&json!({
+        "@system_native_app": true,
+        "preload": "full",
+        "nid": "com.webos.app.home"
+    })));
+    assert!(preloaded(&json!({"preload": "partial"})));
+    assert!(preloaded(&json!({"preload": true})));
+    assert!(!preloaded(
+        &json!({"@system_native_app": true, "nid": "com.ecklf.luma"})
+    ));
+    assert!(!preloaded(&json!({"preload": ""})));
+    assert!(!preloaded(&json!({"preload": false})));
+}
+
+#[test]
 fn only_lumas_own_launch_carries_the_home_parameter_and_both_metadata_shapes_are_read() {
     use crate::platform::{LAUNCHED_BY_HOME, launch_payload, launched_by_home};
     assert_eq!(
