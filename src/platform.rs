@@ -30,6 +30,28 @@ pub(crate) fn launch_payload(id: &str) -> Value {
     }
 }
 
+/// Opens `com.ecklf.luma` for its TV input. With `if_home_in_front` it first checks that Home is
+/// the foreground app, so a Home the system started behind another input or app never takes the
+/// screen; if the check fails, it does not switch.
+fn select_luma_input(if_home_in_front: bool) -> Result<(), String> {
+    if if_home_in_front {
+        let reply = call(
+            "luna://com.webos.applicationManager/getForegroundAppInfo",
+            json!({}),
+        )?;
+        let front = reply["appId"].as_str().unwrap_or_default();
+        if !is_home_id(front) {
+            eprintln!("Luma TV input: {front} is in front; Home stays behind it");
+            return Ok(());
+        }
+    }
+    call(
+        "luna://com.webos.applicationManager/launch",
+        launch_payload(APP_ID),
+    )
+    .map(|_| ())
+}
+
 /// The EIM input ID LG gives Luma once `luma-helper tv-input enable` registers it.
 const LUMA_INPUT: &str = "MVPD_IP-com.ecklf.luma";
 pub const HOME_ID: &str = "com.webos.app.home";
@@ -200,8 +222,11 @@ pub enum Request {
     SyncSplash(String),
     /// Read (`None`) or change Luma's TV input registration.
     TvInput(Option<bool>),
-    /// Open `com.ecklf.luma` for its TV input, without the launch notice.
-    SelectLumaInput,
+    /// Open `com.ecklf.luma` for its TV input, without the launch notice; with
+    /// `if_home_in_front`, only while Home is the foreground app.
+    SelectLumaInput {
+        if_home_in_front: bool,
+    },
     Recent {
         generation: u64,
         command: crate::recents::Command,
@@ -370,15 +395,13 @@ impl Platform {
                     } else {
                         Ok(())
                     }),
-                    Request::SelectLumaInput => Response::LumaInputSelected(if webos {
-                        call(
-                            "luna://com.webos.applicationManager/launch",
-                            launch_payload(APP_ID),
-                        )
-                        .map(|_| ())
-                    } else {
-                        Ok(())
-                    }),
+                    Request::SelectLumaInput { if_home_in_front } => {
+                        Response::LumaInputSelected(if webos {
+                            select_luma_input(if_home_in_front)
+                        } else {
+                            Ok(())
+                        })
+                    }
                     Request::TvInput(request) => Response::TvInput {
                         request,
                         result: if webos {

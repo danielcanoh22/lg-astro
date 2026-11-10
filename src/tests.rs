@@ -180,13 +180,14 @@ fn with_luma_input(state: &mut State) {
 fn home_switches_to_lumas_input_once_per_open_and_never_twice_within_the_interval() {
     use crate::state::{LUMA_INPUT_INTERVAL, LumaInput};
     use std::time::{Duration, Instant};
+    let relaunch = Some(Effect::SelectLumaInput {
+        if_home_in_front: false,
+    });
     let now = Instant::now();
     let mut state = ready();
-    // A start waits for the first inventory that lists Luma's input.
-    state.home_opened(true);
-    assert_eq!(state.luma_input_due(now), None);
     with_luma_input(&mut state);
-    assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+    state.home_opened(false);
+    assert_eq!(state.luma_input_due(now), relaunch);
     assert_eq!(state.luma_input, LumaInput::Idle);
     assert_eq!(state.luma_input_due(now), None);
     // A Home key relaunch within the interval does not switch again.
@@ -198,18 +199,54 @@ fn home_switches_to_lumas_input_once_per_open_and_never_twice_within_the_interva
     let later = now + LUMA_INPUT_INTERVAL;
     assert_eq!(state.luma_input_due(later), None);
     state.home_opened(false);
-    assert_eq!(state.luma_input_due(later), Some(Effect::SelectLumaInput));
+    assert_eq!(state.luma_input_due(later), relaunch);
+}
+
+#[test]
+fn a_home_start_switches_only_if_home_is_in_front_and_leaves_the_relaunch_limits_alone() {
+    use crate::state::LumaInput;
+    let now = std::time::Instant::now();
+    let start = Some(Effect::SelectLumaInput {
+        if_home_in_front: true,
+    });
+    let mut state = ready();
+    // A start waits for the first inventory that lists Luma's input.
+    state.home_opened(true);
+    assert_eq!(state.luma_input_due(now), None);
+    with_luma_input(&mut state);
+    assert_eq!(state.luma_input, LumaInput::Started);
+    assert_eq!(state.luma_input_due(now), start);
+    assert_eq!(state.luma_input_due(now), None);
+    assert_eq!(state.luma_input_switched, None);
+    assert_eq!(state.luma_input_streak, 0);
+    // The Home key right after a start still switches, without the foreground check.
+    state.home_key();
+    assert_eq!(
+        state.luma_input_due(now),
+        Some(Effect::SelectLumaInput {
+            if_home_in_front: false,
+        })
+    );
+    // Hidden after its inventory but before the switch: a start behind another app stays.
+    let mut hidden = ready();
+    hidden.home_opened(true);
+    with_luma_input(&mut hidden);
+    hidden.home_hidden();
+    assert_eq!(hidden.luma_input_due(now), None);
 }
 
 #[test]
 fn home_stops_after_three_quick_switches_until_the_home_key_and_settles_after_a_pause() {
     use crate::state::{LUMA_INPUT_INTERVAL, LUMA_INPUT_LIMIT, LUMA_INPUT_SETTLE};
+    let relaunch = Some(Effect::SelectLumaInput {
+        if_home_in_front: false,
+    });
     let mut now = std::time::Instant::now();
     let mut state = ready();
     with_luma_input(&mut state);
     for _ in 0..LUMA_INPUT_LIMIT {
         state.home_opened(false);
-        assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+        assert_eq!(state.luma_input_due(now), relaunch);
         now += LUMA_INPUT_INTERVAL;
     }
     // The input copy keeps exiting and SAM keeps relaunching Home: stop.
@@ -217,11 +254,11 @@ fn home_stops_after_three_quick_switches_until_the_home_key_and_settles_after_a_
     assert_eq!(state.luma_input_due(now), None);
     // The Home key in Home is user input and starts a new streak.
     state.home_key();
-    assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+    assert_eq!(state.luma_input_due(now), relaunch);
     // After a quiet pause, Home switches again without the key.
     now += LUMA_INPUT_SETTLE;
     state.home_opened(false);
-    assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+    assert_eq!(state.luma_input_due(now), relaunch);
     assert_eq!(state.luma_input_streak, 1);
 }
 
@@ -235,7 +272,12 @@ fn a_home_start_waits_past_a_failed_input_read_and_a_hidden_start_never_switches
     state.set_inventory(inventory, Some("inputs unavailable".into()));
     assert_eq!(state.luma_input, LumaInput::AfterInventory);
     with_luma_input(&mut state);
-    assert_eq!(state.luma_input_due(now), Some(Effect::SelectLumaInput));
+    assert_eq!(
+        state.luma_input_due(now),
+        Some(Effect::SelectLumaInput {
+            if_home_in_front: true,
+        })
+    );
 
     let mut hidden = ready();
     hidden.home_opened(true);
@@ -245,7 +287,12 @@ fn a_home_start_waits_past_a_failed_input_read_and_a_hidden_start_never_switches
     // Hiding does not cancel a relaunch switch that is already due.
     hidden.home_opened(false);
     hidden.home_hidden();
-    assert_eq!(hidden.luma_input_due(now), Some(Effect::SelectLumaInput));
+    assert_eq!(
+        hidden.luma_input_due(now),
+        Some(Effect::SelectLumaInput {
+            if_home_in_front: false,
+        })
+    );
 }
 
 #[test]

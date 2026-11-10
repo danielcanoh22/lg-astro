@@ -254,8 +254,10 @@ On an LG NANO80ASA (webOS 25), LG's input picker does not show the registered in
 `com.ecklf.luma` makes it the last input. Once registered, Luma lists a **Luma** card in its own
 inputs row for that: select it before turning the TV off to power on into Luma.
 
-With takeover on and the input registered, opening Home (the Home key, or Home starting) also
-opens Luma's input copy, so pressing Home before turning the TV off is enough. When that copy is
+With takeover on and the input registered, opening Home (the Home key, or Home starting in front)
+also opens Luma's input copy, so pressing Home before turning the TV off is enough. A Home that
+the TV starts behind another input or app, for example after powering on into Luma's input, leaves
+the screen alone. When that copy is
 already running the switch is seamless; when it has to start there is one short flicker. Both
 copies share the same preferences: each reloads them when it comes back to the screen, and the
 input copy reopens on its Home page with Recent apps closed. Home switches only when it is opened,

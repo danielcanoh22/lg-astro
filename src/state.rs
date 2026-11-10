@@ -53,6 +53,9 @@ pub enum LumaInput {
     Idle,
     /// Home started: switch once the first inventory shows whether the input is registered.
     AfterInventory,
+    /// Home started and its inventory arrived: switch only if Home is in front, because the
+    /// system also starts Home behind another input or app (after a power-on into Luma's input).
+    Started,
     /// Home was relaunched (Home key): switch now if the input is registered.
     Now,
 }
@@ -233,8 +236,11 @@ pub enum Effect {
     Weather(weather::Command),
     /// Read (`None`) or change Luma's TV input registration.
     TvInput(Option<bool>),
-    /// Open `com.ecklf.luma` from Home so the TV keeps Luma as its last input.
-    SelectLumaInput,
+    /// Open `com.ecklf.luma` from Home so the TV keeps Luma as its last input; with
+    /// `if_home_in_front`, only while Home is the foreground app.
+    SelectLumaInput {
+        if_home_in_front: bool,
+    },
     UpdateDownload(String),
 }
 
@@ -515,25 +521,39 @@ impl State {
     /// Home hidden before its first inventory (started behind another input) does not take the
     /// screen afterwards.
     pub fn home_hidden(&mut self) {
-        if self.luma_input == LumaInput::AfterInventory {
+        if matches!(
+            self.luma_input,
+            LumaInput::AfterInventory | LumaInput::Started
+        ) {
             self.luma_input = LumaInput::Idle;
         }
     }
 
     pub fn luma_input_due(&mut self, now: Instant) -> Option<Effect> {
-        if self.luma_input != LumaInput::Now {
-            return None;
-        }
+        let started = match self.luma_input {
+            LumaInput::Now => false,
+            LumaInput::Started => true,
+            LumaInput::Idle | LumaInput::AfterInventory => return None,
+        };
         self.luma_input = LumaInput::Idle;
         let registered = self
             .inventory
             .inputs
             .iter()
             .any(|input| input.id == crate::platform::APP_ID);
+        if !registered {
+            return None;
+        }
+        // A start happens once per Home process: the relaunch limits do not apply to it.
+        if started {
+            return Some(Effect::SelectLumaInput {
+                if_home_in_front: true,
+            });
+        }
         let recent = self
             .luma_input_switched
             .is_some_and(|at| now.duration_since(at) < LUMA_INPUT_INTERVAL);
-        if !registered || recent {
+        if recent {
             return None;
         }
         let streak = match self.luma_input_switched {
@@ -545,7 +565,9 @@ impl State {
         }
         self.luma_input_streak = streak;
         self.luma_input_switched = Some(now);
-        Some(Effect::SelectLumaInput)
+        Some(Effect::SelectLumaInput {
+            if_home_in_front: false,
+        })
     }
 
     /// Preferences the other Luma copy saved while this one was in the background.
@@ -754,7 +776,7 @@ impl State {
         }
         // A failed input read leaves the inputs unknown: wait for one that lists them.
         if self.luma_input == LumaInput::AfterInventory && inputs_read {
-            self.luma_input = LumaInput::Now;
+            self.luma_input = LumaInput::Started;
         }
         self.loading = false;
         self.error = None;
