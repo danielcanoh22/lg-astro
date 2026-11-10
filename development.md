@@ -1083,7 +1083,10 @@ package declares the required `supportGIP`. With the input registered, the Home 
 lifecycle relaunch or Home key (`State::home_opened`/`luma_input_due`,
 at most once per `LUMA_INPUT_INTERVAL` and `LUMA_INPUT_LIMIT` times in a row within
 `LUMA_INPUT_SETTLE` until the Home key is pressed in Home), adding the launch parameter
-`lumaFromHome` so that copy skips `redirect_to_home`; the Luma input card sends it too. Both copies reload `preferences.json` when it changed since they last
+`lumaFromHome` so that copy skips `redirect_to_home`; the Luma input card sends it too. When sam
+preloads Home (argv[1] `"preload": "full"`, seen about 45 s after the boot takeover stops LG's
+Home), the registered Home draws no frame and ignores SDL's own Shown until its first relaunch,
+so it never takes the screen from the input or app in front; staying alive counts as healthy. Both copies reload `preferences.json` when it changed since they last
 read it (`reload_changed_preferences`, on relaunch or when the window is shown again), and the app
 copy returns to its Home page with recents closed when shown again.
 

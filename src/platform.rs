@@ -22,6 +22,16 @@ pub fn launched_by_home(metadata: &Value) -> bool {
     metadata[LAUNCHED_BY_HOME] == true || metadata["params"][LAUNCHED_BY_HOME] == true
 }
 
+/// Whether webOS preloaded this process (argv[1] `"preload": "full"` or `"partial"`): sam starts
+/// Home in the background so the Home key answers at once, and only a relaunch brings it forward.
+pub fn preloaded(metadata: &Value) -> bool {
+    match &metadata["preload"] {
+        Value::String(mode) => !mode.is_empty(),
+        Value::Bool(preload) => *preload,
+        _ => false,
+    }
+}
+
 pub(crate) fn launch_payload(id: &str) -> Value {
     if id == APP_ID {
         json!({"id": id, "params": {LAUNCHED_BY_HOME: true}})
