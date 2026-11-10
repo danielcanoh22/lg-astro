@@ -1079,7 +1079,8 @@ support from #142. Manifest takeover remains limited to webOS
 10/11. The optional `tv-input` subcommand implements the #124 registration/verification contract;
 **Settings → System → Show as TV input** runs it through Homebrew Channel's root service, and the
 package declares the required `supportGIP`. With the input registered, the Home copy opens
-`com.ecklf.luma` on start and on each lifecycle relaunch (`State::home_opened`/`luma_input_due`,
+`com.ecklf.luma` on start, only if `getForegroundAppInfo` shows Home in front, and on each
+lifecycle relaunch or Home key (`State::home_opened`/`luma_input_due`,
 at most once per `LUMA_INPUT_INTERVAL` and `LUMA_INPUT_LIMIT` times in a row within
 `LUMA_INPUT_SETTLE` until the Home key is pressed in Home), adding the launch parameter
 `lumaFromHome` so that copy skips `redirect_to_home`; the Luma input card sends it too. Both copies reload `preferences.json` when it changed since they last

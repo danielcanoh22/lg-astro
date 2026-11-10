@@ -385,7 +385,9 @@ fn effects(
             }
             Effect::Weather(command) => weather.send(command),
             Effect::TvInput(request) => platform.send(Request::TvInput(request)),
-            Effect::SelectLumaInput => platform.send(Request::SelectLumaInput),
+            Effect::SelectLumaInput { if_home_in_front } => {
+                platform.send(Request::SelectLumaInput { if_home_in_front })
+            }
         }
     }
     true
