@@ -37,6 +37,26 @@ pub fn unix_now() -> u64 {
         .as_secs()
 }
 
+/// Least time between two automatic switches to Luma's TV input, so an app copy that keeps
+/// failing cannot start a relaunch loop with Home.
+pub const LUMA_INPUT_INTERVAL: Duration = Duration::from_secs(5);
+/// Automatic switches in a row, each within `LUMA_INPUT_SETTLE` of the previous one, before Home
+/// stops switching until the Home key is pressed in Home: an input copy that keeps exiting
+/// cannot keep reopening.
+pub const LUMA_INPUT_LIMIT: u32 = 3;
+pub const LUMA_INPUT_SETTLE: Duration = Duration::from_secs(30);
+
+/// When Home switches to Luma's TV input (see `State::luma_input_due`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum LumaInput {
+    #[default]
+    Idle,
+    /// Home started: switch once the first inventory shows whether the input is registered.
+    AfterInventory,
+    /// Home was relaunched (Home key): switch now if the input is registered.
+    Now,
+}
+
 /// Whether LG lists Luma as a TV input. Read once when the System section first shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum TvInput {
@@ -213,6 +233,8 @@ pub enum Effect {
     Weather(weather::Command),
     /// Read (`None`) or change Luma's TV input registration.
     TvInput(Option<bool>),
+    /// Open `com.ecklf.luma` from Home so the TV keeps Luma as its last input.
+    SelectLumaInput,
     UpdateDownload(String),
 }
 
@@ -265,6 +287,9 @@ pub struct State {
     pub input_name: String,
     pub recents: crate::recents::Recents,
     pub tv_input: TvInput,
+    pub luma_input: LumaInput,
+    pub luma_input_switched: Option<Instant>,
+    pub luma_input_streak: u32,
 }
 
 impl State {
@@ -309,6 +334,9 @@ impl State {
             input_name: String::new(),
             recents: crate::recents::Recents::default(),
             tv_input: TvInput::Unknown,
+            luma_input: LumaInput::Idle,
+            luma_input_switched: None,
+            luma_input_streak: 0,
         }
     }
 
@@ -465,6 +493,75 @@ impl State {
         self.pressed = None;
         self.open(0);
         pending
+    }
+
+    /// Home was started (`started`) or relaunched by the Home key. With Luma registered as a TV
+    /// input, Home then opens `com.ecklf.luma`, so the TV keeps Luma as its last input. Only
+    /// these events arm it: focus coming back after the app copy exited never does.
+    pub fn home_opened(&mut self, started: bool) {
+        self.luma_input = if started {
+            LumaInput::AfterInventory
+        } else {
+            LumaInput::Now
+        };
+    }
+
+    /// The Home key pressed while Home is in front: user input, so it also ends a stopped streak.
+    pub fn home_key(&mut self) {
+        self.luma_input_streak = 0;
+        self.home_opened(false);
+    }
+
+    /// Home hidden before its first inventory (started behind another input) does not take the
+    /// screen afterwards.
+    pub fn home_hidden(&mut self) {
+        if self.luma_input == LumaInput::AfterInventory {
+            self.luma_input = LumaInput::Idle;
+        }
+    }
+
+    pub fn luma_input_due(&mut self, now: Instant) -> Option<Effect> {
+        if self.luma_input != LumaInput::Now {
+            return None;
+        }
+        self.luma_input = LumaInput::Idle;
+        let registered = self
+            .inventory
+            .inputs
+            .iter()
+            .any(|input| input.id == crate::platform::APP_ID);
+        let recent = self
+            .luma_input_switched
+            .is_some_and(|at| now.duration_since(at) < LUMA_INPUT_INTERVAL);
+        if !registered || recent {
+            return None;
+        }
+        let streak = match self.luma_input_switched {
+            Some(at) if now.duration_since(at) < LUMA_INPUT_SETTLE => self.luma_input_streak + 1,
+            _ => 1,
+        };
+        if streak > LUMA_INPUT_LIMIT {
+            return None;
+        }
+        self.luma_input_streak = streak;
+        self.luma_input_switched = Some(now);
+        Some(Effect::SelectLumaInput)
+    }
+
+    /// Preferences the other Luma copy saved while this one was in the background.
+    pub fn reload_preferences(&mut self, preferences: Preferences) {
+        self.preferences = preferences;
+        self.dirty = true;
+    }
+
+    /// The app copy (`com.ecklf.luma`, not Home) shown again after it was hidden, for example
+    /// from the Luma input card: it starts on its Home page with recents closed, as Home's own
+    /// relaunch does. Home keeps its page, so Back from another app returns to where it was.
+    pub fn returned_to_foreground(&mut self, home: bool) -> Vec<Effect> {
+        if home {
+            return vec![];
+        }
+        self.return_home()
     }
 
     pub fn open(&mut self, index: usize) {
@@ -649,10 +746,15 @@ impl State {
     pub fn set_inventory(&mut self, next: Inventory, warning: Option<String>) {
         self.inventory.apps = next.apps;
         self.sync_custom_tiles();
+        let inputs_read = warning.is_none();
         if let Some(warning) = warning {
             self.notify(warning);
         } else {
             self.inventory.inputs = next.inputs;
+        }
+        // A failed input read leaves the inputs unknown: wait for one that lists them.
+        if self.luma_input == LumaInput::AfterInventory && inputs_read {
+            self.luma_input = LumaInput::Now;
         }
         self.loading = false;
         self.error = None;

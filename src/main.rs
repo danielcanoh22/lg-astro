@@ -63,6 +63,8 @@ use time::OffsetDateTime;
 #[derive(Default)]
 struct Options {
     webos_home: bool,
+    /// Opened by Home for Luma's TV input: run instead of redirecting to Home.
+    launched_by_home: bool,
     assets: Option<PathBuf>,
     preferences: Option<PathBuf>,
     screenshot: Option<PathBuf>,
@@ -107,6 +109,7 @@ impl Options {
                         .and_then(serde_json::Value::as_str)
                         .is_some_and(platform::is_home_id)
                     || platform::runs_as_lg_home();
+                result.launched_by_home = platform::launched_by_home(&metadata);
             }
             eprintln!("Luma webOS launch parameters accepted");
         }
@@ -290,6 +293,25 @@ impl BackButton {
     }
 }
 
+/// Re-reads preferences when the file changed since `stamp`: Home and the TV-input app can both
+/// be running, and each saves its changes to the same file. A file that cannot be read keeps the
+/// current preferences.
+fn reload_changed_preferences(
+    path: &std::path::Path,
+    stamp: &mut storage::Stamp,
+    state: &mut State,
+) {
+    let current = storage::stamp(path);
+    if current == *stamp {
+        return;
+    }
+    *stamp = current;
+    match storage::load(path) {
+        Ok(preferences) => state.reload_preferences(preferences),
+        Err(error) => eprintln!("{error}"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn effects(
     effects: Vec<Effect>,
@@ -363,6 +385,7 @@ fn effects(
             }
             Effect::Weather(command) => weather.send(command),
             Effect::TvInput(request) => platform.send(Request::TvInput(request)),
+            Effect::SelectLumaInput => platform.send(Request::SelectLumaInput),
         }
     }
     true
@@ -599,7 +622,7 @@ fn run() -> Result<(), String> {
         return Err("This desktop build cannot run on a TV. Build with --features webos.".into());
     }
     if webos {
-        if !options.webos_home && platform::redirect_to_home()? {
+        if !options.webos_home && !options.launched_by_home && platform::redirect_to_home()? {
             return Ok(());
         }
         // Before any window or GL work, so failures there count too: a Luma that keeps failing
@@ -674,7 +697,11 @@ fn run() -> Result<(), String> {
         !options.script.is_empty(),
         options.test_update_version.is_some(),
     );
+    let mut preferences_stamp = storage::stamp(&preferences_path);
     let mut state = State::new(initial_preferences);
+    if webos && options.webos_home {
+        state.home_opened(true);
+    }
     if let Some(version) = &options.test_update_version {
         eprintln!(
             "Luma update preview: simulated version {version}; public release check disabled"
@@ -986,6 +1013,21 @@ fn run() -> Result<(), String> {
             state.dirty = true;
         }
         state.tick();
+        if webos
+            && options.webos_home
+            && let Some(effect) = state.luma_input_due(Instant::now())
+        {
+            running &= effects(
+                vec![effect],
+                &mut state,
+                &platform,
+                &preferences_path,
+                &weather_service,
+                &wallpaper_service,
+                &webhook_service,
+                &updates,
+            );
+        }
         if let Some(effect) = state.tv_input_due() {
             running &= effects(
                 vec![effect],
@@ -1166,6 +1208,11 @@ fn run() -> Result<(), String> {
                         }
                     }
                 }
+                Response::LumaInputSelected(result) => {
+                    if let Err(error) = result {
+                        eprintln!("Luma TV input: {error}");
+                    }
+                }
                 Response::TvInput { request, result } => {
                     let pending = state.tv_input_response(request, result);
                     running &= effects(
@@ -1303,7 +1350,13 @@ fn run() -> Result<(), String> {
                     if code == 1 {
                         press = None;
                         back_button.cancel();
+                        reload_changed_preferences(
+                            &preferences_path,
+                            &mut preferences_stamp,
+                            &mut state,
+                        );
                         pending = state.return_home();
+                        state.home_opened(false);
                         // A staged Home must come forward itself. If it does not, its
                         // registration would leave the Home key dead: check below.
                         if end_registration.is_some() {
@@ -1340,6 +1393,7 @@ fn run() -> Result<(), String> {
                         focused = false;
                         press = None;
                         back_button.cancel();
+                        state.home_hidden();
                         if matches!(state.overlay, Some(Overlay::SystemKeyboard)) {
                             pending = state.finish_text_input();
                         }
@@ -1361,6 +1415,7 @@ fn run() -> Result<(), String> {
                         back_button.cancel();
                     }
                     WindowEvent::Shown | WindowEvent::Restored | WindowEvent::FocusGained => {
+                        let returned = !visible;
                         visible = true;
                         // Shown and Restored can come from SDL itself; only focus confirms.
                         if matches!(win_event, WindowEvent::FocusGained) {
@@ -1369,6 +1424,14 @@ fn run() -> Result<(), String> {
                         }
                         state.dirty = true;
                         if webos {
+                            if returned {
+                                reload_changed_preferences(
+                                    &preferences_path,
+                                    &mut preferences_stamp,
+                                    &mut state,
+                                );
+                                pending.extend(state.returned_to_foreground(options.webos_home));
+                            }
                             pending.push(Effect::Refresh);
                         }
                     }
@@ -1405,6 +1468,7 @@ fn run() -> Result<(), String> {
                                 press = None;
                                 back_button.cancel();
                                 pending = state.return_home();
+                                state.home_key();
                             }
                         }
                         _ if native_hold => {

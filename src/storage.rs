@@ -174,6 +174,15 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
     }
 }
 
+/// A preferences file's modification time and size, to notice a save by the other Luma copy
+/// (Home and the TV-input app share one file).
+pub type Stamp = Option<(std::time::SystemTime, u64)>;
+
+pub fn stamp(path: &Path) -> Stamp {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
 pub fn save(path: &Path, preferences: &Preferences) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(preferences)
         .map_err(|e| format!("Could not encode preferences: {e}"))?;
