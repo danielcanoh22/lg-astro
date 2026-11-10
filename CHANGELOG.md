@@ -1,5 +1,11 @@
 # lg-luma
 
+## 2.21.3
+
+### Patch Changes
+
+- 3c14086: Check for and install updates from the `danielcanoh22/lg-astro` releases, the project's new home.
+
 ## 2.21.2
 
 ### Patch Changes
