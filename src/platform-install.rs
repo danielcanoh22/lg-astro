@@ -32,8 +32,7 @@ fn same_executable(a: &Path, b: &Path) -> bool {
 }
 
 fn owns_executable(directory: &Path, executable: &Path) -> bool {
-    if !directory.join("assets").is_dir()
-        || !same_executable(&directory.join("astro"), executable)
+    if !directory.join("assets").is_dir() || !same_executable(&directory.join("astro"), executable)
     {
         return false;
     }
