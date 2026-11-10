@@ -273,10 +273,10 @@ use std::{
 
 /// Updates come from this fork's own releases, never from the upstream project.
 pub const FEED: &str =
-    "https://github.com/danielcanoh22/lg-luma/releases/latest/download/repo.json";
+    "https://github.com/danielcanoh22/lg-astro/releases/latest/download/repo.json";
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 /// Only IPKs from this project's own release assets are installed.
-const RELEASES: &str = "https://github.com/danielcanoh22/lg-luma/releases/download/";
+const RELEASES: &str = "https://github.com/danielcanoh22/lg-astro/releases/download/";
 /// A fresh directory per attempt; never truncate a predictable path in shared /tmp.
 fn download_directory() -> Result<(String, PathBuf), String> {
     use ring::rand::SecureRandom;
@@ -587,7 +587,7 @@ mod tests {
         }}]})
     }
 
-    const URL: &str = "https://github.com/danielcanoh22/lg-luma/releases/download/v9.0.0/com.ecklf.luma_9.0.0_arm.ipk";
+    const URL: &str = "https://github.com/danielcanoh22/lg-astro/releases/download/v9.0.0/com.ecklf.luma_9.0.0_arm.ipk";
 
     #[test]
     fn attempt_paths_are_private_unique_and_results_are_terminal_only_when_finished() {
@@ -670,14 +670,21 @@ mod tests {
             ),
             feed(
                 "9.0.0",
-                "https://github.com/danielcanoh22/lg-luma/releases/download/../x_arm.ipk",
+                "https://github.com/danielcanoh22/lg-astro/releases/download/../x_arm.ipk",
                 &sha,
                 1000,
             ),
-            // Upstream releases must never replace this fork's build.
+            // Upstream releases must never replace this build.
             feed(
                 "9.0.0",
                 "https://github.com/ecklf/lg-luma/releases/download/v9.0.0/com.ecklf.luma_9.0.0_arm.ipk",
+                &sha,
+                1000,
+            ),
+            // Nor the former fork's, once updates come from lg-astro.
+            feed(
+                "9.0.0",
+                "https://github.com/danielcanoh22/lg-luma/releases/download/v9.0.0/com.ecklf.luma_9.0.0_arm.ipk",
                 &sha,
                 1000,
             ),

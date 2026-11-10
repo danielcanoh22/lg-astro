@@ -2,6 +2,9 @@
 
 A native launcher for rooted LG webOS TVs, inspired by Apple TV.
 
+Based on [lg-luma](https://github.com/ecklf/lg-luma) by Florentin Eckl and the Luma contributors,
+used under the MIT license (see [`license`](license)).
+
 https://github.com/user-attachments/assets/2156d640-b8fa-4ea4-a02c-0db4c93bcc5a
 
 <details>
@@ -115,7 +118,7 @@ https://github.com/user-attachments/assets/2156d640-b8fa-4ea4-a02c-0db4c93bcc5a
 ### Homebrew Channel
 
 ```text
-https://github.com/danielcanoh22/lg-luma/releases/latest/download/repo.json
+https://github.com/danielcanoh22/lg-astro/releases/latest/download/repo.json
 ```
 
 ### SSH
