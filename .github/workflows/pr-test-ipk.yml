@@ -13,13 +13,16 @@ concurrency:
 jobs:
   build:
     name: Build PR test IPK
+    # This job runs PR code from a trusted-event workflow, so it only serves branches of
+    # this repository. Fork PRs are built by ci.yml under the pull_request event instead.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
     steps:
-      # The base-branch workflow is trusted; the PR code is not. Keep this
-      # job read-only, without secrets, persisted credentials, or shared build caches.
+      # Keep this job read-only, without secrets, persisted credentials, or shared build
+      # caches, even though only this repository's own branches reach it.
       - uses: actions/checkout@v7
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -64,7 +67,7 @@ jobs:
   comment:
     name: Update test IPK comment
     needs: build
-    if: always()
+    if: always() && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
