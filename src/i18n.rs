@@ -39,10 +39,6 @@ impl Language {
             .position(|language| *language == self)
             .unwrap()
     }
-    /// The language code Open-Meteo geocoding searches with.
-    pub fn geocoding_code(self) -> &'static str {
-        self.code()
-    }
     pub fn t(self, key: &str) -> &str {
         messages()
             .get(key)
