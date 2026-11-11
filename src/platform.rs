@@ -669,7 +669,6 @@ fn tv_input(request: Option<bool>) -> Result<bool, String> {
 /// reliable cross-version removability flag.
 pub fn can_uninstall(id: &str) -> bool {
     valid_app_id(id)
-        && !id.starts_with(crate::model::CUSTOM_TILE_PREFIX)
         && !crate::scroll_preview::is_placeholder(id)
         && !["com.webos.", "com.palm.", "com.lge."]
             .iter()

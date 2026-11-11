@@ -18,10 +18,9 @@ dist/                        Generated ARM IPK, checksum and Homebrew feed
 
 The launcher is rendered natively, without React, JSX, Vite or a browser runtime. Node/pnpm
 remain build/deployment tools for Sharp, the webOS CLI and formatting/linting. The installed app
-is the Rust executable `astro`, with app ID `com.danielcanoh22.astro`. The companion pages in
-`assets/wallpaper-upload/` and `assets/tile-editor/` are plain HTML/CSS/JavaScript, embedded in the
-native executable and served temporarily to the owner's phone or computer; they do not render the
-TV interface.
+is the Rust executable `astro`, with app ID `com.danielcanoh22.astro`. The companion page in
+`assets/wallpaper-upload/` is plain HTML/CSS/JavaScript, embedded in the native executable and
+served temporarily to the owner's phone or computer; it does not render the TV interface.
 
 ## Toolchain and commands
 
@@ -53,7 +52,7 @@ including `armv7-unknown-linux-gnueabi` for TV builds. No browser installation i
 | `pnpm format:check`       | Rust and tooling/document formatting checks                |
 | `pnpm test`               | Release-tooling and Rust workspace unit tests              |
 | `pnpm test:icons`         | Mocked runtime icon reads and bundled vector checks        |
-| `pnpm test:smoke`         | Desktop rendering, mocked weather and localization checks  |
+| `pnpm test:smoke`         | Desktop rendering, brand gallery and localization checks   |
 | `pnpm changeset`          | Add a release note and requested version bump to a PR      |
 | `pnpm version:check`      | Check synchronized app release versions                    |
 
@@ -77,8 +76,7 @@ backend. Avoid copying the whole SDK library directory or the TV's graphics driv
 `pnpm screenshots` generates `docs/home.png`, `docs/apps.png`, `docs/settings.png` and
 `docs/inputs.png`, linked by the README. It builds the desktop executable without the TV feature,
 uses isolated temporary preferences, sample inventory and a fixed date/time, and captures actual
-1920×1080 OpenGL framebuffers. Weather is unconfigured, so no real weather APIs are contacted.
-It does not execute the test suites. A desktop display is required; on headless Linux use
+1920×1080 OpenGL framebuffers. It does not execute the test suites. A desktop display is required; on headless Linux use
 `xvfb-run -a pnpm screenshots`. These images document the native design, not TV hardware behavior.
 
 ### Input
@@ -96,8 +94,7 @@ It does not execute the test suites. A desktop display is required; on headless 
 | F5                            | Refresh inventory                                             |
 
 Backspace deletes while editing. Native Back uses SDL's webOS-specific keycode. Back dismisses
-the keyboard first; Weather Location then returns to its parent Location row, HDMI choices to
-that HDMI row, and the Background gallery to Background in the sidebar. Back from the sidebar
+the keyboard first; HDMI choices then return to that HDMI row, and the Background gallery to Background in the sidebar. Back from the sidebar
 focuses the Settings tab, then returns Home. **System** in the sidebar groups **Refresh apps & inputs**
 and the vector power-icon **Quit app** action separately from General preferences.
 On Apps, OK or a normal pointer click on an app opens its side popup, with **Open** first and focused by
@@ -138,25 +135,27 @@ General has an **App names** subpage with independent **Show on Home** and **Sho
 Home captions default to off and Apps captions default to on, stored independently in `show_home_names`
 and `show_app_names`. The legacy `show_names` preference does not override these defaults. Hidden
 captions do not reserve layout space.
-**Settings → Widgets** groups **Date**, **Greeting**, **Weather**, **Shortcuts**, and **Inputs** as separate subpages.
-Weather location and temperature choices return to Weather; Back from a widget returns to its row
-in Widgets. Input visibility/naming choices return to Inputs, then its Widgets row.
-Existing greeting, weather, shortcut and input preferences are unchanged. Scrollable Settings lists
+**Settings → Widgets** groups **Date**, **Greeting**, and **Inputs** as separate subpages.
+Back from a widget returns to its row in Widgets. Input visibility/naming choices return to Inputs,
+then its Widgets row. Existing greeting, date and input preferences are unchanged. Preferences saved
+by earlier versions with the weather widget or shortcut tiles still load; those fields are ignored
+and dropped on the next save, and the old forecast cache beside the preferences file
+(`preferences.weather.json`) is deleted at startup (a symlink is unlinked, never followed).
+Scrollable Settings lists
 reserve 64 logical pixels below their last item for both remote focus and wheel scrolling,
 with a tighter 48-pixel spacing for Languages and Backgrounds.
-**Widgets → Greeting → Show widget** is the first row and hides only the greeting text, preserving the saved name,
-date and weather. Weather moves directly below the date when the greeting is hidden, without
-moving favorites or inputs. It defaults to enabled for existing and new installations.
+**Widgets → Greeting → Show widget** is the first row and hides only the greeting text, preserving the saved name
+and date, without moving favorites or inputs. It defaults to enabled for existing and new installations.
 **Widgets → Date** contains **Show widget** (enabled by default) and **Date format**. Choose the
 existing localized weekday/month/day display (default), `DD.MM.YYYY`, `MM/DD/YYYY`, or `YYYY-MM-DD`.
 Choosing a format returns to its Date row; Back from Date restores its Widgets row. Hiding the
-date removes its reserved space above the greeting/weather and preserves the chosen format.
+date removes its reserved space above the greeting and preserves the chosen format.
 Lists render behind the fixed sidebar, navigation and background actions, without viewport clipping
 or edge fades. Pointer interaction and remote focus retain their safe content viewports.
 The **Greeting** subpage contains **Name** and **Clear name**. Selecting Name opens the text keyboard
 (the system keyboard on the TV) and the name is appended to the Home greeting ("Good evening, Ana.").
 Long greetings scale down to fit their existing single-line area, centred vertically without
-moving the weather summary or favorite cards. Short greetings retain their original size.
+moving the favorite cards. Short greetings retain their original size.
 The keyboard starts empty; closing it without a name preserves the saved value. Clear name removes
 it. Preferences are saved when the keyboard closes, including automatic system-keyboard dismissal.
 Back from Greeting restores its Widgets row; App names returns to General. Input name removal
@@ -353,38 +352,6 @@ Verify the QR code, phone drag/zoom, upload,
 TV selection/restart, normal/takeover access, cancellation and timeout on real hardware; desktop
 checks do not establish webOS jail networking permissions or TV/browser behavior.
 
-## Shortcut editing on a phone or computer
-
-**Settings → Widgets → Shortcuts → Configure** opens the same QR modal as the wallpaper
-upload, served by its own worker (`src/tile-editor.rs`). Both share `src/companion.rs`: interface
-choice, token, QR code, request parsing, Host/Origin checks and security headers are identical,
-including the ten-minute lifetime and invalidation on close, focus loss, hiding or exit. A page load
-needs about six requests, so a session accepts up to 256 instead of 64. The page is English, like
-the upload page.
-
-When the modal opens, the worker takes a copy of the saved tiles and serves `tiles.json` (tiles,
-choosable icons with their bundled SVG markup, and the limit). `POST save`, `remove` and `send`
-need the session token in `X-Astro-Token` and a JSON body of at most 4 KiB. Saves are validated with
-the preference validation rules (`clean_input_name`, `valid_tile_url`, `TILE_ICONS`, `TILE_LIMIT`,
-`new_tile_id`).
-Creation and editing are available only on this companion page, which uses a flat background.
-The TV lists saved shortcuts as selectable description rows matching HDMI settings. Pressing one
-opens a popup with **Test shortcut** and **Remove shortcut**; Back returns to the same row.
-The System version retains a separate muted, non-interactive surface. Removal clears the
-shortcut from preferences, favorites and hidden apps without attempting a platform uninstall.
-Each accepted companion change sends the complete list back to the launcher:
-new tiles join the end of the Home favorites, removed ones leave favorites and hidden apps, and
-preferences are saved. Accepted changes are revisioned and queued before replying to the page;
-reopening retains the worker's latest list until the launcher acknowledges every pending revision.
-Changes are applied even if the modal closed meanwhile, since the page was already told they were
-saved. The TV modal blocks other input, so the two editors never interleave.
-`send` makes the request from the TV with the same client as a tile press (five-second timeout, no
-redirects or proxy) without saving, and reports the result to the page.
-
-`pnpm test:tiles` checks the page helpers. Rust tests cover validation, the routes, header checks
-and session rotation over loopback; `await-tile-editor` waits for the modal's link in scripted runs.
-Verify scanning, editing and a test request against a real webhook on TV hardware.
-
 ## Splash images
 
 `pnpm assets` renders one 1920×1080 PNG per background into `.build/assets/splash/` from the shaded
@@ -487,7 +454,7 @@ Every curated logo has an app in `demo_inventory()`, including all 27 expanded s
 brands. Open them with `pnpm dev --script apps`, then scroll or search the Apps grid. A unit check
 keeps the SVG directory, curated catalogue and demo inventory aligned. `pnpm test:brands` renders
 every card through the actual desktop renderer and writes `.build/brands-gallery.png` for visual
-review. Like the other smoke scripts, it uses isolated preferences and no TV or real weather API.
+review. Like the other smoke scripts, it uses isolated preferences and no TV or network service.
 The gallery also runs as part of `pnpm test:smoke`. Asset source/licence details are in [assets.md](assets.md).
 
 Live TV (`com.webos.app.livetv`) and Web Browser (`com.webos.app.browser`) also have dedicated
@@ -848,7 +815,7 @@ initialized from normal choices once. Favoriting test cards exercises long Home 
 changing normal favorites. Ctrl+C then a normal launch restores real inventory/preferences.
 The placeholder cards are never a fallback for an inventory failure.
 
-## Storage, weather and languages
+## Storage and languages
 
 TV preferences live in an app-owned persistent directory outside the installed executable's
 payload. Startup probes `/media/developer/<appid>/`, `/media/developer/temp/<appid>/` and
@@ -858,12 +825,11 @@ on the persistent developer partition, not the reboot-cleared `/tmp`. No setting
 in `/tmp` and no system/app-payload permissions are widened. Root Home takeover reuses these
 same app-owned directories, preferring existing app-owned preferences over root-owned fallback
 files left by an earlier takeover. It does not merge or delete duplicate preferences. Preference
-and weather-cache saves retain the directory owner's UID/GID so the normal app can still read
+saves retain the directory owner's UID/GID so the normal app can still read
 them after Home is disabled. Symlink storage directories remain rejected. The executable Home
 method uses its source installation for storage precedence and legacy migration, not LG's
-`/usr/bin` executable path. Existing JSON preferences and a
-valid weather cache from beside this installation's old executable are imported once, without
-overwriting the chosen destination. Invalid existing preferences still report an error.
+`/usr/bin` executable path. Existing JSON preferences from beside this installation's old
+executable are imported once, without overwriting the chosen destination. Invalid existing preferences still report an error.
 Startup prints `Astro persistent storage:` with the chosen path. Desktop preview retains the legacy
 `$XDG_CONFIG_HOME/astro-native/preferences.json` path, or `~/.config/astro-native/preferences.json`,
 so existing preview choices survive flattening. `--preferences PATH` isolates a manual run.
@@ -871,20 +837,10 @@ Invalid preference files report an error rather than being overwritten. Writes u
 temporary-file renames; use one instance per preferences file. Browser local storage is not
 migrated into native JSON preferences.
 
-Weather Location searches cities/postcodes only on explicit Search. Forecasts run when Home is
-visible, the widget enabled and a city configured. ureq/rustls uses embedded certificate roots,
-an eight-second timeout, no redirects/proxy and 256 KiB reply limits. Search/forecast/cache writes
-have separate workers and generation IDs, avoiding stale responses overwriting current state.
-Fresh Celsius readings are reused for 15 minutes; valid saved data lasts up to six hours and
-failure retries after five minutes. Unit changes convert unrounded cached Celsius immediately.
-Removing a city clears its cache. The `.weather.json` sidecar uses Unix-seconds timestamps.
-Mock servers accept only literal loopback HTTP origins and are refused in TV builds.
-
-`assets/messages.json` supplies English and Spanish, including locale formatting and weather
-labels. A saved language this fork no longer offers falls back to English. CJK and Hangul fonts
-stay bundled for app, input and greeting names. App/device names and saved city names remain real data. No geolocation,
-runtime font/translation services or telemetry are used. Weather attribution: Open-Meteo,
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+`assets/messages.json` supplies English and Spanish, including locale formatting. A saved
+language this fork no longer offers falls back to English. CJK and Hangul fonts stay bundled for
+app, input and greeting names. App and device names remain real data. No geolocation, runtime
+font/translation services or telemetry are used.
 
 ## Update availability
 
@@ -942,10 +898,9 @@ prerelease than the pinned `.5` library, not a full Astro compatibility guarante
 
 ## Checks and CI
 
-Rust behavior tests cover navigation, preferences, localization, rendering geometry and weather
-state without a TV. `tests/` scripts exercise actual desktop framebuffers and mock HTTP responses
-for navigation, persistence, pointer input, translations/CJK, weather limits/cache/races and
-profiling. They contact no live weather APIs or television. On Linux:
+Rust behavior tests cover navigation, preferences, localization and rendering geometry without a
+TV. `tests/` scripts exercise actual desktop framebuffers for navigation, persistence, pointer
+input, translations/CJK and profiling. They contact no live web services or television. On Linux:
 
 ```sh
 pnpm format:check
@@ -955,8 +910,8 @@ pnpm assets
 xvfb-run -a pnpm test:smoke
 ```
 
-CI prepares checks, unit tests, native assets and the desktop binary once. Four independent
-jobs run navigation/rendering, the brand gallery, mocked weather and translations in parallel,
+CI prepares checks, unit tests, native assets and the desktop binary once. Three independent
+jobs run navigation/rendering, the brand gallery and translations in parallel,
 each with its own Xvfb display, scratch preferences and diagnostic artifact. They consume a
 same-run tar archive that preserves the binary's executable mode and use `ASTRO_SMOKE_SKIP_BUILD=1`
 to avoid compiling the same executable again. Local smoke commands still build by default.
@@ -1033,7 +988,7 @@ also pass the existing checks, desktop smoke tests and native packaging build. O
 unmerged PRs and manual CI runs do not publish. To retry a failed publication, rerun the original
 CI run for the merged version PR's main-branch commit.
 
-The Actions graph now shows **Release eligibility → shared preparation → four parallel smoke
+The Actions graph now shows **Release eligibility → shared preparation → three parallel smoke
 suites + ARM package → aggregate validation → Publish release and Homebrew feed**. Eligibility
 runs on PRs and manual dispatches too, explicitly reporting validation-only rather than leaving
 a skipped job to interpret. The **Release rollout summary** runs even when earlier jobs fail,
@@ -1058,7 +1013,7 @@ HTML alongside the feed and IPK, so the feed and its description must be publish
 
 Key modules: `state.rs` focus/preferences, `view.rs` geometry, `renderer.rs` GPU caches/draws,
 `font.rs` lazy metrics/outlines, `vector.rs` GPU mesh upload, `platform.rs` worker/inventory,
-`luna.rs` LS2, `weather*.rs` scheduling/HTTPS/cache, `storage.rs` atomic JSON, and `main.rs` SDL loop.
+`luna.rs` LS2, `storage.rs` atomic JSON, and `main.rs` SDL loop.
 
 ### Home-key routing on webOS 5/6 (#109)
 

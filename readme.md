@@ -300,12 +300,6 @@ Press **Back** on Home, or hold **Back** for 0.6 seconds from any page, to open 
 
 These shortcuts work while Astro is focused. From another app, return to Astro first.
 
-### Shortcut tiles
-
-Shortcut tiles sit on Home like apps but send a web request when selected, for example to a Home
-Assistant webhook. Open **Settings → Widgets → Shortcuts → Configure** and scan
-the QR code.
-
 ## Development
 
 ### Setup & Building

@@ -236,7 +236,7 @@ try {
   assert.equal(clock.focus, 'ClockFormat');
   assert.ok(clock.ui_text.includes('Clock format'));
   assert.ok(clock.ui_text.includes('Time format'));
-  const inputsPage = 'settings,down,down,down,enter,down,down,down,down,enter';
+  const inputsPage = 'settings,down,down,down,enter,down,down,enter';
   const inputs = await scenario('inputs-page', inputsPage);
   assert.equal(inputs.subpage, 'Inputs');
   assert.deepEqual(inputs.focus, { InputMode: 'com.webos.app.hdmi1' });
@@ -300,8 +300,8 @@ try {
   const widgets = await scenario('widgets-settings', widgetsPage);
   assert.deepEqual(widgets.focus, { Widget: 4 });
   assert.ok(widgets.ui_text.includes('Widgets'));
-  for (const title of ['Date', 'Greeting', 'Weather', 'Shortcuts', 'Inputs'])
-    assert.ok(widgets.ui_text.includes(title));
+  for (const title of ['Date', 'Greeting', 'Inputs']) assert.ok(widgets.ui_text.includes(title));
+  for (const title of ['Weather', 'Shortcuts']) assert.ok(!widgets.ui_text.includes(title));
   const greetingEditor = `${widgetsPage},down,enter,down,enter`;
   for (const [id, name] of [
     ['Ana', 'Ana'],
@@ -444,13 +444,12 @@ try {
   const msaa = await scenario('text-rendering-msaa', 'home,down');
   assert.equal(msaa.render.text_rendering.mode, 'msaa');
   assert.equal(msaa.render.text_rendering.embolden, 0);
-  // Companion HTTP writes are covered by loopback Rust tests. Seed its persisted result
-  // here to render the TV's read-only detail/removal flow without a TV keyboard editor.
-  const beforeShortcut = JSON.parse(await fs.readFile(preferences, 'utf8'));
+  // Preferences saved by versions with the weather widget and shortcut tiles still load.
+  const beforeLegacy = JSON.parse(await fs.readFile(preferences, 'utf8'));
   await fs.writeFile(
     preferences,
     JSON.stringify({
-      ...beforeShortcut,
+      ...beforeLegacy,
       custom_tiles: [
         {
           id: 'custom.sandmann',
@@ -459,51 +458,27 @@ try {
           method: 'POST',
         },
       ],
-      favorites: [...beforeShortcut.favorites, 'custom.sandmann'],
+      favorites: [...beforeLegacy.favorites, 'custom.sandmann'],
+      show_weather: true,
+      weather_location: {
+        name: 'Vienna',
+        region: 'Vienna',
+        country: 'Austria',
+        latitude: 48.2085,
+        longitude: 16.3721,
+      },
+      temperature_unit: 'fahrenheit',
     }),
   );
-  const shortcutsPage = `${widgetsPage},down,down,down,enter`;
-  const shortcut = await scenario('shortcut-settings', shortcutsPage);
-  assert.equal(shortcut.focus, 'TileEditor');
-  assert.equal(shortcut.subpage, 'Shortcuts');
-  assert.deepEqual(shortcut.preferences.custom_tiles, [
-    {
-      id: 'custom.sandmann',
-      title: 'Sandmann',
-      url: 'http://127.0.0.1:9/api/webhook/astro',
-      method: 'POST',
-    },
-  ]);
-  assert.ok(shortcut.preferences.favorites.includes('custom.sandmann'));
-  assert.ok(shortcut.ui_text.includes('Configure'));
-  assert.ok(shortcut.ui_text.includes('Sandmann'));
-  assert.ok(
-    !shortcut.ui_text.includes('Type names and addresses there instead of with the remote'),
-  );
-  assert.ok(!shortcut.ui_text.includes('Add shortcut'));
-  assert.ok(!shortcut.ui_text.includes('Request method'));
-  // Scenarios share one preferences file, so the tile is removed again here.
-  const removed = await scenario('shortcut-removed', `${shortcutsPage},down,enter,down,enter`);
-  assert.equal(removed.focus, 'TileEditor');
-  assert.equal(removed.subpage, 'Shortcuts');
-  assert.deepEqual(removed.preferences.custom_tiles, []);
-  assert.ok(!removed.preferences.favorites.includes('custom.sandmann'));
-  assert.ok(!removed.inventory.some((app) => app.id === 'custom.sandmann'));
-  const tileEditorOpen = `${shortcutsPage},enter,await-tile-editor`;
-  const tileEditor = await scenario('tile-editor', tileEditorOpen);
-  assert.equal(tileEditor.modal, true);
-  assert.equal(tileEditor.focus, 'CloseDialog');
-  assert.ok(tileEditor.ui_text.includes('Edit on phone or computer'));
-  assert.ok(tileEditor.ui_text.includes('Scan this QR code'));
-  assert.ok(tileEditor.ui_text.some((text) => text.startsWith('Keep this window open while')));
-  assert.ok(
-    tileEditor.ui_text.some((text) =>
-      /^http:\/\/127\.0\.0\.1:\d+\/[1-9A-HJ-NP-Za-km-z]{8}$/.test(text),
-    ),
-  );
-  const tileEditorClosed = await scenario('tile-editor-closed', `${tileEditorOpen},back`);
-  assert.equal(tileEditorClosed.modal, false);
-  assert.equal(tileEditorClosed.focus, 'TileEditor');
+  const legacy = await scenario('legacy-preferences', 'home,down');
+  for (const field of ['custom_tiles', 'show_weather', 'weather_location', 'temperature_unit'])
+    assert.ok(!(field in legacy.preferences), field);
+  assert.deepEqual(legacy.preferences.favorites, [...beforeLegacy.favorites, 'custom.sandmann']);
+  assert.equal(legacy.preferences.background, beforeLegacy.background);
+  assert.equal(legacy.preferences.text_rendering, beforeLegacy.text_rendering);
+  assert.ok(!legacy.inventory.some((app) => app.id === 'custom.sandmann'));
+  for (const text of ['Sandmann', 'Vienna']) assert.ok(!legacy.ui_text.includes(text));
+  await fs.writeFile(preferences, JSON.stringify(beforeLegacy));
   // The exposed card fragments are real pointer targets, including after remote scrolling.
   const edgeFavorites = [
     'netflix',
@@ -516,10 +491,7 @@ try {
     'ard.mediathek',
     'plex',
   ];
-  await fs.writeFile(
-    preferences,
-    JSON.stringify({ favorites: edgeFavorites, show_weather: false }),
-  );
+  await fs.writeFile(preferences, JSON.stringify({ favorites: edgeFavorites }));
   const edgeRight = await scenario('favorites-edge-right', 'home,click:1860:600');
   assert.deepEqual(edgeRight.focus, { App: edgeFavorites[6] });
   assert.equal(edgeRight.home_scroll, 0, 'Clicking the fragment must not move it');
@@ -532,7 +504,7 @@ try {
     Math.abs(edgeLeft.home_scroll - 281.6) < 0.01,
     'Pointer focus preserves strip position',
   );
-  await fs.writeFile(preferences, JSON.stringify({ show_weather: false }));
+  await fs.writeFile(preferences, JSON.stringify({}));
   const gradientDisabled = await scenario(
     'wallpaper-gradient-disabled',
     'settings,down,down,enter,up,up,right,enter',

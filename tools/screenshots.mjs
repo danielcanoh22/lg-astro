@@ -25,8 +25,6 @@ const configuration = {
   background: 'dunes',
   hour_24: false,
   show_home_names: false,
-  show_weather: true,
-  weather_location: null,
   hidden: [],
   input_modes: {},
   reduced_motion: false,
@@ -36,7 +34,7 @@ try {
     ['home', 'home,down'],
     ['apps', 'apps,down'],
     ['settings', 'settings,down'],
-    ['inputs', 'settings,down,down,down,enter,down,down,down,enter'],
+    ['inputs', 'settings,down,down,down,enter,down,down,enter'],
   ]) {
     // Independent state makes screenshots stable regardless of capture order.
     await fs.writeFile(preferences, JSON.stringify(configuration));

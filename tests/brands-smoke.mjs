@@ -1,5 +1,5 @@
-// Exercise every curated logo with the native desktop renderer. No TV, network
-// service or weather API is used. The contact sheet is a manual design preview.
+// Exercise every curated logo with the native desktop renderer. No TV or network
+// service is used. The contact sheet is a manual design preview.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -23,7 +23,7 @@ try {
   const dump = path.join(scratch, 'state.json');
   const diagnostics = path.join(scratch, 'render.json');
   const screenshot = path.join(scratch, 'card.png');
-  await fs.writeFile(preferences, JSON.stringify({ reduced_motion: true, show_weather: false }));
+  await fs.writeFile(preferences, JSON.stringify({ reduced_motion: true }));
   run(binary, [
     '--preferences',
     preferences,

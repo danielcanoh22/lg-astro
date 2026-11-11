@@ -121,7 +121,5 @@ or collected icon maps in the repository. Names and marks remain the property of
 app owners. Astro's folded-light L logo is original Luma artwork; its SVG geometry produces the
 small/large webOS installation icons.
 
-Weather data: [Open-Meteo](https://open-meteo.com/), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-
 The provided Apple design guidance informed focus, motion and materials. This is not an Apple
 or LG product.

@@ -1,5 +1,5 @@
 //! The short-lived, capability-protected LAN server that companion pages on the owner's phone or
-//! computer talk to: wallpaper uploads and shortcut editing. Each session binds one private local
+//! computer talk to, such as the wallpaper upload page. Each session binds one private local
 //! interface, is addressed by a random token and is shown on the TV as a QR code.
 use std::{
     collections::BTreeMap,

@@ -108,9 +108,6 @@ jobs:
           - suite: Brand gallery
             script: tests/brands-smoke.mjs
             artifact: brands
-          - suite: Mock weather
-            script: tests/weather-smoke.mjs
-            artifact: weather
           - suite: Translations
             script: tests/translations-smoke.mjs
             artifact: translations
