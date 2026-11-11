@@ -273,8 +273,9 @@ and choose its thumbnail to use it. The upload page is currently English; the TV
 The phone accepts files up to 16 MiB and 32 megapixels, applies image orientation, and exports
 only the selected 1920×1080 JPEG crop. The native worker independently verifies the image format,
 exact output dimensions, a 12 MiB transport cap and a 32 MiB decoder allocation limit. It strips
-source metadata by re-encoding, generates a 480×270 thumbnail, and applies the same base opacity
-and readability gradients as bundled wallpapers. Processing and discovery run off the SDL thread;
+source metadata by re-encoding, generates a 480×270 thumbnail (the average of each 4×4 block),
+and applies the same base opacity and readability gradients as bundled wallpapers. Opaque images
+are converted in place; only translucent PNG/WebP sources are composited on the base colour. Processing and discovery run off the SDL thread;
 GPU uploads remain on SDL. Nothing is fetched from external services.
 
 The gallery holds up to 20 uploaded images under `wallpapers/custom-<random-id>/` beside the
