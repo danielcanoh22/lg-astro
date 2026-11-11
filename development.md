@@ -1058,7 +1058,9 @@ support from #142. Manifest takeover remains limited to webOS
 10/11. The optional `tv-input` subcommand implements the #124 registration/verification contract;
 **Settings → System → Show as TV input** runs it through Homebrew Channel's root service, and the
 package declares the required `supportGIP`. With the input registered, the Home copy opens
-`com.danielcanoh22.astro` on start, only if `getForegroundAppInfo` shows Home in front, and on each
+`com.danielcanoh22.astro` on start, only if `getForegroundAppInfo` shows Home in front within
+2.5 s (polled every 250 ms: when the Home key starts Home from an HDMI input, the system can still
+report that input for a moment after Home's inventory arrives), and on each
 lifecycle relaunch or Home key (`State::home_opened`/`astro_input_due`,
 at most once per `ASTRO_INPUT_INTERVAL` and `ASTRO_INPUT_LIMIT` times in a row within
 `ASTRO_INPUT_SETTLE` until the Home key is pressed in Home), adding the launch parameter

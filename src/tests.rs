@@ -333,6 +333,61 @@ fn preload_launch_metadata_is_recognized_and_ordinary_launches_are_not() {
 }
 
 #[test]
+fn a_starting_home_waits_briefly_for_the_system_to_report_it_in_front() {
+    use crate::platform::wait_for_home_in_front;
+    use std::time::Duration;
+    // Pressing Home from an HDMI input starts Home: the system can still report the input in
+    // front for a moment after Home's inventory arms the switch (webOS 25 log: the check saw
+    // com.webos.app.hdmi2 just before Home's window gained focus).
+    let mut fronts = [
+        "com.webos.app.hdmi2",
+        "com.webos.app.hdmi2",
+        "com.webos.app.home",
+    ]
+    .iter();
+    let mut paused = Duration::ZERO;
+    assert_eq!(
+        wait_for_home_in_front(
+            || Ok(fronts.next().unwrap().to_string()),
+            |pause| paused += pause
+        ),
+        Ok(None)
+    );
+    assert_eq!(paused, Duration::from_millis(500));
+    // Home started behind another input never comes forward: give up after the bounded wait.
+    let (mut calls, mut paused) = (0, Duration::ZERO);
+    assert_eq!(
+        wait_for_home_in_front(
+            || {
+                calls += 1;
+                Ok("com.webos.app.hdmi2".into())
+            },
+            |pause| paused += pause
+        ),
+        Ok(Some("com.webos.app.hdmi2".into()))
+    );
+    assert_eq!((calls, paused), (11, Duration::from_millis(2500)));
+    // Already in front (either Home identity): one check and no wait.
+    let mut calls = 0;
+    assert_eq!(
+        wait_for_home_in_front(
+            || {
+                calls += 1;
+                Ok("com.webos.app.fullhome".into())
+            },
+            |_| panic!("no wait when Home is already in front")
+        ),
+        Ok(None)
+    );
+    assert_eq!(calls, 1);
+    // A failed check is reported, not retried.
+    assert_eq!(
+        wait_for_home_in_front(|| Err("bus error".into()), |_| panic!("no retry")),
+        Err("bus error".into())
+    );
+}
+
+#[test]
 fn only_astros_own_launch_carries_the_home_parameter_and_both_metadata_shapes_are_read() {
     use crate::platform::{LAUNCHED_BY_HOME, launch_payload, launched_by_home};
     assert_eq!(

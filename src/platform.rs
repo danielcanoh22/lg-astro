@@ -40,17 +40,22 @@ pub(crate) fn launch_payload(id: &str) -> Value {
     }
 }
 
-/// Opens `com.danielcanoh22.astro` for its TV input. With `if_home_in_front` it first checks that
-/// Home is the foreground app, so a Home the system started behind another input or app never
-/// takes the screen; if the check fails, it does not switch.
+/// Opens `com.danielcanoh22.astro` for its TV input. With `if_home_in_front` it first waits briefly
+/// for Home to be the foreground app, so a Home the system started behind another input or app
+/// never takes the screen; if Home does not come forward, it does not switch.
 fn select_astro_input(if_home_in_front: bool) -> Result<(), String> {
     if if_home_in_front {
-        let reply = call(
-            "luna://com.webos.applicationManager/getForegroundAppInfo",
-            json!({}),
+        let front = wait_for_home_in_front(
+            || {
+                let reply = call(
+                    "luna://com.webos.applicationManager/getForegroundAppInfo",
+                    json!({}),
+                )?;
+                Ok(reply["appId"].as_str().unwrap_or_default().to_owned())
+            },
+            thread::sleep,
         )?;
-        let front = reply["appId"].as_str().unwrap_or_default();
-        if !is_home_id(front) {
+        if let Some(front) = front {
             eprintln!("Astro TV input: {front} is in front; Home stays behind it");
             return Ok(());
         }
@@ -60,6 +65,31 @@ fn select_astro_input(if_home_in_front: bool) -> Result<(), String> {
         launch_payload(APP_ID),
     )
     .map(|_| ())
+}
+
+/// How long a starting Home waits for the system to report it in front. When the Home key starts
+/// Home from an HDMI input, the system can still report the input for a moment after Home's
+/// inventory arms the switch (Home's window gains focus just after); Home started behind another
+/// input never comes forward, so this only delays giving up.
+const HOME_FRONT_WAIT: std::time::Duration = std::time::Duration::from_millis(2500);
+const HOME_FRONT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Asks which app is in front until it is Home, at most `HOME_FRONT_WAIT`. Returns `None` once
+/// Home is in front, or the app that stayed in front. A failed check is returned, not retried.
+pub(crate) fn wait_for_home_in_front(
+    mut foreground: impl FnMut() -> Result<String, String>,
+    mut pause: impl FnMut(std::time::Duration),
+) -> Result<Option<String>, String> {
+    let checks = HOME_FRONT_WAIT.as_millis() / HOME_FRONT_POLL.as_millis() + 1;
+    let mut front = foreground()?;
+    for _ in 1..checks {
+        if is_home_id(&front) {
+            return Ok(None);
+        }
+        pause(HOME_FRONT_POLL);
+        front = foreground()?;
+    }
+    Ok((!is_home_id(&front)).then_some(front))
 }
 
 /// The EIM input ID LG gives Astro once `astro-helper tv-input enable` registers it.
