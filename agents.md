@@ -108,6 +108,10 @@ artifacts and guarded publication. Keep existing published-version/draft/tag-com
 `.github/workflows/changeset-status.yml` maintains an informational changeset status comment on
 PRs, including forks, with semantic-version guidance for code changes. It skips the generated
 version PR. Its `pull_request_target` jobs must not install dependencies or run code from the PR.
+`.github/workflows/pr-test-ipk.yml` builds a test IPK and comments its download link, only for
+PRs from this repository's own branches; keep the same-repository condition on both jobs, since
+it also runs on `pull_request_target`. `tools/setup-webos-sdk.mjs` pins each SDK archive by
+SHA-256; update the hash together with the URL.
 `.github/workflows/release-pr.yml` maintains the Changesets version PR and dispatches its CI
 checks with the built-in token. Only a merged `changeset-release/main` PR with a version increase
 can publish after the main-branch CI build passes. Ordinary PRs, other merges and manual CI runs

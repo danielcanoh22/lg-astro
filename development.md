@@ -950,8 +950,10 @@ small-text quality or presentation frame rate.
 ### PR test IPKs
 
 `.github/workflows/pr-test-ipk.yml` runs **PR Test IPK** whenever a PR is opened, reopened or
-receives new commits, including fork PRs and drafts. It automatically builds the exact PR head
-commit and uploads the verified ARM IPK and `sha256sums`. One bot comment is created or updated
+receives new commits, including drafts. Fork PRs are skipped: the workflow runs on the trusted
+`pull_request_target` event, so it only builds branches of this repository, and a fork's code is
+built by `ci.yml` under the unprivileged `pull_request` event instead. It automatically builds
+the exact PR head commit and uploads the verified ARM IPK and `sha256sums`. One bot comment is created or updated
 with the full commit hash, workflow run and artifact download link. Failed or cancelled builds
 update the same comment with their status; superseded commits cannot overwrite the latest head's
 comment. Downloads are GitHub artifact ZIPs, require signing in and expire after 14 days.
