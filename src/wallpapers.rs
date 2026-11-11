@@ -23,6 +23,8 @@ use std::{
 const MAX_BODY: usize = 12 * 1024 * 1024;
 const MAX_WALLPAPERS: usize = 20;
 const SESSION_TIME: Duration = Duration::from_secs(600);
+/// No upload outlives its session, so staging this old belongs to no live process.
+const STAGING_ABANDONED: Duration = Duration::from_secs(SESSION_TIME.as_secs() + 5 * 60);
 const SESSION_REQUEST_LIMIT: usize = 64;
 const REQUEST_TIME: Duration = Duration::from_secs(20);
 const STOP: u64 = u64::MAX;
@@ -181,11 +183,14 @@ fn catalog(directory: &Path) -> Vec<Wallpaper> {
         return vec![];
     };
     let mut result = Vec::new();
-    // Bound discovery even if someone manually populates this private directory.
-    for entry in entries.take(128).flatten() {
-        let path = entry.path();
+    let candidates = entries.flatten().filter_map(|entry| {
         let id = entry.file_name().to_string_lossy().into_owned();
-        if !valid_id(&id) || !real_directory(&path) {
+        valid_id(&id).then(|| (entry.path(), id))
+    });
+    // Bound discovery even if someone manually populates this private directory. Only
+    // wallpaper-shaped names count, so unrelated entries cannot hide real wallpapers.
+    for (path, id) in candidates.take(128) {
+        if !real_directory(&path) {
             continue;
         }
         let Some(bytes) = small_file(&path.join("metadata.json"), 2048) else {
@@ -228,6 +233,63 @@ fn delete_wallpaper(directory: &Path, id: &str, selected: &str) -> Result<(), St
     // Only the strictly validated app-owned directory is removed; symlink
     // entries within it are unlinked, never followed by remove_dir_all.
     fs::remove_dir_all(path).map_err(|error| error.to_string())
+}
+
+/// Removes `.custom-<id>` staging entries an interrupted upload left behind (power loss or a
+/// kill before the commit rename). Normal and takeover launches share this gallery and may run
+/// at once, so only entries last modified more than `STAGING_ABANDONED` ago are removed; an
+/// unreadable or future mtime keeps the entry until a later start. Symlinks are unlinked,
+/// never followed; real directories are removed like deleted wallpapers. Every other entry,
+/// and a symlinked root, is left alone.
+fn remove_interrupted_uploads(directory: &Path) {
+    if !real_directory(directory) {
+        return;
+    }
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("Could not scan wallpaper storage for interrupted uploads: {error}");
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name
+            .to_str()
+            .and_then(|name| name.strip_prefix('.'))
+            .is_some_and(valid_id)
+        {
+            continue;
+        }
+        let path = entry.path();
+        let abandoned = |metadata: &fs::Metadata| {
+            metadata
+                .modified()
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > STAGING_ABANDONED)
+        };
+        let removed = match fs::symlink_metadata(&path) {
+            Ok(metadata) if !abandoned(&metadata) => continue,
+            Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&path),
+            Ok(_) => fs::remove_file(&path),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = removed {
+            eprintln!(
+                "Could not remove interrupted wallpaper upload {}: {error}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Persists a directory's entries (new files, or a rename inside it) across power loss.
+fn sync_directory(directory: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(directory)?.sync_all()?;
+    let _ = directory;
+    Ok(())
 }
 
 /// Root Home creates files readable by the same app user after takeover is disabled.
@@ -444,6 +506,8 @@ fn store(directory: &Path, bytes: &[u8], valid: impl Fn() -> bool) -> Result<Wal
         if !valid() {
             return Err("Upload session ended".into());
         }
+        // The new directory's own entries must be durable before the rename publishes it.
+        sync_directory(&staging).map_err(|e| e.to_string())?;
         fs::rename(&staging, &item.directory).map_err(|e| e.to_string())
     })();
     if result.is_err() {
@@ -458,7 +522,12 @@ fn store(directory: &Path, bytes: &[u8], valid: impl Fn() -> bool) -> Result<Wal
         }
         let _ = fs::remove_dir(&staging);
     }
-    result.map(|()| item)
+    result?;
+    // The rename already committed the upload, so a failed directory sync is only logged.
+    if let Err(error) = sync_directory(directory) {
+        eprintln!("Could not sync wallpaper storage after an upload: {error}");
+    }
+    Ok(item)
 }
 
 fn worker(
@@ -468,6 +537,8 @@ fn worker(
     updates: &mpsc::Receiver<Command>,
     loopback_only: bool,
 ) {
+    // Clear staging abandoned by an interrupted upload before listing the gallery.
+    remove_interrupted_uploads(directory);
     if sender.send(Event::Catalog(catalog(directory))).is_err() {
         return;
     }

@@ -282,7 +282,14 @@ The gallery holds up to 20 uploaded images under `wallpapers/custom-<random-id>/
 selected preferences file. The phone page shows this resolved absolute directory path. Names are
 trimmed, control-free and limited to 40 characters; they
 never become file paths. Files and metadata are committed in a new directory by atomic rename,
-with immutable paths so existing GPU texture caches cannot show an older upload. Root Home
+with immutable paths so existing GPU texture caches cannot show an older upload. Each file and
+the new directory are synced before the rename and the `wallpapers/` directory after it, so a
+committed upload survives power loss. An upload interrupted before its commit leaves a hidden
+`.custom-<random-id>/` staging directory; the wallpaper worker removes those at startup, before
+listing the gallery, unlinking symlinks without following them and leaving every other entry
+alone. Because normal and takeover launches can run at once, only staging last modified more
+than 15 minutes ago (the 10-minute session plus 5) is removed; newer entries, or ones with an
+unreadable or future mtime, wait for a later start. Discovery scans at most 128 `custom-<random-id>` entries; other names do not count. Root Home
 preserves the app storage owner's UID/GID for new directories and files. Preferences retain only
 the generated selected ID. Invalid metadata and entries with missing files are skipped; an unavailable selected image
 renders the bundled default without destroying the saved selection. These files survive app

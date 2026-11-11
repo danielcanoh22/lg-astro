@@ -35,7 +35,48 @@ fn image(width: u32, height: u32) -> Vec<u8> {
     .unwrap()
 }
 
-/// The HTTP tests use only a loopback mock, never TV or weather services.
+/// A minimal catalog entry with valid metadata and non-empty image files.
+fn listed_wallpaper(root: &Path, index: usize) -> String {
+    let id = format!("custom-{index:032x}");
+    let directory = root.join(&id);
+    create_directory(&directory).unwrap();
+    write_new(
+        &directory.join("metadata.json"),
+        &serde_json::to_vec(&Wallpaper {
+            id: id.clone(),
+            directory: directory.clone(),
+            has_original: false,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    write_new(&directory.join("wallpaper.jpg"), b"fixture").unwrap();
+    write_new(&directory.join("thumbnail.jpg"), b"fixture").unwrap();
+    id
+}
+
+/// The first catalog the worker reports, after its startup cleanup.
+fn first_catalog(fixture: &Fixture) -> Vec<Wallpaper> {
+    let service = Service::new(&fixture.0.join("preferences.json"), true).unwrap();
+    match service
+        .receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+    {
+        Event::Catalog(items) => items,
+        _ => panic!("Expected the initial catalog"),
+    }
+}
+
+/// Backdates an entry past the age at which startup treats staging as abandoned.
+fn abandon(path: &Path) {
+    fs::File::open(path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - STAGING_ABANDONED - Duration::from_secs(60))
+        .unwrap();
+}
+
+/// The HTTP tests use only a loopback mock, never the TV or any external service.
 fn http(path: &Path, request: impl FnOnce(&str) -> Vec<u8>) -> (String, bool) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
@@ -230,21 +271,7 @@ fn gallery_capacity_is_checked_before_decoding_or_creating_another_upload() {
     let fixture = Fixture::new();
     create_directory(&fixture.wallpapers()).unwrap();
     for index in 0..MAX_WALLPAPERS {
-        let id = format!("custom-{index:032x}");
-        let directory = fixture.wallpapers().join(&id);
-        create_directory(&directory).unwrap();
-        write_new(
-            &directory.join("metadata.json"),
-            &serde_json::to_vec(&Wallpaper {
-                id,
-                directory: directory.clone(),
-                has_original: false,
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        write_new(&directory.join("wallpaper.jpg"), b"fixture").unwrap();
-        write_new(&directory.join("thumbnail.jpg"), b"fixture").unwrap();
+        listed_wallpaper(&fixture.wallpapers(), index);
     }
     assert_eq!(catalog(&fixture.wallpapers()).len(), MAX_WALLPAPERS);
     assert!(
@@ -256,6 +283,114 @@ fn gallery_capacity_is_checked_before_decoding_or_creating_another_upload() {
         fs::read_dir(fixture.wallpapers()).unwrap().count(),
         MAX_WALLPAPERS
     );
+}
+
+#[test]
+fn unrelated_directory_entries_do_not_hide_wallpapers_from_the_catalog() {
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    create_directory(&root).unwrap();
+    let mut ids: Vec<_> = (0..5).map(|index| listed_wallpaper(&root, index)).collect();
+    ids.sort();
+    // Far more entries than the 128-entry scan bound, created after the wallpapers (tmpfs
+    // lists the newest first), so a bound on every entry would miss wallpapers in practice.
+    for index in 0..1000 {
+        let name = match index % 3 {
+            0 => format!("junk-{index}"),
+            1 => format!(".hidden-{index}"),
+            _ => format!("custom-{index}"),
+        };
+        fs::write(root.join(name), b"junk").unwrap();
+    }
+    let found: Vec<_> = catalog(&root).into_iter().map(|item| item.id).collect();
+    assert_eq!(found, ids);
+}
+
+#[test]
+fn worker_start_removes_interrupted_upload_staging_and_nothing_else() {
+    let fixture = Fixture::new();
+    let item = store(&fixture.wallpapers(), &image(1920, 1080), || true).unwrap();
+    let root = fixture.wallpapers();
+    let staging = root.join(format!(".custom-{}", "a".repeat(32)));
+    create_directory(&staging).unwrap();
+    write_new(&staging.join("wallpaper.jpg"), b"partial").unwrap();
+    write_new(&staging.join("original.jpg"), b"partial").unwrap();
+    abandon(&staging);
+    let kept = [
+        ".keep".to_string(),
+        ".custom-notvalid".into(),
+        format!(".custom-{}", "A".repeat(32)),
+        format!("..custom-{}", "b".repeat(32)),
+    ];
+    for name in &kept {
+        fs::create_dir(root.join(name)).unwrap();
+        fs::write(root.join(name).join("keep"), b"keep").unwrap();
+        abandon(&root.join(name));
+    }
+    let items = first_catalog(&fixture);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, item.id);
+    assert!(fs::symlink_metadata(&staging).is_err());
+    assert!(item.directory.join("wallpaper.jpg").exists());
+    for name in &kept {
+        assert_eq!(fs::read(root.join(name).join("keep")).unwrap(), b"keep");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn worker_start_never_follows_staging_symlinks() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    create_directory(&root).unwrap();
+    let outside = fixture.0.join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep"), b"keep").unwrap();
+    let link = root.join(format!(".custom-{}", "c".repeat(32)));
+    symlink(&outside, &link).unwrap();
+    let staging = root.join(format!(".custom-{}", "d".repeat(32)));
+    create_directory(&staging).unwrap();
+    symlink(&outside, staging.join("linked")).unwrap();
+    abandon(&staging);
+    assert!(first_catalog(&fixture).is_empty());
+    // std cannot backdate a symlink's own mtime, so this link is fresh and must be kept; an
+    // abandoned one is unlinked with remove_file, which never touches its target.
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(fs::symlink_metadata(&staging).is_err());
+    assert_eq!(fs::read(outside.join("keep")).unwrap(), b"keep");
+}
+
+#[test]
+fn worker_start_keeps_fresh_staging_another_process_may_still_be_writing() {
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    create_directory(&root).unwrap();
+    let staging = root.join(format!(".custom-{}", "f".repeat(32)));
+    create_directory(&staging).unwrap();
+    write_new(&staging.join("wallpaper.jpg"), b"partial").unwrap();
+    assert!(first_catalog(&fixture).is_empty());
+    assert_eq!(fs::read(staging.join("wallpaper.jpg")).unwrap(), b"partial");
+}
+
+#[cfg(unix)]
+#[test]
+fn worker_start_leaves_a_symlinked_wallpaper_directory_alone() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    let elsewhere = fixture.0.join("elsewhere");
+    let staging = elsewhere.join(format!(".custom-{}", "e".repeat(32)));
+    fs::create_dir_all(&staging).unwrap();
+    fs::write(staging.join("keep"), b"keep").unwrap();
+    abandon(&staging);
+    symlink(&elsewhere, fixture.wallpapers()).unwrap();
+    assert!(first_catalog(&fixture).is_empty());
+    assert_eq!(fs::read(staging.join("keep")).unwrap(), b"keep");
 }
 
 #[test]
