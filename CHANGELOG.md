@@ -1,5 +1,12 @@
 # lg-luma
 
+## 3.0.4
+
+### Patch Changes
+
+- 37972cd: Wallpapers and gallery thumbnails now load in the background instead of freezing the screen. Choosing, rotating or toggling the gradient of a wallpaper keeps the previous one on screen until the new one is ready, and its fade then plays in full. Opening the Background gallery no longer stalls while thumbnails load, and images outside the visible area are not loaded.
+- 150a477: Saving an uploaded wallpaper uses less memory and processor time on the TV: opaque photos are no longer copied and recombined pixel by pixel, the readability shading is computed once per row and column, and the gallery thumbnail is averaged directly from the image. The saved wallpaper looks the same; its thumbnail is slightly sharper.
+
 ## 3.0.3
 
 ### Patch Changes
