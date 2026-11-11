@@ -1,5 +1,15 @@
 # lg-luma
 
+## 4.0.0
+
+### Major Changes
+
+- 90cae30: The weather widget and the shortcut (webhook) tiles are removed. Home no longer shows the weather or a prompt to set a location, Settings → Widgets now lists Date, Greeting and Inputs, and the phone or computer shortcut editor is gone. Astro no longer contacts Open-Meteo and never sends shortcut requests. Your other settings are kept; saved weather locations, temperature units and shortcut tiles are discarded the next time preferences are saved, and the stored forecast cache is deleted when Astro starts.
+
+### Patch Changes
+
+- cc9cc59: An uploaded wallpaper interrupted by a power cut or a forced close no longer leaves a hidden partial copy on the TV: Astro removes it when it starts again later. A completed upload is also saved more reliably if the TV loses power right after it finishes.
+
 ## 3.0.4
 
 ### Patch Changes
