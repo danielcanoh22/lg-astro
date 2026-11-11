@@ -209,6 +209,23 @@ try {
   assert.deepEqual(custom.focus, { Background: 9 });
   const customRestored = await scenario('wallpaper-custom-restored', 'home,down');
   assert.equal(customRestored.preferences.background, customId);
+  // Frame profiles decode on the image worker, like interactive TV runs: the first frame waits
+  // for the saved wallpaper and a newly chosen one is uploaded before the run ends.
+  const asyncSelected = await scenario(
+    'wallpaper-async-selected',
+    'settings,down,down,enter,up,enter,enter',
+    ['--profile-frames', '100000'],
+    600,
+  );
+  assert.equal(asyncSelected.preferences.background, 'forest');
+  assert.equal(asyncSelected.render.capture.pending_images, 0);
+  assert.equal(asyncSelected.render.last_presented.pending_images, 0);
+  assert.equal(asyncSelected.render.last_presented.missing_images, 0);
+  const customAgain = await scenario(
+    'wallpaper-custom-again',
+    'settings,down,down,enter,down,enter,enter',
+  );
+  assert.equal(customAgain.preferences.background, customId);
   const bundledRestored = await scenario(
     'wallpaper-bundled-restored',
     'settings,down,down,enter,up,enter,enter',

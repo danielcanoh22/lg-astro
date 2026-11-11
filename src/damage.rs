@@ -45,6 +45,25 @@ impl Tracker {
             })
     }
 
+    /// Adds the commands drawing `loaded` images to the latest frame's damage: an image that
+    /// finished decoding changes pixels although its command did not change.
+    pub fn loaded(&mut self, commands: &[Draw], loaded: &[String]) {
+        if loaded.is_empty() {
+            return;
+        }
+        let Some(Some(front)) = self.history.front_mut() else {
+            return;
+        };
+        for command in commands {
+            if let Draw::Image(path, ..) | Draw::TintedImage(path, ..) = command
+                && loaded.iter().any(|item| item == path)
+                && let Some(rect) = bounds(command)
+            {
+                *front = union(*front, rect);
+            }
+        }
+    }
+
     /// After anything drew into the window outside this tracker, e.g. a resized drawable.
     pub fn reset(&mut self) {
         self.previous.clear();

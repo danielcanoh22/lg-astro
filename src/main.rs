@@ -11,6 +11,7 @@ mod diagnostics;
 mod egl_damage;
 mod font;
 mod i18n;
+mod image_loader;
 #[path = "input-refresh.rs"]
 mod input_refresh;
 #[cfg(all(feature = "webos", target_os = "linux", target_arch = "arm"))]
@@ -216,6 +217,9 @@ struct Press {
 }
 
 const SCRIPT_POINTER: u32 = u32::MAX - 1;
+/// The first frame waits this long at most for its images (the wallpaper starts decoding on the
+/// image worker during startup); past it the window opens and the rest appear when ready.
+const FIRST_FRAME_IMAGE_WAIT: Duration = Duration::from_millis(1500);
 // SDL-webOS's Back scancode is outside rust-sdl2's standard Scancode enum.
 // Keycode retains the raw value: SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_WEBOS_BACK).
 const WEBOS_BACK_KEYCODE: i32 = (1 << 30) | 482;
@@ -853,6 +857,18 @@ fn run() -> Result<(), String> {
     }
     let mut renderer =
         renderer::Renderer::new(&assets.root.join("font.ttf"), webos, text_config.embolden)?;
+    // Scripted and screenshot runs count frames, so every frame must show its images; interactive
+    // runs (and frame profiles) decode them on the image worker instead.
+    renderer.set_synchronous_images(
+        options.profile_frames.is_none()
+            && (options.frames.is_some() || options.screenshot.is_some()),
+    );
+    // Decode the saved bundled wallpaper while the rest of startup runs; the first frame waits
+    // for it. An uploaded one is only known once the gallery catalog loads, and a 4K drawable
+    // uses a variant the first frame resolves itself.
+    if options.resolution.is_none() && !wallpapers::valid_id(&state.preferences.background) {
+        renderer.request(&assets.background(&state, &state.preferences.background));
+    }
     startup_stage("renderer");
     // Redraw only what changed since the back buffer's frame (ASTRO_PARTIAL=0 draws in full).
     let partial = (std::env::var("ASTRO_PARTIAL").as_deref() != Ok("0"))
@@ -865,6 +881,10 @@ fn run() -> Result<(), String> {
             .map_or("off", egl_damage::PartialUpdate::describe)
     );
     let mut damage_tracker = damage::Tracker::default();
+    // Images uploaded since the last drawn frame, repainted although the scene is unchanged.
+    let mut loaded_images: Vec<String> = Vec::new();
+    // The first drawn frame waits once for its images, never again after a timeout.
+    let mut first_frame_prepared = false;
     // Pages to prepare while the screen is idle (text, logos, icons), after each inventory.
     let mut prewarm: Vec<state::Page> = Vec::new();
     let mut prewarm_now = false;
@@ -1079,7 +1099,11 @@ fn run() -> Result<(), String> {
                     wallpapers_scanned = true;
                     state.set_wallpapers(items);
                 }
-                wallpapers::Event::Deleted(id, result) => state.wallpaper_deleted(id, result),
+                wallpapers::Event::Deleted(id, result) => {
+                    // Its directory name is random, so it matches only that wallpaper's files.
+                    renderer.forget(&id);
+                    state.wallpaper_deleted(id, result);
+                }
                 wallpapers::Event::Session(generation, result)
                     if generation == wallpaper_service.generation()
                         && matches!(state.overlay, Some(Overlay::WallpaperUpload)) =>
@@ -1142,6 +1166,14 @@ fn run() -> Result<(), String> {
             }
         }
         state.dirty |= assets.artwork.poll();
+        let loaded = renderer.poll();
+        state.dirty |= !loaded.is_empty();
+        loaded_images.extend(loaded);
+        // Many uploads without a drawn frame (e.g. while hidden): redraw everything instead.
+        if loaded_images.len() > 256 {
+            loaded_images.clear();
+            damage_tracker.reset();
+        }
         let unix = state::unix_now();
         let startup_cycle = wallpaper_cycle::startup_due(
             state.preferences.wallpaper_cycle,
@@ -1840,6 +1872,15 @@ fn run() -> Result<(), String> {
             pill_width += (target_width - pill_width) * (1. - (-20. * dt).exp());
             state.dirty = true;
         }
+        // The window opens on its wallpaper; later wallpapers decode on the image worker while
+        // the previous one stays, and a fade starts only once its new wallpaper is uploaded.
+        let wallpaper = assets.background(&state, &state.preferences.background);
+        if visible && !renderer.ready(&wallpaper) {
+            renderer.request(&wallpaper);
+            if let Some((_, start)) = state.previous_background.as_mut() {
+                *start = Instant::now();
+            }
+        }
         let final_frame = options.frames.is_some_and(|limit| frame + 1 >= limit)
             || (visible
                 && options
@@ -1851,6 +1892,14 @@ fn run() -> Result<(), String> {
             let compose_ms = compose_started.elapsed().as_secs_f64() * 1000.;
             let (width, height) = window.drawable_size();
             if width > 0 && height > 0 {
+                // The first frame opens complete, as when images decoded on this thread: its
+                // scene requests every image at the drawable's real scale (a 4K wallpaper's
+                // `@2x` variant included), then waits once, bounded, for the worker.
+                if !first_frame_prepared {
+                    first_frame_prepared = true;
+                    renderer.prepare(&scene.draw, width, height);
+                    renderer.wait_pending(FIRST_FRAME_IMAGE_WAIT);
+                }
                 if final_frame && let Some(path) = &options.screenshot {
                     captured = Some(renderer.capture(
                         &scene.draw,
@@ -1863,6 +1912,7 @@ fn run() -> Result<(), String> {
                         damage_tracker.reset();
                     }
                     damage_tracker.push(&scene.draw);
+                    damage_tracker.loaded(&scene.draw, &loaded_images);
                     // A capture drew this frame already; keep its window frame whole.
                     if captured.is_some() && final_frame {
                         return None;
@@ -1876,6 +1926,7 @@ fn run() -> Result<(), String> {
                     damage
                 });
                 renderer.render(&scene.draw, width, height, damage);
+                loaded_images.clear();
                 redrawn_total += renderer.stats().redrawn_fraction;
                 if verify_damage {
                     // Full frames give the baseline difference of the two drawing paths.
@@ -2020,6 +2071,7 @@ fn run() -> Result<(), String> {
             || back_button.press.is_some()
             || options.frames.is_some()
             || assets.artwork.pending()
+            || renderer.pending()
         {
             8
         } else if !prewarm.is_empty() {

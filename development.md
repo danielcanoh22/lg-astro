@@ -297,6 +297,18 @@ alongside the shaded image. Discovery checks for originals on the worker, not th
 Older uploads keep their full-resolution shaded image when Off if no unshaded original exists.
 The setting does not affect gallery thumbnails or LG's static launch splash.
 
+Wallpapers, gallery thumbnails and other raster images are decoded by `src/image_loader.rs` on
+its own worker; the SDL thread only uploads finished pixels, about one 1080p wallpaper per event
+loop turn. Reads do not follow a final symlink and are bounded to 32 MiB files, 4096 pixels per
+side and an 80 MiB decoder allocation. Opaque images stay RGB on the GPU. While a newly chosen,
+rotated or Gradient-toggled wallpaper decodes, the previous one stays on screen, and its fade
+starts only once the new texture is uploaded. The first frame requests every image of its scene
+at the drawable's scale and waits once, up to 1.5 s, for them; a saved bundled wallpaper already
+starts decoding during startup. Cards outside the screen or their scroll clip are not loaded, a
+failed or panicking decode is drawn as missing, and deleting a wallpaper drops its textures. Scripted and screenshot runs
+(`--frames`/`--screenshot` without `--profile-frames`) decode on the SDL thread so every
+captured frame is complete; frame profiles use the worker like interactive runs.
+
 The fixed **Rotation** button toggles cycling On/Off,
 defaulting to Off, without opening a subpage. All available images participate in gallery order;
 deleted and pending-deletion entries are excluded. The fixed 15-minute interval uses a persisted
@@ -617,6 +629,8 @@ and uploading icons. After each inventory, once the screen has been still for 1.
 the other pages' scenes without drawing them (`Renderer::prepare`), one page per idle wake; the TV
 log reports each (`Astro prewarm: …`). The script action `prewarm` triggers it at once, and the
 profiling timeline records first-use work per frame (`glyph_ms`, `vector_ms`, `image_ms`).
+`image_ms` is GPU upload time of images decoded since the previous frame (decoding itself runs on
+the image worker), and `pending_images` counts images still decoding.
 
 ## TV startup diagnostics
 

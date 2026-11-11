@@ -2,6 +2,7 @@
 //! SDL only supplies the context. No browser, LVGL or Qt runtime.
 use crate::{
     font::Font,
+    image_loader::{self, Decoded},
     raster::{Size, Viewport},
     state::Rect,
     vector,
@@ -13,7 +14,7 @@ use std::{
     ffi::{CStr, CString},
     path::{Path, PathBuf},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 pub type Color = [f32; 4];
@@ -21,6 +22,10 @@ pub const WHITE: Color = [0.96, 0.96, 0.96, 1.];
 const GLYPH_GEOMETRY_BUDGET: usize = 8 * 1024 * 1024;
 const TEXT_GEOMETRY_BUDGET: usize = 32 * 1024 * 1024;
 const TEXTURE_BUDGET: usize = 48 * 1024 * 1024;
+/// GPU uploads per event-loop turn stop after about one 1080p RGBA wallpaper.
+const UPLOAD_BUDGET: usize = 1920 * 1080 * 4;
+/// Failed image paths are remembered so they are not decoded every frame, up to this many.
+const FAILED_IMAGE_LIMIT: usize = 256;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TextStyle {
@@ -79,6 +84,7 @@ struct Texture {
     id: GLuint,
     width: u32,
     height: u32,
+    bytes: usize,
     frame: u64,
 }
 impl Drop for Texture {
@@ -133,10 +139,14 @@ pub struct RenderStats {
     /// Milliseconds this frame spent on first-use work: glyph outlines, logo meshes, images.
     pub glyph_ms: f64,
     pub vector_load_ms: f64,
+    /// GPU uploads of decoded images since the previous frame, plus any image decoded on
+    /// the SDL thread (synchronous mode only).
     pub image_load_ms: f64,
     pub glyph_failures: usize,
     pub missing_glyphs: usize,
     pub missing_images: usize,
+    /// Images still decoding on the worker, not drawn this frame.
+    pub pending_images: usize,
     pub glyph_geometry_bytes: usize,
     pub cached_text_runs: usize,
     pub text_geometry_bytes: usize,
@@ -168,6 +178,7 @@ impl RenderStats {
             glyph_failures: 0,
             missing_glyphs: 0,
             missing_images: 0,
+            pending_images: 0,
             glyph_geometry_bytes: 0,
             cached_text_runs: 0,
             text_geometry_bytes: 0,
@@ -337,7 +348,15 @@ pub struct Renderer {
     failed_fonts: HashSet<u16>,
     glyphs: HashMap<(char, u16), Glyph>,
     text_runs: HashMap<TextKey, TextRun>,
-    textures: HashMap<String, Option<Texture>>,
+    textures: HashMap<String, Texture>,
+    failed_images: HashSet<String>,
+    pending_images: HashSet<String>,
+    images: image_loader::Loader,
+    /// Decode on the SDL thread instead (scripted and screenshot runs need complete frames).
+    synchronous_images: bool,
+    /// The last full-screen wallpaper drawn, shown while its replacement decodes.
+    last_wallpaper: Option<String>,
+    upload_ms: f64,
     vectors: HashMap<String, Option<vector::Mesh>>,
     artwork_variants: HashMap<String, String>,
     vertices: Vec<f32>,
@@ -459,6 +478,12 @@ impl Renderer {
             glyphs: HashMap::new(),
             text_runs: HashMap::new(),
             textures: HashMap::new(),
+            failed_images: HashSet::new(),
+            pending_images: HashSet::new(),
+            images: image_loader::Loader::new(),
+            synchronous_images: false,
+            last_wallpaper: None,
+            upload_ms: 0.,
             vectors: HashMap::new(),
             artwork_variants: HashMap::new(),
             vertices: Vec::with_capacity(65536),
@@ -949,20 +974,9 @@ impl Renderer {
         self.folded_image(path, rect, radius, contain, tint, &[]);
     }
 
-    fn folded_image(
-        &mut self,
-        path: &str,
-        mut rect: Rect,
-        radius: f32,
-        contain: bool,
-        tint: Color,
-        scrims: &[Scrim],
-    ) {
-        if path.ends_with(".lvec") {
-            self.vector_image(path, rect, contain, tint);
-            return;
-        }
-        let path = if self.stats.viewport.scale > 1.
+    /// The file actually drawn for `path`: a 4K drawable uses a wallpaper's `@2x` variant.
+    fn resolve(&mut self, path: &str) -> String {
+        if self.stats.viewport.scale > 1.
             && self.info.max_texture_size >= 3840
             && Path::new(path)
                 .parent()
@@ -986,31 +1000,184 @@ impl Renderer {
                 .clone()
         } else {
             path.into()
+        }
+    }
+
+    /// Decode on the SDL thread (scripted runs) instead of the image worker.
+    pub fn set_synchronous_images(&mut self, synchronous: bool) {
+        self.synchronous_images = synchronous;
+    }
+
+    /// Starts decoding `path` unless it is already uploaded, pending or failed.
+    pub fn request(&mut self, path: &str) {
+        let path = self.resolve(path);
+        self.request_resolved(&path);
+    }
+
+    fn request_resolved(&mut self, path: &str) {
+        if self.textures.contains_key(path)
+            || self.failed_images.contains(path)
+            || self.pending_images.contains(path)
+        {
+            return;
+        }
+        if !self.synchronous_images && self.images.request(path) {
+            self.pending_images.insert(path.into());
+            return;
+        }
+        let started = Instant::now();
+        let deferred = self.upload_ms;
+        let pixels = image_loader::decode(Path::new(path))
+            .map_err(|error| eprintln!("Artwork {path}: {error}"))
+            .ok();
+        self.pending_images.insert(path.into());
+        self.upload(Decoded {
+            path: path.into(),
+            pixels,
+        });
+        // Counted in this frame with its decode, not again on the next frame.
+        self.upload_ms = deferred;
+        self.stats.image_load_ms += started.elapsed().as_secs_f64() * 1000.;
+    }
+
+    /// Uploads a decoded image. Replies for paths no longer pending (forgotten while
+    /// decoding) are dropped. Returns the texture bytes uploaded.
+    fn upload(&mut self, decoded: Decoded) -> usize {
+        if !self.pending_images.remove(&decoded.path) {
+            return 0;
+        }
+        let Some(pixels) = decoded.pixels else {
+            if self.failed_images.len() >= FAILED_IMAGE_LIMIT {
+                self.failed_images.clear();
+            }
+            self.failed_images.insert(decoded.path);
+            return 0;
         };
+        let started = Instant::now();
+        let format = if pixels.has_alpha() {
+            gl::RGBA
+        } else {
+            gl::RGB
+        };
+        let mut texture = texture_with(pixels.width(), pixels.height(), format, pixels.raw());
+        texture.frame = self.frame;
+        let bytes = texture.bytes;
+        self.textures.insert(decoded.path, texture);
+        self.upload_ms += started.elapsed().as_secs_f64() * 1000.;
+        bytes
+    }
+
+    /// Uploads images the worker finished, about one wallpaper's worth per call. Returns the
+    /// scene paths that now draw differently (including a 4K variant's original path), so
+    /// partial redraw can repaint them although the scene itself did not change.
+    pub fn poll(&mut self) -> Vec<String> {
+        let mut loaded = Vec::new();
+        let mut uploaded = 0;
+        while uploaded < UPLOAD_BUDGET
+            && let Some(decoded) = self.images.try_recv()
+        {
+            let path = decoded.path.clone();
+            if !self.pending_images.contains(&path) {
+                // Forgotten while decoding: dropped by `upload`.
+                self.upload(decoded);
+                continue;
+            }
+            // A failure also changes pixels: a wallpaper substitute stops being drawn.
+            uploaded += self.upload(decoded);
+            loaded.extend(
+                self.artwork_variants
+                    .iter()
+                    .filter(|(original, variant)| *variant == &path && *original != &path)
+                    .map(|(original, _)| original.clone()),
+            );
+            loaded.push(path);
+        }
+        loaded
+    }
+
+    /// Whether `path` has been decoded (uploaded, or failed and drawn as missing).
+    pub fn ready(&mut self, path: &str) -> bool {
+        let path = self.resolve(path);
+        self.textures.contains_key(&path) || self.failed_images.contains(&path)
+    }
+
+    /// Whether an image is still decoding, so the event loop should wake soon to poll.
+    pub fn pending(&self) -> bool {
+        !self.pending_images.is_empty()
+    }
+
+    /// Blocks until every requested image is decoded and uploaded, at most `timeout`; e.g. after
+    /// preparing the first frame, so the window never opens on an empty background.
+    pub fn wait_pending(&mut self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while !self.pending_images.is_empty()
+            && let Some(decoded) = self.images.recv_until(deadline)
+        {
+            self.upload(decoded);
+        }
+    }
+
+    /// Drops cached, failed and pending images whose path contains `fragment`, e.g. a
+    /// deleted wallpaper's directory name.
+    pub fn forget(&mut self, fragment: &str) {
+        self.textures.retain(|path, _| !path.contains(fragment));
+        self.failed_images.retain(|path| !path.contains(fragment));
+        self.pending_images.retain(|path| !path.contains(fragment));
+        self.artwork_variants
+            .retain(|path, variant| !path.contains(fragment) && !variant.contains(fragment));
+        if self
+            .last_wallpaper
+            .as_ref()
+            .is_some_and(|path| path.contains(fragment))
+        {
+            self.last_wallpaper = None;
+        }
+    }
+
+    fn folded_image(
+        &mut self,
+        path: &str,
+        mut rect: Rect,
+        radius: f32,
+        contain: bool,
+        tint: Color,
+        scrims: &[Scrim],
+    ) {
+        if path.ends_with(".lvec") {
+            self.vector_image(path, rect, contain, tint);
+            return;
+        }
+        // Offscreen cards, e.g. gallery thumbnails scrolled out of view, are not loaded.
+        if !visible(&rect, self.clip) {
+            return;
+        }
+        let path = self.resolve(path);
         if path.ends_with("@2x.jpg") {
             self.stats.high_resolution_wallpaper = true;
         }
-        let frame = self.frame;
-        let started = Instant::now();
-        let loaded = !self.textures.contains_key(&path);
-        let entry = self
-            .textures
-            .entry(path.clone())
-            .or_insert_with(|| match image::open(&path) {
-                Ok(image) => {
-                    let image = image.into_rgba8();
-                    Some(texture(image.width(), image.height(), image.as_raw()))
-                }
-                Err(error) => {
-                    eprintln!("Artwork {path}: {error}");
-                    None
-                }
-            });
-        if loaded {
-            self.stats.image_load_ms += started.elapsed().as_secs_f64() * 1000.;
-        }
-        let Some(texture) = entry else {
+        let wallpaper = !contain && radius <= 0. && full_screen(&rect);
+        self.request_resolved(&path);
+        let path = if self.textures.contains_key(&path) {
+            path
+        } else if self.failed_images.contains(&path) {
             self.stats.missing_images += 1;
+            return;
+        } else if wallpaper
+            && let Some(last) = self
+                .last_wallpaper
+                .clone()
+                .filter(|last| self.textures.contains_key(last))
+        {
+            last
+        } else {
+            self.stats.pending_images += 1;
+            return;
+        };
+        if wallpaper {
+            self.last_wallpaper = Some(path.clone());
+        }
+        let frame = self.frame;
+        let Some(texture) = self.textures.get_mut(&path) else {
             return;
         };
         texture.frame = frame;
@@ -1106,16 +1273,13 @@ impl Renderer {
         radius: f32,
         tint: Color,
     ) {
-        let entry = self.textures.entry(image.key.clone()).or_insert_with(|| {
-            Some(texture(
+        let texture = self.textures.entry(image.key.clone()).or_insert_with(|| {
+            texture(
                 image.pixels.width(),
                 image.pixels.height(),
                 image.pixels.as_raw(),
-            ))
+            )
         });
-        let Some(texture) = entry else {
-            return;
-        };
         texture.frame = self.frame;
         let scale =
             (rect.w * 0.68 / texture.width as f32).min(rect.h * 0.68 / texture.height as f32);
@@ -1177,16 +1341,20 @@ impl Renderer {
     /// first appearance does not pay for it. The visible frame's statistics stay unchanged.
     pub fn prepare(&mut self, commands: &[Draw], width: u32, height: u32) {
         let stats = self.stats.clone();
+        // Uploads since the last frame still belong to the next visible frame.
+        let uploads = self.upload_ms;
         self.build(commands, width, height, None);
         self.vertices.clear();
         self.batches.clear();
         self.stats = stats;
+        self.upload_ms = uploads;
     }
 
     /// Lays out the scene into vertices and batches; commands entirely outside `area` are
     /// skipped.
     fn build(&mut self, commands: &[Draw], width: u32, height: u32, area: Option<Rect>) {
         self.stats = RenderStats::new(Size::new(width, height));
+        self.stats.image_load_ms = std::mem::take(&mut self.upload_ms);
         // Captures can bind a single-sample FBO even when the actual TV window
         // is multisampled, so query the active target rather than assume.
         let mut samples = 0;
@@ -1448,29 +1616,21 @@ impl Renderer {
             gl::Disable(gl::SCISSOR_TEST);
         }
         // Keep the current scene, evict old full-resolution wallpapers before memory grows.
-        let mut bytes: usize = self
-            .textures
-            .values()
-            .flatten()
-            .map(|t| t.width as usize * t.height as usize * 4)
-            .sum();
+        let mut bytes: usize = self.textures.values().map(|t| t.bytes).sum();
         if bytes > TEXTURE_BUDGET {
             let mut old: Vec<_> = self
                 .textures
                 .iter()
-                .filter_map(|(path, t)| {
-                    t.as_ref()
-                        .filter(|t| t.frame != self.frame)
-                        .map(|t| (path.clone(), t.frame))
-                })
+                .filter(|(_, t)| t.frame != self.frame)
+                .map(|(path, t)| (path.clone(), t.frame))
                 .collect();
             old.sort_by_key(|(_, frame)| *frame);
             for (path, _) in old {
                 if bytes <= TEXTURE_BUDGET {
                     break;
                 }
-                if let Some(Some(t)) = self.textures.remove(&path) {
-                    bytes -= t.width as usize * t.height as usize * 4;
+                if let Some(t) = self.textures.remove(&path) {
+                    bytes -= t.bytes;
                 }
             }
         }
@@ -1754,6 +1914,12 @@ impl Drop for Renderer {
 }
 
 fn texture(width: u32, height: u32, pixels: &[u8]) -> Texture {
+    texture_with(width, height, gl::RGBA, pixels)
+}
+
+/// `format` is RGBA or RGB; UNPACK_ALIGNMENT is 1, so RGB rows of any width are tightly packed.
+fn texture_with(width: u32, height: u32, format: GLenum, pixels: &[u8]) -> Texture {
+    let channels = if format == gl::RGB { 3 } else { 4 };
     let mut id = 0;
     unsafe {
         gl::GenTextures(1, &mut id);
@@ -1765,11 +1931,11 @@ fn texture(width: u32, height: u32, pixels: &[u8]) -> Texture {
         gl::TexImage2D(
             gl::TEXTURE_2D,
             0,
-            gl::RGBA as i32,
+            format as i32,
             width as i32,
             height as i32,
             0,
-            gl::RGBA,
+            format,
             gl::UNSIGNED_BYTE,
             if pixels.is_empty() {
                 std::ptr::null()
@@ -1782,8 +1948,20 @@ fn texture(width: u32, height: u32, pixels: &[u8]) -> Texture {
         id,
         width,
         height,
+        bytes: width as usize * height as usize * channels,
         frame: 0,
     }
+}
+
+/// Whether any part of `rect` falls on the logical screen and inside `clip`.
+fn visible(rect: &Rect, clip: Option<Rect>) -> bool {
+    let overlaps = |a: &Rect, b: &Rect| {
+        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    };
+    rect.w > 0.
+        && rect.h > 0.
+        && overlaps(rect, &Rect::new(0., 0., 1920., 1080.))
+        && clip.is_none_or(|clip| overlaps(rect, &clip))
 }
 
 fn gl_string(name: GLenum) -> String {
