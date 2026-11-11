@@ -22,7 +22,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "astro"
-version = "4.0.0"
+version = "4.0.1"
 dependencies = [
  "astro-tv-helper",
  "astro-vector-geometry",
