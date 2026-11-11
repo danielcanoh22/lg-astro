@@ -129,6 +129,40 @@ fn text_damages_the_full_width_of_its_line() {
 }
 
 #[test]
+fn an_image_that_finished_loading_repaints_only_its_commands() {
+    let mut tracker = Tracker::default();
+    let thumbnail =
+        |path: &str| Draw::Image(path.into(), Rect::new(600., 400., 480., 270.), 12., false);
+    let scene = [wallpaper(), thumbnail("thumbs/a.jpg"), shape(1400.)];
+    tracker.push(&scene);
+    tracker.push(&scene);
+    assert_eq!(
+        area(tracker.damage(1)).w,
+        0.,
+        "an unchanged scene is undamaged"
+    );
+    tracker.loaded(&scene, &["thumbs/a.jpg".into()]);
+    let damage = area(tracker.damage(1));
+    assert_eq!(
+        (damage.x, damage.y, damage.w, damage.h),
+        (599., 399., 482., 272.)
+    );
+    // Images that are not in the scene, e.g. a prewarmed page's, change nothing.
+    tracker.push(&scene);
+    tracker.loaded(&scene, &["thumbs/other.jpg".into()]);
+    assert_eq!(area(tracker.damage(1)).w, 0.);
+}
+
+#[test]
+fn a_loaded_image_does_not_shrink_a_full_redraw() {
+    let mut tracker = Tracker::default();
+    let scene = [wallpaper()];
+    tracker.push(&scene);
+    tracker.loaded(&scene, &["wallpapers/dunes.jpg".into()]);
+    assert!(tracker.damage(1).is_none());
+}
+
+#[test]
 fn shadows_include_their_blur() {
     let mut tracker = Tracker::default();
     let shadow =

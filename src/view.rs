@@ -51,7 +51,7 @@ impl Assets {
         self.root.join(path).to_string_lossy().into_owned()
     }
 
-    fn background(&self, state: &State, id: &str) -> String {
+    pub(crate) fn background(&self, state: &State, id: &str) -> String {
         if let Some(item) = state.wallpapers.iter().find(|item| item.id == id) {
             return if state.preferences.wallpaper_gradient {
                 item.image()
