@@ -49,6 +49,7 @@ pub mod discovery {
                     if sender.send(result).is_err() {
                         break;
                     }
+                    crate::wake::wake();
                 }
             });
             let service = Self {
@@ -564,6 +565,7 @@ impl Worker {
                     if responses.send(response).is_err() {
                         break;
                     }
+                    crate::wake::wake();
                 }
             })
             .expect("spawn the update worker");

@@ -442,6 +442,7 @@ impl Platform {
                 if responses.send(response).is_err() {
                     break;
                 }
+                crate::wake::wake();
             }
         });
         Self {

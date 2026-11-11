@@ -32,6 +32,7 @@ impl Service {
                 if response_tx.send(response).is_err() {
                     break;
                 }
+                crate::wake::wake();
             }
         });
         Self {
