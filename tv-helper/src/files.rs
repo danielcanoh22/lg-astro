@@ -82,6 +82,12 @@ pub fn read_icons(system: &impl System, source: &IconSource) -> Result<Value> {
             if !seen.insert(path.clone()) {
                 continue;
             }
+            if !crate::resolves_within(
+                &system.path(&path),
+                ROOTS.iter().map(|root| system.path(Path::new(root))),
+            ) {
+                continue;
+            }
             if let Ok(bytes) = system::read(system, &path, remaining) {
                 if bytes.is_empty() {
                     continue;

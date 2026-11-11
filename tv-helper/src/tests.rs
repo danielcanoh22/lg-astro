@@ -652,6 +652,51 @@ fn invalid_ids_and_unrelated_manifests_cannot_select_private_artwork() {
     f.put("/usr/palm/applications/sample/private.png", b"private");
     assert_eq!(files::read_icons(&f, &s).unwrap()["icons"], json!([]));
 }
+#[cfg(unix)]
+#[test]
+fn an_icon_linked_outside_the_application_roots_is_not_read() {
+    let f = Fixture::new();
+    let dir = "/usr/palm/applications/sample";
+    f.put_json(
+        &format!("{dir}/appinfo.json"),
+        json!({"id":"sample","icon":"linked.png"}),
+    );
+    f.put("/var/private", b"private");
+    std::os::unix::fs::symlink(f.p("/var/private"), f.p(&format!("{dir}/linked.png"))).unwrap();
+    let source = files::IconSource {
+        id: "sample".into(),
+        directory: None,
+        large_icon: None,
+        icon: None,
+    };
+    assert_eq!(files::read_icons(&f, &source).unwrap()["icons"], json!([]));
+}
+#[cfg(unix)]
+#[test]
+fn an_icon_linked_inside_the_application_roots_is_still_read() {
+    let f = Fixture::new();
+    let dir = "/usr/palm/applications/sample";
+    f.put_json(
+        &format!("{dir}/appinfo.json"),
+        json!({"id":"sample","icon":"linked.png"}),
+    );
+    f.put(&format!("{dir}/real.png"), b"real");
+    std::os::unix::fs::symlink(
+        f.p(&format!("{dir}/real.png")),
+        f.p(&format!("{dir}/linked.png")),
+    )
+    .unwrap();
+    let source = files::IconSource {
+        id: "sample".into(),
+        directory: None,
+        large_icon: None,
+        icon: None,
+    };
+    assert_eq!(
+        files::read_icons(&f, &source).unwrap()["icons"],
+        json!(["7265616c"])
+    );
+}
 
 #[test]
 fn splash_updates_tile_and_only_the_enabled_own_manifest_stage() {
