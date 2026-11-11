@@ -25,8 +25,8 @@ When only Markdown (`.md`) files are updated, do not run checks, including forma
 builds or tests.
 
 `pnpm check` does not execute tests. `pnpm test` is workspace unit tests; smoke scripts render
-desktop OpenGL and mock weather HTTP. Linux can use `xvfb-run -a pnpm test:smoke`. Tests must not
-contact real weather APIs or a TV. Respect any user instruction to use manual TV verification
+desktop OpenGL. Linux can use `xvfb-run -a pnpm test:smoke`. Tests must not contact real web
+services or a TV. Respect any user instruction to use manual TV verification
 instead of running automated tests. Builds/lint may still be run. Do not claim hardware behavior
 from desktop checks. Add a `pnpm changeset` file for release-worthy changes and leave version
 bumps to the automated Version Packages PR. Its `pnpm version:release` command synchronizes
@@ -70,10 +70,7 @@ atlas. Text AA prefers MSAA of intact outlines, with a narrow fringe fallback; k
 origin/baseline snapping and logical 1920×1080 layout. `--resolution 4k` is experimental, not a
 shipping-default claim. Profiles count presentations; ordinary `--frames` is event-loop iterations.
 
-Weather uses ureq/rustls, fixed Open-Meteo origins, bounded replies/timeouts, no proxy/redirects,
-separate workers/cache and generation IDs. Cache Celsius and convert units without replacing it.
-Only configured/enabled/visible Home starts forecasts. Shared translations are bundled locally.
-Match the current native design without on-screen weather credits; attribution remains in docs.
+Shared translations are bundled locally.
 
 ## Assets
 
@@ -86,8 +83,8 @@ changes. The Homebrew description must name every supported language; keep the
 variant cannot silently leave release-facing metadata outdated. Do not edit generated feed files.
 When adding or changing user-facing features, review `assets/homebrew-description.html` as well as
 the README/development docs so the Homebrew listing reflects major capabilities (including uploaded
-backgrounds and QR-managed webhook shortcuts), not just languages. Avoid claims for unverified TV
-behavior or features not yet implemented.
+backgrounds), not just languages. Avoid claims for unverified TV behavior or features not yet
+implemented.
 
 SVG sources and fonts retain licenses in `assets/`. TV app artwork is resolved at runtime from
 inventory/installed manifests by `src/app_artwork.rs`, with a native Rust `astro-helper` elevated

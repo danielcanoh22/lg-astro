@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import http from 'node:http';
 import { spawn } from 'node:child_process';
 import messages from '../assets/messages.json' with { type: 'json' };
 
@@ -11,33 +10,6 @@ await fs.mkdir(out, { recursive: true });
 const temporary = await fs.mkdtemp(path.join(out, 'translations-smoke-'));
 const preferences = path.join(temporary, 'preferences.json');
 const binary = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target', 'debug/astro');
-const requests = [];
-const places = {
-  en: { name: 'Vienna', region: 'Vienna', country: 'Austria' },
-  es: { name: 'Viena', region: 'Viena', country: 'Austria' },
-};
-const server = http.createServer((request, response) => {
-  const url = new URL(request.url, 'http://127.0.0.1');
-  requests.push({ path: url.pathname, query: Object.fromEntries(url.searchParams) });
-  response.setHeader('Content-Type', 'application/json');
-  if (url.pathname === '/v1/search') {
-    const place = places[url.searchParams.get('language')];
-    assert.ok(place, 'Geocoding must use a supported UI language');
-    response.end(
-      JSON.stringify({
-        results: [{ ...place, admin1: place.region, latitude: 48.2085, longitude: 16.3721 }],
-      }),
-    );
-  } else if (url.pathname === '/v1/forecast') {
-    assert.equal(url.searchParams.get('temperature_unit'), 'celsius');
-    response.end(JSON.stringify({ current: { temperature_2m: 14.2, weather_code: 2, is_day: 1 } }));
-  } else {
-    response.writeHead(404);
-    response.end('{}');
-  }
-});
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-const origin = `http://127.0.0.1:${server.address().port}`;
 async function run(command, args) {
   await new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd: root, stdio: 'inherit' });
@@ -62,8 +34,6 @@ async function scenario(name, script, extra = []) {
   await run(binary, [
     '--preferences',
     preferences,
-    '--weather-test-server',
-    origin,
     '--script',
     script,
     '--frames',
@@ -98,9 +68,8 @@ function contains(state, key, language) {
   assert.ok(state.ui_text.includes(messages[key][language]), `Missing rendered ${key}/${language}`);
 }
 const picker = 'settings,down,enter,down,down,enter';
-const weatherPage = 'settings,down,down,down,enter,down,down,enter';
-const inputsPage = 'settings,down,down,down,enter,down,down,down,down,enter';
-const location = `${weatherPage},down,enter`;
+const widgetsPage = 'settings,down,down,down,enter';
+const inputsPage = `${widgetsPage},down,down,enter`;
 try {
   if (process.env.ASTRO_SMOKE_SKIP_BUILD !== '1')
     await run('cargo', ['build', '--locked', '--package', 'astro']);
@@ -115,15 +84,7 @@ try {
 
   const spanish = await scenario('es-home', `${picker},down,enter,home,down`);
   assert.equal(spanish.preferences.language, 'es');
-  for (const key of [
-    'home',
-    'apps',
-    'settings',
-    'favorites',
-    'inputsHeading',
-    'evening',
-    'setWeatherLocation',
-  ])
+  for (const key of ['home', 'apps', 'settings', 'favorites', 'inputsHeading', 'evening'])
     contains(spanish, key, 'es');
   assert.ok(spanish.ui_text.includes('MIÉRCOLES, 21 DE OCTUBRE'));
   assert.ok(spanish.ui_text.includes('Netflix'), 'Installed app names stay intact');
@@ -131,36 +92,9 @@ try {
   assert.equal(persisted.preferences.language, 'es', 'Spanish is restored after restart');
   for (const key of ['language', 'appNames', 'clock']) contains(persisted, key, 'es');
 
-  const selected = await scenario(
-    'es-weather',
-    `${location},type:Viena,back,enter,await-search,down,enter,home,await-weather`,
-  );
-  assert.equal(selected.preferences.weather_location.name, 'Viena');
-  contains(selected, 'partlyCloudy', 'es');
-  assert.equal(
-    requests.filter((request) => request.path === '/v1/search').at(-1).query.language,
-    'es',
-    'Geocoding must use the Spanish locale',
-  );
-  const forecasts = requests.filter((request) => request.path === '/v1/forecast').length;
-  const changed = await scenario('en-weather', `${picker},up,enter,home,await-weather`);
-  assert.equal(changed.preferences.language, 'en');
-  contains(changed, 'partlyCloudy', 'en');
-  assert.ok(changed.ui_text.includes('Viena'), 'The saved city name is data, not a UI label');
-  assert.equal(
-    requests.filter((request) => request.path === '/v1/forecast').length,
-    forecasts,
-    'Language changes reuse weather cache',
-  );
-  const englishPlace = await scenario(
-    'en-search',
-    `${location},type:Vienna,back,enter,await-search,down,enter`,
-  );
-  assert.equal(englishPlace.preferences.weather_location.name, 'Vienna');
-  assert.equal(
-    requests.filter((request) => request.path === '/v1/search').at(-1).query.language,
-    'en',
-  );
+  const english = await scenario('en-home', `${picker},up,enter,home`);
+  assert.equal(english.preferences.language, 'en');
+  for (const key of ['home', 'favorites', 'evening']) contains(english, key, 'en');
 
   const saved = JSON.parse(await fs.readFile(preferences, 'utf8'));
   await fs.writeFile(preferences, JSON.stringify({ ...saved, language: 'es' }));
@@ -197,19 +131,14 @@ try {
   assert.ok(cancelled.apps.includes('netflix'), 'Cancel must not delete the app');
   const keyboard = await scenario('es-keyboard', 'apps,type:Netflix');
   for (const key of ['findApp', 'space', 'delete', 'clear', 'done']) contains(keyboard, key, 'es');
-  const weatherSettings = await scenario('es-weather-settings', weatherPage);
-  for (const key of ['widgets', 'showWidget', 'location', 'temperature'])
-    contains(weatherSettings, key, 'es');
-  assert.ok(
-    !weatherSettings.ui_text.some((label) => label.includes('Open-Meteo')),
-    'Weather credit is not shown in the UI',
-  );
+  const widgets = await scenario('es-widgets-settings', widgetsPage);
+  for (const key of ['widgets', 'date', 'greeting', 'inputs']) contains(widgets, key, 'es');
+  const dateSettings = await scenario('es-date-settings', `${widgetsPage},enter`);
+  for (const key of ['showWidget', 'dateFormat']) contains(dateSettings, key, 'es');
   await scenario('es-4k', 'home,down', ['--capture-scale', '2']);
   console.log(
-    'Native translation checks passed: English and Spanish selection, saved language, shared labels, Spanish date formatting and accented glyphs, deletion/cancel UI, localized geocoding/weather, unchanged app names and 4K rendering.',
+    'Native translation checks passed: English and Spanish selection, saved language, shared labels, Spanish date formatting and accented glyphs, deletion/cancel UI, widget settings, unchanged app names and 4K rendering.',
   );
 } finally {
-  server.closeAllConnections();
-  await new Promise((resolve) => server.close(resolve));
   await fs.rm(temporary, { recursive: true, force: true });
 }

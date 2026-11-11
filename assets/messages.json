@@ -39,10 +39,6 @@
     "en": "Current version: {current}",
     "es": "Versión actual: {current}"
   },
-  "addFirstShortcutHint": {
-    "en": "Press Configure to add your first shortcut.",
-    "es": "Pulsa Configurar para añadir tu primer acceso directo."
-  },
   "updateAvailable": {
     "en": "Update available",
     "es": "Actualización disponible"
@@ -50,14 +46,6 @@
   "updateVersions": {
     "en": "Current: {current} · Latest: {latest}",
     "es": "Actual: {current} · Última: {latest}"
-  },
-  "testShortcut": {
-    "en": "Test shortcut",
-    "es": "Probar acceso directo"
-  },
-  "configure": {
-    "en": "Configure",
-    "es": "Configurar"
   },
   "widgets": {
     "en": "Widgets",
@@ -231,14 +219,6 @@
     "en": "Favorites",
     "es": "Favoritos"
   },
-  "weather": {
-    "en": "Weather",
-    "es": "Tiempo"
-  },
-  "location": {
-    "en": "Location",
-    "es": "Ubicación"
-  },
   "appNames": {
     "en": "App names",
     "es": "Nombres de apps"
@@ -342,34 +322,6 @@
   "showWidget": {
     "en": "Show widget",
     "es": "Mostrar widget"
-  },
-  "temperature": {
-    "en": "Temperature",
-    "es": "Temperatura"
-  },
-  "celsius": {
-    "en": "Celsius",
-    "es": "Celsius"
-  },
-  "fahrenheit": {
-    "en": "Fahrenheit",
-    "es": "Fahrenheit"
-  },
-  "cityPostcode": {
-    "en": "City or postcode",
-    "es": "Ciudad o código postal"
-  },
-  "enterCity": {
-    "en": "Enter a city or postcode with at least two characters.",
-    "es": "Escribe una ciudad o un código postal con al menos dos caracteres."
-  },
-  "noLocations": {
-    "en": "No locations found. Try another city or postcode.",
-    "es": "Sin resultados. Prueba con otra ciudad o código postal."
-  },
-  "searchUnavailable": {
-    "en": "Location search is unavailable. Check your connection and try again.",
-    "es": "Búsqueda no disponible. Revisa tu conexión e inténtalo de nuevo."
   },
   "findApp": {
     "en": "Find an app",
@@ -527,22 +479,6 @@
     "en": "Show app",
     "es": "Mostrar app"
   },
-  "loadingWeather": {
-    "en": "Loading weather…",
-    "es": "Cargando el tiempo…"
-  },
-  "weatherUnavailable": {
-    "en": "Weather unavailable",
-    "es": "Tiempo no disponible"
-  },
-  "setWeatherLocation": {
-    "en": "Set weather location",
-    "es": "Fijar ubicación del tiempo"
-  },
-  "lastReading": {
-    "en": "Last saved reading",
-    "es": "Último dato guardado"
-  },
   "opening": {
     "en": "Opening…",
     "es": "Abriendo…"
@@ -631,54 +567,6 @@
     "en": "Utilities",
     "es": "Utilidades"
   },
-  "clearSkies": {
-    "en": "Clear skies",
-    "es": "Despejado"
-  },
-  "clearNight": {
-    "en": "Clear night",
-    "es": "Noche despejada"
-  },
-  "mostlyClear": {
-    "en": "Mostly clear",
-    "es": "Casi despejado"
-  },
-  "partlyCloudy": {
-    "en": "Partly cloudy",
-    "es": "Parcialmente nublado"
-  },
-  "overcast": {
-    "en": "Overcast",
-    "es": "Cubierto"
-  },
-  "fog": {
-    "en": "Fog",
-    "es": "Niebla"
-  },
-  "drizzle": {
-    "en": "Drizzle",
-    "es": "Llovizna"
-  },
-  "rain": {
-    "en": "Rain",
-    "es": "Lluvia"
-  },
-  "snow": {
-    "en": "Snow",
-    "es": "Nieve"
-  },
-  "thunderstorms": {
-    "en": "Thunderstorms",
-    "es": "Tormentas"
-  },
-  "currentWeather": {
-    "en": "Current weather",
-    "es": "Tiempo actual"
-  },
-  "searching": {
-    "en": "Searching…",
-    "es": "Buscando…"
-  },
   "space": {
     "en": "Space",
     "es": "Espacio"
@@ -702,126 +590,6 @@
   "scrollTestOnly": {
     "en": "Test card for scrolling; no app to launch.",
     "es": "Tarjeta de prueba; no hay app que abrir."
-  },
-  "shortcuts": {
-    "en": "Shortcuts",
-    "es": "Accesos directos"
-  },
-  "noTiles": {
-    "en": "Shortcut tiles on Home send a web request, for example to a Home Assistant webhook.",
-    "es": "Los accesos directos en Inicio envían una solicitud web, por ejemplo a un webhook de Home Assistant."
-  },
-  "url": {
-    "en": "URL",
-    "es": "URL"
-  },
-  "icon": {
-    "en": "Icon",
-    "es": "Icono"
-  },
-  "iconMoon": {
-    "en": "Moon",
-    "es": "Luna"
-  },
-  "iconSun": {
-    "en": "Sun",
-    "es": "Sol"
-  },
-  "iconCloud": {
-    "en": "Cloud",
-    "es": "Nube"
-  },
-  "iconTv": {
-    "en": "TV",
-    "es": "Televisor"
-  },
-  "iconPower": {
-    "en": "Power",
-    "es": "Encendido"
-  },
-  "iconGlobe": {
-    "en": "Globe",
-    "es": "Globo"
-  },
-  "iconClock": {
-    "en": "Clock",
-    "es": "Reloj"
-  },
-  "iconCoffee": {
-    "en": "Coffee",
-    "es": "Café"
-  },
-  "iconGaming": {
-    "en": "Controller",
-    "es": "Mando"
-  },
-  "iconHeart": {
-    "en": "Heart",
-    "es": "Corazón"
-  },
-  "iconLocation": {
-    "en": "Location",
-    "es": "Ubicación"
-  },
-  "iconThermometer": {
-    "en": "Thermometer",
-    "es": "Termómetro"
-  },
-  "iconSparkles": {
-    "en": "Sparkles",
-    "es": "Destellos"
-  },
-  "iconAlert": {
-    "en": "Alert",
-    "es": "Alerta"
-  },
-  "iconEye": {
-    "en": "Eye",
-    "es": "Ojo"
-  },
-  "removeTile": {
-    "en": "Remove shortcut",
-    "es": "Eliminar acceso directo"
-  },
-  "tileRemoved": {
-    "en": "{tile} removed.",
-    "es": "{tile} eliminado."
-  },
-  "tileSending": {
-    "en": "Sending {tile}…",
-    "es": "Enviando {tile}…"
-  },
-  "tileSent": {
-    "en": "{tile} sent.",
-    "es": "{tile} enviado."
-  },
-  "tileFailed": {
-    "en": "{tile} couldn’t be sent.",
-    "es": "No se pudo enviar {tile}."
-  },
-  "editTilesElsewhere": {
-    "en": "Edit on phone or computer",
-    "es": "Editar en el móvil o el ordenador"
-  },
-  "tileEditorKeepOpen": {
-    "en": "Keep this window open while you edit. Use a device on the same network.",
-    "es": "Mantén esta ventana abierta mientras editas. Usa un dispositivo en la misma red."
-  },
-  "tileEditorPrivate": {
-    "en": "Local editing · This link expires in 10 minutes",
-    "es": "Edición local · Este enlace caduca en 10 minutos"
-  },
-  "tileEditorError": {
-    "en": "Couldn’t start local editing. Check your network connection, then close and reopen this dialog.",
-    "es": "No se pudo iniciar la edición local. Comprueba la red y vuelve a abrir este diálogo."
-  },
-  "tileEditorStarting": {
-    "en": "Preparing your editing link…",
-    "es": "Preparando el enlace de edición…"
-  },
-  "tileEditorEnded": {
-    "en": "Editing session ended",
-    "es": "La sesión de edición ha terminado"
   },
   "tvInput": {
     "en": "Show as TV input",
