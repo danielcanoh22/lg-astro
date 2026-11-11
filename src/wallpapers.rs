@@ -318,8 +318,13 @@ fn decode(bytes: &[u8]) -> Result<image::RgbImage, String> {
     if image.width() != 1920 || image.height() != 1080 {
         return Err("Unsupported image orientation".into());
     }
+    // Opaque images (every JPEG the upload page sends) convert in place, without the RGBA
+    // copy and per-pixel compositing that only translucent images need.
+    if !image.color().has_alpha() {
+        return Ok(image.into_rgb8());
+    }
     // Composite alpha against the launcher's base instead of exposing transparent pixels as black.
-    let rgba = image.to_rgba8();
+    let rgba = image.into_rgba8();
     Ok(image::RgbImage::from_fn(1920, 1080, |x, y| {
         let p = rgba.get_pixel(x, y).0;
         let alpha = p[3] as f32 / 255.;
@@ -340,20 +345,53 @@ fn shade(image: &mut image::RgbImage) {
         (0.85, [23., 25., 29.], 0.92157),
         (1., [23., 25., 29.], 0.96078),
     ];
+    // The vertical gradient depends only on the row and the horizontal one only on the
+    // column, so both are computed once per row/column with the same arithmetic.
+    let rows: Vec<(f32, [f32; 3])> = (0..image.height())
+        .map(|y| {
+            let y = y as f32 / 1079.;
+            let pair = stops
+                .windows(2)
+                .find(|s| y <= s[1].0)
+                .unwrap_or(&stops[4..]);
+            let t = (y - pair[0].0) / (pair[1].0 - pair[0].0);
+            let alpha = pair[0].2 * (1. - t) + pair[1].2 * t;
+            // SVG gradients interpolate premultiplied colors.
+            let gradient = std::array::from_fn(|i| {
+                pair[0].1[i] * pair[0].2 * (1. - t) + pair[1].1[i] * pair[1].2 * t
+            });
+            (alpha, gradient)
+        })
+        .collect();
+    let columns: Vec<f32> = (0..image.width())
+        .map(|x| 0.42 * (1. - x as f32 / (1919. * 0.75)).max(0.))
+        .collect();
     for (x, y, pixel) in image.enumerate_pixels_mut() {
-        let y = y as f32 / 1079.;
-        let pair = stops.windows(2).find(|s| y <= s[1].0).unwrap();
-        let t = (y - pair[0].0) / (pair[1].0 - pair[0].0);
-        let alpha = pair[0].2 * (1. - t) + pair[1].2 * t;
-        let horizontal = 0.42 * (1. - x as f32 / (1919. * 0.75)).max(0.);
+        let (alpha, gradient) = rows[y as usize];
+        let horizontal = columns[x as usize];
         for i in 0..3 {
             let base = pixel[i] as f32 * 0.92 + [23., 25., 28.][i] * 0.08;
             let base = base * (1. - horizontal) + [17., 20., 23.][i] * horizontal;
-            // SVG gradients interpolate premultiplied colors.
-            let gradient = pair[0].1[i] * pair[0].2 * (1. - t) + pair[1].1[i] * pair[1].2 * t;
-            pixel[i] = (base * (1. - alpha) + gradient).round() as u8;
+            pixel[i] = (base * (1. - alpha) + gradient[i]).round() as u8;
         }
     }
+}
+
+/// The 480 × 270 gallery thumbnail of a 1920 × 1080 image: each pixel is the rounded average
+/// of its 4 × 4 source block, with no intermediate full-size buffer.
+fn thumbnail(image: &image::RgbImage) -> image::RgbImage {
+    image::RgbImage::from_fn(480, 270, |x, y| {
+        let mut sum = [0u32; 3];
+        for dy in 0..4 {
+            for dx in 0..4 {
+                let p = image.get_pixel(x * 4 + dx, y * 4 + dy).0;
+                for i in 0..3 {
+                    sum[i] += p[i] as u32;
+                }
+            }
+        }
+        image::Rgb(sum.map(|channel| ((channel + 8) / 16) as u8))
+    })
 }
 
 fn jpeg(image: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String> {
@@ -370,8 +408,7 @@ fn store(directory: &Path, bytes: &[u8], valid: impl Fn() -> bool) -> Result<Wal
     }
     let mut image = decode(bytes)?;
     let original = jpeg(&image, 94)?;
-    let thumbnail =
-        image::imageops::resize(&image, 480, 270, image::imageops::FilterType::Triangle);
+    let thumbnail = thumbnail(&image);
     shade(&mut image);
     let image = jpeg(&image, 94)?;
     let thumbnail = jpeg(&thumbnail, 82)?;

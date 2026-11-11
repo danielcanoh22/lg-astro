@@ -278,6 +278,94 @@ fn decoder_enforces_transport_dimensions_and_composites_transparent_pngs() {
     assert!(decode(png.get_ref()).is_err());
 }
 
+/// A 1920 × 1080 image whose every pixel differs from its neighbours.
+fn pattern() -> image::RgbImage {
+    image::RgbImage::from_fn(1920, 1080, |x, y| {
+        image::Rgb([
+            (x * 7 + y * 3) as u8,
+            ((x * 13) ^ (y * 5)) as u8,
+            (x + y * 11) as u8,
+        ])
+    })
+}
+
+fn png(image: image::DynamicImage) -> Vec<u8> {
+    let mut png = Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    png.into_inner()
+}
+
+#[test]
+fn opaque_uploads_keep_their_exact_pixels_and_translucent_ones_composite_on_the_base() {
+    let opaque = pattern();
+    assert_eq!(
+        decode(&png(image::DynamicImage::ImageRgb8(opaque.clone()))).unwrap(),
+        opaque
+    );
+    let translucent = image::RgbaImage::from_pixel(1920, 1080, image::Rgba([255, 0, 100, 128]));
+    // 255·128/255 + 23·127/255 = 139.45, 0 + 25·127/255 = 12.45, 100·128/255 + 28·127/255 = 64.14
+    assert_eq!(
+        decode(&png(image::DynamicImage::ImageRgba8(translucent)))
+            .unwrap()
+            .get_pixel(5, 5)
+            .0,
+        [139, 12, 64]
+    );
+}
+
+#[test]
+fn shading_matches_the_bundled_wallpaper_gradient_math() {
+    // The per-pixel formula shade() must reproduce exactly (tools/assets.mjs gradients).
+    fn reference(image: &mut image::RgbImage) {
+        let stops = [
+            (0., [13., 16., 19.], 0.24),
+            (0.19, [14., 17., 21.], 0.08),
+            (0.35, [15., 17., 20.], 0.35),
+            (0.63, [17., 19., 23.], 0.86),
+            (0.85, [23., 25., 29.], 0.92157),
+            (1., [23., 25., 29.], 0.96078),
+        ];
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            let y = y as f32 / 1079.;
+            let pair = stops.windows(2).find(|s| y <= s[1].0).unwrap();
+            let t = (y - pair[0].0) / (pair[1].0 - pair[0].0);
+            let alpha: f32 = pair[0].2 * (1. - t) + pair[1].2 * t;
+            let horizontal = 0.42 * (1. - x as f32 / (1919. * 0.75)).max(0.);
+            for i in 0..3 {
+                let base = pixel[i] as f32 * 0.92 + [23., 25., 28.][i] * 0.08;
+                let base = base * (1. - horizontal) + [17., 20., 23.][i] * horizontal;
+                let gradient = pair[0].1[i] * pair[0].2 * (1. - t) + pair[1].1[i] * pair[1].2 * t;
+                pixel[i] = (base * (1. - alpha) + gradient).round() as u8;
+            }
+        }
+    }
+    let mut expected = pattern();
+    reference(&mut expected);
+    let mut shaded = pattern();
+    shade(&mut shaded);
+    assert!(shaded == expected, "shade() changed pixels");
+}
+
+#[test]
+fn thumbnails_are_the_exact_average_of_each_4x4_block() {
+    let source = pattern();
+    let small = thumbnail(&source);
+    assert_eq!(small.dimensions(), (480, 270));
+    for (x, y) in [(0, 0), (1, 0), (239, 134), (479, 269), (100, 200)] {
+        let mut sum = [0u32; 3];
+        for dy in 0..4 {
+            for dx in 0..4 {
+                let p = source.get_pixel(x * 4 + dx, y * 4 + dy).0;
+                for i in 0..3 {
+                    sum[i] += p[i] as u32;
+                }
+            }
+        }
+        let average = sum.map(|channel| ((channel + 8) / 16) as u8);
+        assert_eq!(small.get_pixel(x, y).0, average, "block ({x}, {y})");
+    }
+}
+
 #[test]
 fn protocol_rejects_oversized_ambiguous_and_chunked_requests() {
     for request_text in [
