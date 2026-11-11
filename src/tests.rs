@@ -3514,3 +3514,25 @@ fn tv_input_row_reads_once_toggles_and_rereads_after_a_failed_change() {
     assert_eq!(state.tv_input, TvInput::Unavailable);
     assert_eq!(state.activate(), vec![Effect::TvInput(Some(true))]);
 }
+
+#[cfg(all(feature = "webos", unix))]
+#[test]
+fn the_home_log_never_writes_through_a_planted_link() {
+    let scratch = std::env::temp_dir().join(format!("astro-home-log-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let plain = crate::open_home_log(&scratch.join("plain.log")).is_ok();
+    // A second start replaces the previous log.
+    let again = crate::open_home_log(&scratch.join("plain.log")).is_ok();
+    std::fs::write(scratch.join("target"), b"keep").unwrap();
+    std::os::unix::fs::symlink(scratch.join("target"), scratch.join("linked.log")).unwrap();
+    let linked = crate::open_home_log(&scratch.join("linked.log")).is_ok();
+    let replaced_link = !scratch.join("linked.log").is_symlink();
+    std::fs::hard_link(scratch.join("target"), scratch.join("shared.log")).unwrap();
+    let shared = crate::open_home_log(&scratch.join("shared.log")).is_ok();
+    let target = std::fs::read(scratch.join("target")).unwrap();
+    std::fs::remove_dir_all(&scratch).unwrap();
+    assert!(plain && again);
+    // A planted link is replaced by a fresh file; what it pointed to is never written.
+    assert!(linked && replaced_link && shared);
+    assert_eq!(target, b"keep");
+}

@@ -574,16 +574,25 @@ fn scripted_click(
     Ok(())
 }
 
+/// As Home this runs as root and /tmp is shared: never write through a link or a file
+/// planted there. The previous log is unlinked and a new file is created exclusively.
+#[cfg(all(feature = "webos", unix))]
+fn open_home_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let _ = std::fs::remove_file(path);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .mode(0o600)
+        .open(path)
+}
+
 /// sam discards a system app's output. As Home, keep it in a small log.
 #[cfg(all(feature = "webos", unix))]
 fn log_home_output() {
     use std::os::unix::io::IntoRawFd;
-    if let Ok(file) = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("/tmp/astro-home.log")
-    {
+    if let Ok(file) = open_home_log(std::path::Path::new("/tmp/astro-home.log")) {
         unsafe { libc::dup2(file.into_raw_fd(), 2) };
     }
     unsafe { sdl2::sys::SDL_LogSetAllPriority(sdl2::sys::SDL_LogPriority::SDL_LOG_PRIORITY_INFO) };

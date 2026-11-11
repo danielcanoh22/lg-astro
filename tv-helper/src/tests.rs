@@ -652,6 +652,117 @@ fn invalid_ids_and_unrelated_manifests_cannot_select_private_artwork() {
     f.put("/usr/palm/applications/sample/private.png", b"private");
     assert_eq!(files::read_icons(&f, &s).unwrap()["icons"], json!([]));
 }
+#[cfg(unix)]
+#[test]
+fn an_icon_linked_outside_the_application_roots_is_not_read() {
+    let f = Fixture::new();
+    let dir = "/usr/palm/applications/sample";
+    f.put_json(
+        &format!("{dir}/appinfo.json"),
+        json!({"id":"sample","icon":"linked.png"}),
+    );
+    f.put("/var/private", b"private");
+    std::os::unix::fs::symlink(f.p("/var/private"), f.p(&format!("{dir}/linked.png"))).unwrap();
+    let source = files::IconSource {
+        id: "sample".into(),
+        directory: None,
+        large_icon: None,
+        icon: None,
+    };
+    assert_eq!(files::read_icons(&f, &source).unwrap()["icons"], json!([]));
+}
+#[cfg(unix)]
+#[test]
+fn an_icon_under_a_directory_linked_outside_the_application_roots_is_not_read() {
+    let f = Fixture::new();
+    let dir = "/usr/palm/applications/sample";
+    f.put_json(
+        &format!("{dir}/appinfo.json"),
+        json!({"id":"sample","icon":"art/icon.png"}),
+    );
+    f.put("/var/private/icon.png", b"private");
+    std::os::unix::fs::symlink(f.p("/var/private"), f.p(&format!("{dir}/art"))).unwrap();
+    let source = files::IconSource {
+        id: "sample".into(),
+        directory: None,
+        large_icon: None,
+        icon: None,
+    };
+    assert_eq!(files::read_icons(&f, &source).unwrap()["icons"], json!([]));
+}
+#[cfg(unix)]
+#[test]
+fn a_manifest_linked_outside_the_application_roots_names_no_icons() {
+    let f = Fixture::new();
+    let dir = "/usr/palm/applications/sample";
+    f.put_json(
+        "/var/private.json",
+        json!({"id":"sample","icon":"named.png"}),
+    );
+    f.put(&format!("{dir}/named.png"), b"named");
+    std::os::unix::fs::symlink(
+        f.p("/var/private.json"),
+        f.p(&format!("{dir}/appinfo.json")),
+    )
+    .unwrap();
+    let source = files::IconSource {
+        id: "sample".into(),
+        directory: None,
+        large_icon: None,
+        icon: None,
+    };
+    assert_eq!(files::read_icons(&f, &source).unwrap()["icons"], json!([]));
+}
+#[cfg(unix)]
+#[test]
+fn fifos_in_place_of_a_manifest_or_an_icon_are_skipped_without_blocking() {
+    let f = Fixture::new();
+    let dir = "/usr/palm/applications/sample";
+    f.put(&format!("{dir}/real.png"), b"real");
+    for name in ["appinfo.json", "icon.png"] {
+        let made = std::process::Command::new("mkfifo")
+            .arg(f.p(&format!("{dir}/{name}")))
+            .status()
+            .unwrap();
+        assert!(made.success());
+    }
+    let source = files::IconSource {
+        id: "sample".into(),
+        directory: None,
+        large_icon: Some("real.png".into()),
+        icon: None,
+    };
+    assert_eq!(
+        files::read_icons(&f, &source).unwrap()["icons"],
+        json!(["7265616c"])
+    );
+}
+#[cfg(unix)]
+#[test]
+fn an_icon_linked_inside_the_application_roots_is_still_read() {
+    let f = Fixture::new();
+    let dir = "/usr/palm/applications/sample";
+    f.put_json(
+        &format!("{dir}/appinfo.json"),
+        json!({"id":"sample","icon":"linked.png"}),
+    );
+    f.put(&format!("{dir}/real.png"), b"real");
+    std::os::unix::fs::symlink(
+        f.p(&format!("{dir}/real.png")),
+        f.p(&format!("{dir}/linked.png")),
+    )
+    .unwrap();
+    let source = files::IconSource {
+        id: "sample".into(),
+        directory: None,
+        large_icon: None,
+        icon: None,
+    };
+    assert_eq!(
+        files::read_icons(&f, &source).unwrap()["icons"],
+        json!(["7265616c"])
+    );
+}
 
 #[test]
 fn splash_updates_tile_and_only_the_enabled_own_manifest_stage() {
