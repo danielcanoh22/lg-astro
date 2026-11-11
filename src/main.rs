@@ -31,6 +31,7 @@ mod tile_editor;
 mod update;
 mod vector;
 mod view;
+mod wake;
 mod wallpaper_cycle;
 mod wallpapers;
 mod weather;
@@ -1007,6 +1008,12 @@ fn run() -> Result<(), String> {
     let mut inventory_retry: Option<Instant> = None;
     let mut input_refresh = input_refresh::Refresh::default();
     let scripted_input = !options.script.is_empty();
+    {
+        let subsystem = sdl.event()?;
+        // SAFETY: registers one SDL user event type for worker wakes.
+        let event_type = unsafe { subsystem.register_event()? };
+        wake::install(subsystem.event_sender(), event_type);
+    }
     let mut scene = compose(
         &mut state,
         &assets,
@@ -1307,10 +1314,6 @@ fn run() -> Result<(), String> {
         for result in update_service.receiver.try_iter() {
             state.update_response(result);
         }
-        // Rebuild hit regions before input whenever inventory/layout changed.
-        if state.dirty {
-            scene = compose(&mut state, &assets, pill, pill_width, now);
-        }
         for event in queued_event
             .take()
             .into_iter()
@@ -1337,6 +1340,12 @@ fn run() -> Result<(), String> {
             };
             if script_owns_input && external_input {
                 continue;
+            }
+            // Input needs hit regions that match the current state, and SDL may deliver
+            // several navigation events in a single poll. Worker wakes read no regions;
+            // the scene is otherwise built once, just before it is drawn.
+            if state.dirty && !matches!(event, Event::User { .. }) {
+                scene = compose(&mut state, &assets, pill, pill_width, now);
             }
             // Remote keys only reach the focused surface.
             if matches!(event, Event::KeyDown { .. } | Event::KeyUp { .. }) {
@@ -1698,10 +1707,6 @@ fn run() -> Result<(), String> {
                 state.pressed = pressed;
                 state.dirty = true;
             }
-            // SDL may deliver several navigation events in a single poll.
-            if state.dirty {
-                scene = compose(&mut state, &assets, pill, pill_width, now);
-            }
         }
         if back_button.held(Instant::now()) {
             press = None;
@@ -1745,6 +1750,9 @@ fn run() -> Result<(), String> {
             } else if action == "prewarm" {
                 prewarm_now = true;
             } else {
+                if state.dirty {
+                    scene = compose(&mut state, &assets, pill, pill_width, now);
+                }
                 let pending = script(&action, &mut state, &scene.controls)?;
                 running &= effects(
                     pending,
@@ -1984,6 +1992,10 @@ fn run() -> Result<(), String> {
             }
         }
         prewarm_now = false;
+        // A final state dump reads the scene; keep it current when the loop ends undrawn.
+        if !running && state.dirty {
+            scene = compose(&mut state, &assets, pill, pill_width, now);
+        }
         // Block until input instead of polling at frame rate on idle screens.
         // VSync paces animation; holds, scripted checks and icons still being
         // decoded need short timed wakes.

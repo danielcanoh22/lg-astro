@@ -215,6 +215,7 @@ impl Service {
                     {
                         break;
                     }
+                    crate::wake::wake();
                 }
             });
             queue
