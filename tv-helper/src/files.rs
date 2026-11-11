@@ -60,9 +60,10 @@ pub fn read_icons(system: &impl System, source: &IconSource) -> Result<Value> {
     let mut remaining = 512 * 1024;
     let mut seen = HashSet::new();
     let mut icons = vec![];
+    let roots = || ROOTS.iter().map(|root| system.path(Path::new(root)));
     for directory in directories {
-        let manifest = system::read(system, directory.join("appinfo.json"), 64 * 1024)
-            .ok()
+        let manifest = crate::open_within(&system.path(&directory.join("appinfo.json")), roots())
+            .and_then(|file| system::read_open(file, 64 * 1024).ok())
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .filter(|m| m["id"] == source.id)
             .unwrap_or(Value::Null);
@@ -82,13 +83,10 @@ pub fn read_icons(system: &impl System, source: &IconSource) -> Result<Value> {
             if !seen.insert(path.clone()) {
                 continue;
             }
-            if !crate::resolves_within(
-                &system.path(&path),
-                ROOTS.iter().map(|root| system.path(Path::new(root))),
-            ) {
+            let Some(file) = crate::open_within(&system.path(&path), roots()) else {
                 continue;
-            }
-            if let Ok(bytes) = system::read(system, &path, remaining) {
+            };
+            if let Ok(bytes) = system::read_open(file, remaining) {
                 if bytes.is_empty() {
                     continue;
                 }

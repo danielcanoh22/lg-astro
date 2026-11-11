@@ -7,7 +7,6 @@ use serde_json::Value;
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
-    fs::File,
     io::{Cursor, Read},
     path::{Component, Path, PathBuf},
     sync::{Arc, Condvar, Mutex, mpsc},
@@ -97,10 +96,7 @@ fn read_bounded(path: &Path, limit: usize) -> Option<Vec<u8>> {
 /// As Home this runs as root, so a link planted in an application's directory must not
 /// select a file outside the application roots.
 fn read_within(path: &Path, limit: usize, roots: &[PathBuf]) -> Option<Vec<u8>> {
-    if !astro_tv_helper::resolves_within(path, roots) {
-        return None;
-    }
-    let file = File::open(path).ok()?;
+    let file = astro_tv_helper::open_within(path, roots)?;
     let metadata = file.metadata().ok()?;
     if !metadata.is_file() || metadata.len() > limit as u64 {
         return None;

@@ -22,20 +22,37 @@ pub fn valid_app_id(id: &str) -> bool {
             .split(['.', '_', '-'])
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
-/// Whether `path`, with every symlink resolved, is a regular file inside one of `roots`.
-/// A path is otherwise only checked as text, so a link inside an application's directory
-/// could name any file on the TV, or a FIFO or device that stalls or misleads a reader.
-pub fn resolves_within<P: AsRef<std::path::Path>>(
+/// Opens `path` only if, with every symlink resolved, it is a regular file inside one of
+/// `roots`. A path is otherwise only checked as text, so a link inside an application's
+/// directory could name any file on the TV, or a FIFO or device that stalls a reader.
+pub fn open_within<P: AsRef<std::path::Path>>(
     path: &std::path::Path,
     roots: impl IntoIterator<Item = P>,
-) -> bool {
-    let Ok(real) = std::fs::canonicalize(path) else {
-        return false;
-    };
-    real.is_file()
-        && roots
-            .into_iter()
-            .any(|root| std::fs::canonicalize(root).is_ok_and(|root| real.starts_with(root)))
+) -> Option<std::fs::File> {
+    let roots: Vec<_> = roots
+        .into_iter()
+        .filter_map(|root| std::fs::canonicalize(root).ok())
+        .collect();
+    let inside = |real: &std::path::Path| roots.iter().any(|root| real.starts_with(root));
+    let real = std::fs::canonicalize(path).ok()?;
+    if !real.is_file() || !inside(&real) {
+        return None;
+    }
+    let file = std::fs::File::open(&real).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    // The path can change between the check and the open: ask where the open file really is.
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        if std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+            .is_ok_and(|opened| !inside(&opened))
+        {
+            return None;
+        }
+    }
+    Some(file)
 }
 pub fn valid_background(id: &str) -> bool {
     !id.is_empty()

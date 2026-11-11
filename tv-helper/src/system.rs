@@ -270,6 +270,10 @@ pub fn luna(system: &impl System, service: &str, method: &str, payload: &Value) 
 pub fn read(system: &impl System, path: impl AsRef<Path>, limit: usize) -> Result<Vec<u8>> {
     let file = fs::File::open(system.path(path.as_ref()))
         .map_err(|e| format!("{}: {e}", path.as_ref().display()))?;
+    read_open(file, limit)
+}
+/// Reads an already opened regular file of at most `limit` bytes.
+pub fn read_open(file: fs::File, limit: usize) -> Result<Vec<u8>> {
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     if !metadata.is_file() || metadata.len() > limit as u64 {
         return Err("File size/type limit exceeded".into());

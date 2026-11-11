@@ -574,14 +574,15 @@ fn scripted_click(
     Ok(())
 }
 
-/// As Home this runs as root and /tmp is shared: never write through a link planted there.
+/// As Home this runs as root and /tmp is shared: never write through a link or a file
+/// planted there. The previous log is unlinked and a new file is created exclusively.
 #[cfg(all(feature = "webos", unix))]
 fn open_home_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
+    let _ = std::fs::remove_file(path);
     std::fs::OpenOptions::new()
-        .create(true)
         .write(true)
-        .truncate(true)
+        .create_new(true)
         .custom_flags(libc::O_NOFOLLOW)
         .mode(0o600)
         .open(path)

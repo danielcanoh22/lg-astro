@@ -721,12 +721,17 @@ fn icons_linked_outside_the_application_roots_are_not_read() {
     std::fs::write(app.join("real.png"), b"real").unwrap();
     std::os::unix::fs::symlink(scratch.join("private"), app.join("outside.png")).unwrap();
     std::os::unix::fs::symlink(app.join("real.png"), app.join("inside.png")).unwrap();
+    std::fs::create_dir(scratch.join("elsewhere")).unwrap();
+    std::fs::write(scratch.join("elsewhere/icon.png"), b"private").unwrap();
+    std::os::unix::fs::symlink(scratch.join("elsewhere"), app.join("art")).unwrap();
     let roots = [root];
+    let under_linked_directory = read_within(&app.join("art/icon.png"), 64, &roots);
     let outside = read_within(&app.join("outside.png"), 64, &roots);
     let inside = read_within(&app.join("inside.png"), 64, &roots);
     let plain = read_within(&app.join("real.png"), 64, &roots);
     std::fs::remove_dir_all(&scratch).unwrap();
     assert_eq!(outside, None);
+    assert_eq!(under_linked_directory, None);
     assert_eq!(inside.as_deref(), Some(&b"real"[..]));
     assert_eq!(plain.as_deref(), Some(&b"real"[..]));
 }
