@@ -51,10 +51,6 @@
     "en": "Current: {current} · Latest: {latest}",
     "es": "Actual: {current} · Última: {latest}"
   },
-  "openHomebrewChannel": {
-    "en": "Open Homebrew Channel to update",
-    "es": "Abrir Homebrew Channel para actualizar"
-  },
   "testShortcut": {
     "en": "Test shortcut",
     "es": "Probar acceso directo"
@@ -175,18 +171,6 @@
     "en": "Settings",
     "es": "Ajustes"
   },
-  "settingsRegion": {
-    "en": "Astro settings",
-    "es": "Ajustes de Astro"
-  },
-  "mainNavigation": {
-    "en": "Main navigation",
-    "es": "Navegación principal"
-  },
-  "settingsSections": {
-    "en": "Settings sections",
-    "es": "Secciones de ajustes"
-  },
   "stateOn": {
     "en": "On",
     "es": "Activado"
@@ -255,14 +239,6 @@
     "en": "Location",
     "es": "Ubicación"
   },
-  "manageWeatherLocation": {
-    "en": "Set up location",
-    "es": "Configurar ubicación"
-  },
-  "locationResults": {
-    "en": "Location results",
-    "es": "Resultados"
-  },
   "appNames": {
     "en": "App names",
     "es": "Nombres de apps"
@@ -274,10 +250,6 @@
   "showOnApps": {
     "en": "Show on Apps",
     "es": "Mostrar en Aplicaciones"
-  },
-  "clock24": {
-    "en": "24-hour clock",
-    "es": "Reloj de 24 horas"
   },
   "clockFormat": {
     "en": "Clock format",
@@ -367,18 +339,6 @@
     "en": "Good evening, {name}.",
     "es": "Buenas noches, {name}."
   },
-  "english": {
-    "en": "English",
-    "es": "English"
-  },
-  "german": {
-    "en": "Deutsch",
-    "es": "Deutsch"
-  },
-  "chinese": {
-    "en": "简体中文",
-    "es": "简体中文"
-  },
   "showWidget": {
     "en": "Show widget",
     "es": "Mostrar widget"
@@ -399,14 +359,6 @@
     "en": "City or postcode",
     "es": "Ciudad o código postal"
   },
-  "searchLocations": {
-    "en": "Search locations",
-    "es": "Buscar ubicaciones"
-  },
-  "removeWeatherLocation": {
-    "en": "Remove weather location",
-    "es": "Eliminar ubicación del tiempo"
-  },
   "enterCity": {
     "en": "Enter a city or postcode with at least two characters.",
     "es": "Escribe una ciudad o un código postal con al menos dos caracteres."
@@ -422,14 +374,6 @@
   "findApp": {
     "en": "Find an app",
     "es": "Buscar una app"
-  },
-  "clearCategory": {
-    "en": "Clear category filter",
-    "es": "Borrar filtro de categoría"
-  },
-  "appCategories": {
-    "en": "App categories",
-    "es": "Categorías de apps"
   },
   "hidden": {
     "en": "Hidden ({count})",
@@ -507,14 +451,6 @@
     "en": "No inputs to show.",
     "es": "No hay entradas que mostrar."
   },
-  "findingInputs": {
-    "en": "Finding your inputs…",
-    "es": "Buscando tus entradas…"
-  },
-  "physicalInputs": {
-    "en": "Your TV’s physical HDMI inputs will appear here.",
-    "es": "Las entradas HDMI de tu tele aparecerán aquí."
-  },
   "refreshInputs": {
     "en": "Refresh inputs",
     "es": "Actualizar entradas"
@@ -527,14 +463,6 @@
     "en": "Open",
     "es": "Abrir"
   },
-  "select": {
-    "en": "Select",
-    "es": "Seleccionar"
-  },
-  "move": {
-    "en": "Move",
-    "es": "Mover"
-  },
   "done": {
     "en": "Done",
     "es": "Listo"
@@ -542,14 +470,6 @@
   "close": {
     "en": "Close",
     "es": "Cerrar"
-  },
-  "homeLabel": {
-    "en": "Home",
-    "es": "Inicio"
-  },
-  "options": {
-    "en": "Options",
-    "es": "Opciones"
   },
   "deleteApp": {
     "en": "Delete app",
@@ -607,14 +527,6 @@
     "en": "Show app",
     "es": "Mostrar app"
   },
-  "favorite": {
-    "en": "Favorite",
-    "es": "Favorita"
-  },
-  "tvSettings": {
-    "en": "TV settings",
-    "es": "Ajustes del televisor"
-  },
   "loadingWeather": {
     "en": "Loading weather…",
     "es": "Cargando el tiempo…"
@@ -627,29 +539,9 @@
     "en": "Set weather location",
     "es": "Fijar ubicación del tiempo"
   },
-  "configureWeather": {
-    "en": "Configure weather location",
-    "es": "Configurar ubicación del tiempo"
-  },
-  "weatherInLocation": {
-    "en": "Weather in {city}. Configure weather location.",
-    "es": "El tiempo en {city}. Configura la ubicación."
-  },
   "lastReading": {
     "en": "Last saved reading",
     "es": "Último dato guardado"
-  },
-  "selectClose": {
-    "en": "Select",
-    "es": "Elegir"
-  },
-  "closeDialog": {
-    "en": "Close",
-    "es": "Cerrar"
-  },
-  "dismissNotification": {
-    "en": "Dismiss notification",
-    "es": "Descartar aviso"
   },
   "opening": {
     "en": "Opening…",
@@ -683,21 +575,9 @@
     "en": "Your changes couldn’t be saved.",
     "es": "No se pudieron guardar los cambios."
   },
-  "tvUnreachable": {
-    "en": "Your TV couldn’t be reached.",
-    "es": "No se puede conectar con tu tele."
-  },
   "appOpenError": {
     "en": "This app couldn’t be opened.",
     "es": "No se pudo abrir esta app."
-  },
-  "dismissSearch": {
-    "en": "Clear search",
-    "es": "Borrar búsqueda"
-  },
-  "languageMenu": {
-    "en": "Language",
-    "es": "Idioma"
   },
   "slate": {
     "en": "Slate",
@@ -711,14 +591,6 @@
     "en": "Prism",
     "es": "Prisma"
   },
-  "monumentValley": {
-    "en": "Monument Valley",
-    "es": "Monument Valley"
-  },
-  "sanFrancisco": {
-    "en": "San Francisco",
-    "es": "San Francisco"
-  },
   "summit": {
     "en": "Summit",
     "es": "Cumbre"
@@ -730,10 +602,6 @@
   "yosemite": {
     "en": "Yosemite",
     "es": "Yosemite"
-  },
-  "northernLights": {
-    "en": "Northern lights",
-    "es": "Auroras boreales"
   },
   "liveTV": {
     "en": "Live TV",
@@ -843,33 +711,9 @@
     "en": "Shortcut tiles on Home send a web request, for example to a Home Assistant webhook.",
     "es": "Los accesos directos en Inicio envían una solicitud web, por ejemplo a un webhook de Home Assistant."
   },
-  "addTile": {
-    "en": "Add shortcut",
-    "es": "Añadir acceso directo"
-  },
-  "newTile": {
-    "en": "New shortcut",
-    "es": "Nuevo acceso directo"
-  },
-  "tileName": {
-    "en": "Shortcut name",
-    "es": "Nombre del acceso directo"
-  },
-  "tileNameHint": {
-    "en": "Shown on the tile",
-    "es": "Se muestra en el mosaico"
-  },
   "url": {
     "en": "URL",
     "es": "URL"
-  },
-  "tileUrl": {
-    "en": "Web address (URL)",
-    "es": "Dirección web (URL)"
-  },
-  "tileUrlHint": {
-    "en": "Address without http://, e.g. homeassistant.local:8123/api/webhook/…",
-    "es": "Dirección sin http://, p. ej. homeassistant.local:8123/api/webhook/…"
   },
   "icon": {
     "en": "Icon",
@@ -935,25 +779,9 @@
     "en": "Eye",
     "es": "Ojo"
   },
-  "protocol": {
-    "en": "Protocol",
-    "es": "Protocolo"
-  },
-  "requestMethod": {
-    "en": "Request method",
-    "es": "Método de solicitud"
-  },
-  "sendNow": {
-    "en": "Send now",
-    "es": "Enviar ahora"
-  },
   "removeTile": {
     "en": "Remove shortcut",
     "es": "Eliminar acceso directo"
-  },
-  "tileAdded": {
-    "en": "{tile} added to Home.",
-    "es": "{tile} añadido a Inicio."
   },
   "tileRemoved": {
     "en": "{tile} removed.",
@@ -971,25 +799,9 @@
     "en": "{tile} couldn’t be sent.",
     "es": "No se pudo enviar {tile}."
   },
-  "tileUrlInvalid": {
-    "en": "Enter a valid http:// or https:// address with a host name.",
-    "es": "Introduce una dirección http:// o https:// válida con un nombre de host."
-  },
-  "tileIncomplete": {
-    "en": "Add a name and a URL first.",
-    "es": "Primero añade un nombre y una URL."
-  },
-  "tileLimit": {
-    "en": "No more shortcuts can be added.",
-    "es": "No se pueden añadir más accesos directos."
-  },
   "editTilesElsewhere": {
     "en": "Edit on phone or computer",
     "es": "Editar en el móvil o el ordenador"
-  },
-  "editTilesElsewhereHint": {
-    "en": "Type names and addresses there instead of with the remote",
-    "es": "Escribe nombres y direcciones allí en lugar de con el mando"
   },
   "tileEditorKeepOpen": {
     "en": "Keep this window open while you edit. Use a device on the same network.",

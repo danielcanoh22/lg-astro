@@ -30,7 +30,7 @@ ring = "0.17"
 sdl2 = { version = "0.38", features = ["use-pkgconfig"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-time = { version = "0.3", features = ["local-offset", "formatting", "parsing"] }
+time = { version = "0.3", features = ["local-offset", "parsing"] }
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 
 [profile.release]
