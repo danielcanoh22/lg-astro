@@ -40,21 +40,9 @@ pub(crate) fn launch_payload(id: &str) -> Value {
     }
 }
 
-/// Opens `com.danielcanoh22.astro` for its TV input. With `if_home_in_front` it first checks that
-/// Home is the foreground app, so a Home the system started behind another input or app never
-/// takes the screen; if the check fails, it does not switch.
-fn select_astro_input(if_home_in_front: bool) -> Result<(), String> {
-    if if_home_in_front {
-        let reply = call(
-            "luna://com.webos.applicationManager/getForegroundAppInfo",
-            json!({}),
-        )?;
-        let front = reply["appId"].as_str().unwrap_or_default();
-        if !is_home_id(front) {
-            eprintln!("Astro TV input: {front} is in front; Home stays behind it");
-            return Ok(());
-        }
-    }
+/// Opens `com.danielcanoh22.astro` for its TV input. Whether Home is in front was already decided
+/// by Home itself (`State::astro_input_due`), from its own window focus.
+fn select_astro_input() -> Result<(), String> {
     call(
         "luna://com.webos.applicationManager/launch",
         launch_payload(APP_ID),
@@ -232,11 +220,8 @@ pub enum Request {
     SyncSplash(String),
     /// Read (`None`) or change Astro's TV input registration.
     TvInput(Option<bool>),
-    /// Open `com.danielcanoh22.astro` for its TV input, without the launch notice; with
-    /// `if_home_in_front`, only while Home is the foreground app.
-    SelectAstroInput {
-        if_home_in_front: bool,
-    },
+    /// Open `com.danielcanoh22.astro` for its TV input, without the launch notice.
+    SelectAstroInput,
     Recent {
         generation: u64,
         command: crate::recents::Command,
@@ -407,13 +392,11 @@ impl Platform {
                     } else {
                         Ok(())
                     }),
-                    Request::SelectAstroInput { if_home_in_front } => {
-                        Response::AstroInputSelected(if webos {
-                            select_astro_input(if_home_in_front)
-                        } else {
-                            Ok(())
-                        })
-                    }
+                    Request::SelectAstroInput => Response::AstroInputSelected(if webos {
+                        select_astro_input()
+                    } else {
+                        Ok(())
+                    }),
                     Request::TvInput(request) => Response::TvInput {
                         request,
                         result: if webos {
