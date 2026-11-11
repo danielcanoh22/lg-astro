@@ -380,9 +380,7 @@ fn effects(
                 });
             }
             Effect::TvInput(request) => platform.send(Request::TvInput(request)),
-            Effect::SelectAstroInput { if_home_in_front } => {
-                platform.send(Request::SelectAstroInput { if_home_in_front })
-            }
+            Effect::SelectAstroInput => platform.send(Request::SelectAstroInput),
         }
     }
     true
@@ -1271,6 +1269,7 @@ fn run() -> Result<(), String> {
             if matches!(event, Event::KeyDown { .. } | Event::KeyUp { .. }) {
                 focused = true;
                 foreground.confirmed();
+                state.home_focused(Instant::now());
             }
             // As Home, these go to /tmp/astro-home.log and show whether a relaunch reached the
             // compositor.
@@ -1351,6 +1350,7 @@ fn run() -> Result<(), String> {
                         focused = false;
                         press = None;
                         back_button.cancel();
+                        state.home_focus_lost();
                     }
                     // SDL emits Shown for the new window itself: a preloaded Home ignores it.
                     WindowEvent::Shown | WindowEvent::Restored if preloaded => {}
@@ -1362,6 +1362,8 @@ fn run() -> Result<(), String> {
                         if matches!(win_event, WindowEvent::FocusGained) {
                             focused = true;
                             foreground.confirmed();
+                            // A started Home switches to Astro's TV input only once it is in front.
+                            state.home_focused(Instant::now());
                         }
                         state.dirty = true;
                         if webos {

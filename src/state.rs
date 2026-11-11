@@ -44,6 +44,11 @@ pub const ASTRO_INPUT_INTERVAL: Duration = Duration::from_secs(5);
 /// cannot keep reopening.
 pub const ASTRO_INPUT_LIMIT: u32 = 3;
 pub const ASTRO_INPUT_SETTLE: Duration = Duration::from_secs(30);
+/// A started Home switches to Astro's TV input only if its window gains focus within this time of
+/// the start. Home the Home key starts from an HDMI input gained focus just after its inventory in
+/// a webOS 25 log; Home the system starts behind another input or app is expected to gain focus
+/// only later, when the user leaves that app, which must not send them back to it.
+pub const ASTRO_INPUT_START_WINDOW: Duration = Duration::from_secs(10);
 
 /// When Home switches to Astro's TV input (see `State::astro_input_due`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -52,8 +57,9 @@ pub enum AstroInput {
     Idle,
     /// Home started: switch once the first inventory shows whether the input is registered.
     AfterInventory,
-    /// Home started and its inventory arrived: switch only if Home is in front, because the
-    /// system also starts Home behind another input or app (after a power-on into Astro's input).
+    /// Home started and its inventory arrived: switch only once Home's window has gained focus
+    /// (within `ASTRO_INPUT_START_WINDOW`), because the system also starts Home behind another
+    /// input or app (after a power-on into Astro's input).
     Started,
     /// Home was relaunched (Home key): switch now if the input is registered.
     Now,
@@ -214,11 +220,8 @@ pub enum Effect {
     Quit,
     /// Read (`None`) or change Astro's TV input registration.
     TvInput(Option<bool>),
-    /// Open `com.danielcanoh22.astro` from Home so the TV keeps Astro as its last input; with
-    /// `if_home_in_front`, only while Home is the foreground app.
-    SelectAstroInput {
-        if_home_in_front: bool,
-    },
+    /// Open `com.danielcanoh22.astro` from Home so the TV keeps Astro as its last input.
+    SelectAstroInput,
     UpdateDownload(String),
 }
 
@@ -272,6 +275,9 @@ pub struct State {
     pub astro_input: AstroInput,
     pub astro_input_switched: Option<Instant>,
     pub astro_input_streak: u32,
+    /// When this Home process started (not preloaded), and when its window first gained focus.
+    pub home_started_at: Option<Instant>,
+    pub home_focused_at: Option<Instant>,
 }
 
 impl State {
@@ -317,6 +323,8 @@ impl State {
             astro_input: AstroInput::Idle,
             astro_input_switched: None,
             astro_input_streak: 0,
+            home_started_at: None,
+            home_focused_at: None,
         }
     }
 
@@ -480,10 +488,32 @@ impl State {
     /// Only these events arm it: focus coming back after the app copy exited never does.
     pub fn home_opened(&mut self, started: bool) {
         self.astro_input = if started {
+            self.home_started_at = Some(Instant::now());
+            self.home_focused_at = None;
             AstroInput::AfterInventory
         } else {
             AstroInput::Now
         };
+    }
+
+    /// Home's window gained focus (or received a key, which only the focused window does): the
+    /// proof that a started Home is in front. Only the first focus after a start counts.
+    pub fn home_focused(&mut self, now: Instant) {
+        if self.home_focused_at.is_none() {
+            self.home_focused_at = Some(now);
+        }
+    }
+
+    /// Home's window lost focus before a start switched: the user went to another input or app,
+    /// so that earlier focus no longer proves Home is in front. A new focus within the start
+    /// window counts again.
+    pub fn home_focus_lost(&mut self) {
+        if matches!(
+            self.astro_input,
+            AstroInput::AfterInventory | AstroInput::Started
+        ) {
+            self.home_focused_at = None;
+        }
     }
 
     /// The Home key pressed while Home is in front: user input, so it also ends a stopped streak.
@@ -509,6 +539,23 @@ impl State {
             AstroInput::Started => true,
             AstroInput::Idle | AstroInput::AfterInventory => return None,
         };
+        // A started Home switches only once its window gained focus within the start window:
+        // until then it may still be behind the input the Home key was pressed on; a Home the
+        // system started behind another app gains focus only later, when the user leaves it.
+        if started {
+            let start = self.home_started_at.unwrap_or(now);
+            match self.home_focused_at {
+                Some(focused)
+                    if focused.saturating_duration_since(start) <= ASTRO_INPUT_START_WINDOW => {}
+                None if now.saturating_duration_since(start) <= ASTRO_INPUT_START_WINDOW => {
+                    return None;
+                }
+                _ => {
+                    self.astro_input = AstroInput::Idle;
+                    return None;
+                }
+            }
+        }
         self.astro_input = AstroInput::Idle;
         let registered = self
             .inventory
@@ -520,9 +567,7 @@ impl State {
         }
         // A start happens once per Home process: the relaunch limits do not apply to it.
         if started {
-            return Some(Effect::SelectAstroInput {
-                if_home_in_front: true,
-            });
+            return Some(Effect::SelectAstroInput);
         }
         let recent = self
             .astro_input_switched
@@ -539,9 +584,7 @@ impl State {
         }
         self.astro_input_streak = streak;
         self.astro_input_switched = Some(now);
-        Some(Effect::SelectAstroInput {
-            if_home_in_front: false,
-        })
+        Some(Effect::SelectAstroInput)
     }
 
     /// Preferences the other Astro copy saved while this one was in the background.

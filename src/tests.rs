@@ -180,9 +180,7 @@ fn with_astro_input(state: &mut State) {
 fn home_switches_to_astros_input_once_per_open_and_never_twice_within_the_interval() {
     use crate::state::{ASTRO_INPUT_INTERVAL, AstroInput};
     use std::time::{Duration, Instant};
-    let relaunch = Some(Effect::SelectAstroInput {
-        if_home_in_front: false,
-    });
+    let relaunch = Some(Effect::SelectAstroInput);
     let now = Instant::now();
     let mut state = ready();
     with_astro_input(&mut state);
@@ -203,44 +201,136 @@ fn home_switches_to_astros_input_once_per_open_and_never_twice_within_the_interv
 }
 
 #[test]
-fn a_home_start_switches_only_if_home_is_in_front_and_leaves_the_relaunch_limits_alone() {
+fn a_home_start_switches_once_its_window_has_focus_and_leaves_the_relaunch_limits_alone() {
     use crate::state::AstroInput;
-    let now = std::time::Instant::now();
-    let start = Some(Effect::SelectAstroInput {
-        if_home_in_front: true,
-    });
+    use std::time::Duration;
+    let start = Some(Effect::SelectAstroInput);
     let mut state = ready();
-    // A start waits for the first inventory that lists Astro's input.
+    // A start waits for the first inventory that lists Astro's input...
     state.home_opened(true);
-    assert_eq!(state.astro_input_due(now), None);
+    let opened = state.home_started_at.expect("start time");
+    assert_eq!(state.astro_input_due(opened), None);
     with_astro_input(&mut state);
     assert_eq!(state.astro_input, AstroInput::Started);
-    assert_eq!(state.astro_input_due(now), start);
-    assert_eq!(state.astro_input_due(now), None);
+    // ...and for Home's window to gain focus. The Home key from an HDMI input starts Home, whose
+    // window gains focus a moment after its inventory (webOS 25 log: the system still reported
+    // com.webos.app.hdmi2 in front at the inventory, then "Astro window: FocusGained").
+    let inventory = opened + Duration::from_millis(500);
+    assert_eq!(state.astro_input_due(inventory), None);
+    assert_eq!(state.astro_input, AstroInput::Started);
+    let focused = opened + Duration::from_millis(900);
+    state.home_focused(focused);
+    assert_eq!(state.astro_input_due(focused), start);
+    assert_eq!(state.astro_input_due(focused), None);
     assert_eq!(state.astro_input_switched, None);
     assert_eq!(state.astro_input_streak, 0);
-    // The Home key right after a start still switches, without the foreground check.
+    // The Home key right after a start still switches.
     state.home_key();
-    assert_eq!(
-        state.astro_input_due(now),
-        Some(Effect::SelectAstroInput {
-            if_home_in_front: false,
-        })
-    );
+    assert_eq!(state.astro_input_due(focused), start);
     // Hidden after its inventory but before the switch: a start behind another app stays.
     let mut hidden = ready();
     hidden.home_opened(true);
     with_astro_input(&mut hidden);
     hidden.home_hidden();
-    assert_eq!(hidden.astro_input_due(now), None);
+    hidden.home_focused(hidden.home_started_at.unwrap());
+    assert_eq!(
+        hidden.astro_input_due(hidden.home_started_at.unwrap()),
+        None
+    );
+}
+
+#[test]
+fn a_home_start_switches_on_focus_before_or_after_its_inventory_but_not_on_a_late_focus() {
+    use crate::state::{ASTRO_INPUT_START_WINDOW, AstroInput};
+    use std::time::Duration;
+    // Focus before the inventory: the switch waits for the inventory, even a slow one.
+    let mut early = ready();
+    early.home_opened(true);
+    let opened = early.home_started_at.unwrap();
+    early.home_focused(opened + Duration::from_millis(300));
+    let slow_inventory = opened + ASTRO_INPUT_START_WINDOW + Duration::from_secs(5);
+    assert_eq!(early.astro_input_due(slow_inventory), None);
+    with_astro_input(&mut early);
+    assert_eq!(
+        early.astro_input_due(slow_inventory),
+        Some(Effect::SelectAstroInput)
+    );
+    // Home started behind another app (after a power-on into Astro's input) gains focus only when
+    // the user leaves that app: that must not send them back to it.
+    let mut behind = ready();
+    behind.home_opened(true);
+    let opened = behind.home_started_at.unwrap();
+    with_astro_input(&mut behind);
+    let late = opened + ASTRO_INPUT_START_WINDOW + Duration::from_secs(1);
+    behind.home_focused(late);
+    assert_eq!(behind.astro_input_due(late), None);
+    assert_eq!(behind.astro_input, AstroInput::Idle);
+    // Without any focus, the start expires after the window and never fires afterwards.
+    let mut unfocused = ready();
+    unfocused.home_opened(true);
+    let opened = unfocused.home_started_at.unwrap();
+    with_astro_input(&mut unfocused);
+    assert_eq!(
+        unfocused.astro_input_due(opened + Duration::from_secs(1)),
+        None
+    );
+    assert_eq!(unfocused.astro_input, AstroInput::Started);
+    let expired = opened + ASTRO_INPUT_START_WINDOW + Duration::from_millis(1);
+    assert_eq!(unfocused.astro_input_due(expired), None);
+    assert_eq!(unfocused.astro_input, AstroInput::Idle);
+    unfocused.home_focused(expired);
+    assert_eq!(unfocused.astro_input_due(expired), None);
+    // Focus exactly at the window edge still counts; without focus the start keeps waiting there.
+    let mut edge = ready();
+    edge.home_opened(true);
+    let opened = edge.home_started_at.unwrap();
+    with_astro_input(&mut edge);
+    let at_edge = opened + ASTRO_INPUT_START_WINDOW;
+    assert_eq!(edge.astro_input_due(at_edge), None);
+    assert_eq!(edge.astro_input, AstroInput::Started);
+    edge.home_focused(at_edge);
+    assert_eq!(
+        edge.astro_input_due(at_edge),
+        Some(Effect::SelectAstroInput)
+    );
+    // The Home key after an expired start still switches, as a relaunch.
+    unfocused.home_key();
+    assert_eq!(
+        unfocused.astro_input_due(expired),
+        Some(Effect::SelectAstroInput)
+    );
+    // Focus gained and lost before the inventory (the user went to another input): the late
+    // inventory does not open Astro over it, but a new focus within the window does.
+    let mut left = ready();
+    left.home_opened(true);
+    let opened = left.home_started_at.unwrap();
+    left.home_focused(opened + Duration::from_millis(400));
+    left.home_focus_lost();
+    with_astro_input(&mut left);
+    assert_eq!(left.astro_input_due(opened + Duration::from_secs(2)), None);
+    assert_eq!(left.astro_input, AstroInput::Started);
+    left.home_focused(opened + Duration::from_secs(3));
+    assert_eq!(
+        left.astro_input_due(opened + Duration::from_secs(3)),
+        Some(Effect::SelectAstroInput)
+    );
+    // Only the first focus of a start counts: a later one cannot move it into the window.
+    let mut refocused = ready();
+    refocused.home_opened(true);
+    let opened = refocused.home_started_at.unwrap();
+    refocused.home_focused(opened + ASTRO_INPUT_START_WINDOW + Duration::from_secs(2));
+    refocused.home_focused(opened + Duration::from_secs(1));
+    with_astro_input(&mut refocused);
+    assert_eq!(
+        refocused.astro_input_due(opened + Duration::from_secs(1)),
+        None
+    );
 }
 
 #[test]
 fn home_stops_after_three_quick_switches_until_the_home_key_and_settles_after_a_pause() {
     use crate::state::{ASTRO_INPUT_INTERVAL, ASTRO_INPUT_LIMIT, ASTRO_INPUT_SETTLE};
-    let relaunch = Some(Effect::SelectAstroInput {
-        if_home_in_front: false,
-    });
+    let relaunch = Some(Effect::SelectAstroInput);
     let mut now = std::time::Instant::now();
     let mut state = ready();
     with_astro_input(&mut state);
@@ -272,11 +362,11 @@ fn a_home_start_waits_past_a_failed_input_read_and_a_hidden_start_never_switches
     state.set_inventory(inventory, Some("inputs unavailable".into()));
     assert_eq!(state.astro_input, AstroInput::AfterInventory);
     with_astro_input(&mut state);
+    let focused = state.home_started_at.unwrap();
+    state.home_focused(focused);
     assert_eq!(
-        state.astro_input_due(now),
-        Some(Effect::SelectAstroInput {
-            if_home_in_front: true,
-        })
+        state.astro_input_due(focused),
+        Some(Effect::SelectAstroInput)
     );
 
     let mut hidden = ready();
@@ -287,12 +377,7 @@ fn a_home_start_waits_past_a_failed_input_read_and_a_hidden_start_never_switches
     // Hiding does not cancel a relaunch switch that is already due.
     hidden.home_opened(false);
     hidden.home_hidden();
-    assert_eq!(
-        hidden.astro_input_due(now),
-        Some(Effect::SelectAstroInput {
-            if_home_in_front: false,
-        })
-    );
+    assert_eq!(hidden.astro_input_due(now), Some(Effect::SelectAstroInput));
 }
 
 #[test]
@@ -330,61 +415,6 @@ fn preload_launch_metadata_is_recognized_and_ordinary_launches_are_not() {
     ));
     assert!(!preloaded(&json!({"preload": ""})));
     assert!(!preloaded(&json!({"preload": false})));
-}
-
-#[test]
-fn a_starting_home_waits_briefly_for_the_system_to_report_it_in_front() {
-    use crate::platform::wait_for_home_in_front;
-    use std::time::Duration;
-    // Pressing Home from an HDMI input starts Home: the system can still report the input in
-    // front for a moment after Home's inventory arms the switch (webOS 25 log: the check saw
-    // com.webos.app.hdmi2 just before Home's window gained focus).
-    let mut fronts = [
-        "com.webos.app.hdmi2",
-        "com.webos.app.hdmi2",
-        "com.webos.app.home",
-    ]
-    .iter();
-    let mut paused = Duration::ZERO;
-    assert_eq!(
-        wait_for_home_in_front(
-            || Ok(fronts.next().unwrap().to_string()),
-            |pause| paused += pause
-        ),
-        Ok(None)
-    );
-    assert_eq!(paused, Duration::from_millis(500));
-    // Home started behind another input never comes forward: give up after the bounded wait.
-    let (mut calls, mut paused) = (0, Duration::ZERO);
-    assert_eq!(
-        wait_for_home_in_front(
-            || {
-                calls += 1;
-                Ok("com.webos.app.hdmi2".into())
-            },
-            |pause| paused += pause
-        ),
-        Ok(Some("com.webos.app.hdmi2".into()))
-    );
-    assert_eq!((calls, paused), (11, Duration::from_millis(2500)));
-    // Already in front (either Home identity): one check and no wait.
-    let mut calls = 0;
-    assert_eq!(
-        wait_for_home_in_front(
-            || {
-                calls += 1;
-                Ok("com.webos.app.fullhome".into())
-            },
-            |_| panic!("no wait when Home is already in front")
-        ),
-        Ok(None)
-    );
-    assert_eq!(calls, 1);
-    // A failed check is reported, not retried.
-    assert_eq!(
-        wait_for_home_in_front(|| Err("bus error".into()), |_| panic!("no retry")),
-        Err("bus error".into())
-    );
 }
 
 #[test]
