@@ -1047,3 +1047,44 @@ fn closing_the_dialog_or_returning_home_forgets_the_preview() {
     state.close_wallpaper_upload();
     assert_eq!(state.focus, Target::Nav(1));
 }
+
+#[test]
+fn upload_qr_code_draws_dark_modules_on_a_light_plate_with_a_quiet_zone() {
+    let mut state = upload_dialog();
+    let session =
+        crate::companion::session("192.168.100.100:54321".parse().unwrap(), "AbCd1234").unwrap();
+    let size = session.qr_size;
+    state.wallpaper_upload = Some(Ok(session));
+    let draw = scene(&state).draw;
+    // The plate holds the modules and the four-module quiet zone around them.
+    let (plate_index, plate, plate_color) = draw
+        .iter()
+        .enumerate()
+        .find_map(|(index, draw)| match draw {
+            Draw::Shape(rect, radius, _, color)
+                if *radius == 0. && rect.y == 310. && rect.w == rect.h =>
+            {
+                Some((index, *rect, *color))
+            }
+            _ => None,
+        })
+        .unwrap();
+    let scale = plate.w / (size + 8) as f32;
+    let modules: Vec<_> = draw[plate_index + 1..]
+        .iter()
+        .filter_map(|draw| match draw {
+            Draw::Shape(rect, _, _, color) if rect.h == scale => Some((*rect, *color)),
+            _ => None,
+        })
+        .collect();
+    assert!(modules.len() > size as usize);
+    let luminance = |c: [f32; 4]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    for (rect, color) in modules {
+        // Inside the quiet zone, never on it.
+        assert!(rect.x >= plate.x + 4. * scale && rect.y >= plate.y + 4. * scale);
+        assert!(rect.x + rect.w <= plate.x + plate.w - 4. * scale);
+        assert!(rect.y + rect.h <= plate.y + plate.h - 4. * scale);
+        // Standard polarity: many readers do not try inverted (light-on-dark) codes.
+        assert!(luminance(plate_color) - luminance(color) > 0.5);
+    }
+}
