@@ -1,5 +1,21 @@
 # lg-luma
 
+## 4.1.0
+
+### Minor Changes
+
+- 7fd9307: Ask on the TV before keeping an uploaded background. After an upload, the dialog shows the image
+  with Save and Discard; only a saved image joins the gallery and rotation, and an image not saved
+  before the dialog closes is deleted. While one image waits for a decision, the upload page asks to
+  save or discard it on the TV before sending another.
+
+### Patch Changes
+
+- 275a59d: Make wallpaper transitions smoother. When a newly chosen or rotated wallpaper fades in, both
+  wallpapers and any full-screen dimming above them are now drawn in a single pass instead of one
+  pass per layer, so the transition needs less graphics work per frame and looks the same as
+  before.
+
 ## 4.0.2
 
 ### Patch Changes
