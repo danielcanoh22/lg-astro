@@ -1,5 +1,15 @@
 # lg-luma
 
+## 4.1.3
+
+### Patch Changes
+
+- e978b97: Stop checking for the old weather forecast cache at every start. Astro 4.0.0 and later already
+  deleted `preferences.weather.json` once; this version no longer looks for it.
+- d4243f8: Keep Astro's storage folder private on TVs in developer mode. webOS creates the app's data
+  folder writable by every user on the TV; Astro now removes access for other users from that
+  folder and from its uploaded backgrounds folder at startup. Files inside are unchanged.
+
 ## 4.1.2
 
 ### Patch Changes
