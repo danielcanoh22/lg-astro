@@ -1,5 +1,4 @@
 import { cropRect, panPosition } from './crop.js';
-import { loadStoragePath } from './storage.js';
 
 const element = (id) => document.getElementById(id);
 const file = element('file');
@@ -14,14 +13,6 @@ let drag;
 let busy = false;
 let horizontal = 0.5;
 let vertical = 0.5;
-
-const storageReady = loadStoragePath(fetch).catch(() => {
-  element('storage-path').textContent = 'Storage path unavailable';
-  return null;
-});
-storageReady.then((path) => {
-  if (path) element('storage-path').textContent = path;
-});
 
 function message(text, error = false) {
   status.textContent = text;
@@ -87,7 +78,6 @@ element('another').addEventListener('click', () => {
   editor.reset();
   editor.hidden = true;
   element('success').hidden = true;
-  element('storage-footer').hidden = false;
   picker.hidden = false;
   element('picker-title').textContent = 'Choose an image';
   zoom.value = '1';
@@ -118,11 +108,6 @@ for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'])
 editor.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (busy || !image) return;
-  const destination = await storageReady;
-  if (!destination) {
-    message('Could not read the TV storage path. Close and reopen this dialog.', true);
-    return;
-  }
   busy = true;
   for (const input of editor.querySelectorAll('input, button')) input.disabled = true;
   file.disabled = true;
@@ -147,10 +132,8 @@ editor.addEventListener('submit', async (event) => {
     const result = await response.json();
     // A 409 asks to save or discard the previous image on the TV first.
     if (!response.ok) throw new Error(result.error || 'The TV could not receive this background.');
-    element('success-path').textContent = destination;
     editor.hidden = true;
     element('success').hidden = false;
-    element('storage-footer').hidden = true;
     message('');
   } catch (error) {
     message(

@@ -608,17 +608,22 @@ fn slashless_session_urls_redirect_to_the_local_asset_base() {
 }
 
 #[test]
+fn the_upload_page_has_no_route_that_reveals_the_storage_path() {
+    let fixture = Fixture::new();
+    for route in ["info.json", "storage.js"] {
+        let (response, changed) = http(&fixture.wallpapers(), |host| {
+            format!("GET /secret/{route} HTTP/1.1\r\nHost: {host}\r\n\r\n").into_bytes()
+        });
+        assert!(response.starts_with("HTTP/1.1 404"), "{route}: {response}");
+        assert!(!response.contains(&fixture.wallpapers().to_string_lossy().to_string()));
+        assert!(!changed);
+    }
+}
+
+#[test]
 fn browser_assets_are_local_and_a_real_http_upload_needs_no_name() {
     let fixture = Fixture::new();
-    for route in [
-        "",
-        "app.js",
-        "crop.js",
-        "storage.js",
-        "app.css",
-        "astro-mark.svg",
-        "info.json",
-    ] {
+    for route in ["", "app.js", "crop.js", "app.css", "astro-mark.svg"] {
         let (response, changed) = http(&fixture.wallpapers(), |host| {
             format!("GET /secret/{route} HTTP/1.1\r\nHost: {host}\r\n\r\n").into_bytes()
         });
@@ -631,10 +636,8 @@ fn browser_assets_are_local_and_a_real_http_upload_needs_no_name() {
             assert!(response.contains("image/svg+xml"));
             assert!(response.contains("<svg"));
         }
-        if route == "info.json" {
-            assert!(response.starts_with("HTTP/1.1 200"));
-            assert!(response.contains(&fixture.wallpapers().to_string_lossy().to_string()));
-        }
+        // The page never learns where the TV stores the image.
+        assert!(!response.contains(&fixture.wallpapers().to_string_lossy().to_string()));
     }
     let bytes = image(1920, 1080);
     let (response, changed) = http(&fixture.wallpapers(), |host| {
@@ -956,14 +959,7 @@ fn pending_connections_are_bounded_across_peers() {
 fn a_browser_loading_the_page_assets_in_parallel_gets_every_one() {
     let fixture = Fixture::new();
     let (_service, address, token) = open_session(&fixture);
-    let routes = [
-        "",
-        "app.css",
-        "app.js",
-        "crop.js",
-        "storage.js",
-        "astro-mark.svg",
-    ];
+    let routes = ["", "app.css", "app.js", "crop.js", "astro-mark.svg"];
     let mut sockets: Vec<_> = routes
         .iter()
         .map(|_| TcpStream::connect(&address).unwrap())
@@ -1052,15 +1048,7 @@ fn upload_bytes(address: &str, token: &str, body: &[u8]) -> Vec<u8> {
 }
 
 fn parallel_page_load(address: &str, token: &str) {
-    let routes = [
-        "",
-        "app.css",
-        "app.js",
-        "crop.js",
-        "storage.js",
-        "astro-mark.svg",
-        "info.json",
-    ];
+    let routes = ["", "app.css", "app.js", "crop.js", "astro-mark.svg"];
     let mut sockets: Vec<_> = routes
         .iter()
         .map(|_| TcpStream::connect(address).unwrap())
@@ -1836,4 +1824,144 @@ fn exit_wait_is_bounded_while_the_worker_is_stuck_decoding() {
         started.elapsed()
     );
     assert!(catalog(&fixture.wallpapers()).is_empty());
+}
+
+fn serve_once(directory: &Path, awaiting: bool, request: impl FnOnce(&str) -> Vec<u8>) -> String {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let directory = directory.to_owned();
+    let worker = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let _ = serve(
+            &mut socket,
+            &[],
+            &address.to_string(),
+            "secret",
+            &directory,
+            awaiting,
+            || true,
+        );
+    });
+    let mut socket = TcpStream::connect(address).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let _ = socket.write_all(&request(&address.to_string()));
+    let mut response = Vec::new();
+    let _ = socket.read_to_end(&mut response);
+    worker.join().unwrap();
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+#[test]
+fn no_upload_server_response_reveals_the_storage_or_preferences_path() {
+    let fixture = Fixture::new();
+    fs::write(fixture.0.join("file"), b"").unwrap();
+    let wallpapers = fixture.wallpapers();
+    let blocked = fixture.0.join("file").join("sub").join("wallpapers");
+    let secret = [
+        fixture.0.to_string_lossy().to_string(),
+        "astro-wallpapers".to_owned(),
+        "preferences".to_owned(),
+    ];
+    let get = |route: &'static str| {
+        move |host: &str| format!("GET {route} HTTP/1.1\r\nHost: {host}\r\n\r\n").into_bytes()
+    };
+    let post = |content: &'static str, header: bool, body: Vec<u8>| {
+        move |host: &str| {
+            let mut bytes = format!(
+                "POST /secret/upload HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: {content}\r\n{}Content-Length: {}\r\n\r\n",
+                if header { "X-Astro-Upload: secret\r\n" } else { "" },
+                body.len()
+            )
+            .into_bytes();
+            bytes.extend(body);
+            bytes
+        }
+    };
+    let mut leaks = Vec::new();
+    let mut record = |name: &str, response: String| {
+        for needle in &secret {
+            if response.contains(needle.as_str()) {
+                leaks.push(format!("{name} contains {needle}"));
+            }
+        }
+    };
+    for route in [
+        "/secret/",
+        "/secret/app.js",
+        "/secret/crop.js",
+        "/secret/app.css",
+        "/secret/astro-mark.svg",
+        "/secret/info.json",
+        "/secret/storage.js",
+        "/secret/missing",
+        "/secret/info.json?x=1",
+        "/secret",
+        "/other/info.json",
+        "/info.json",
+    ] {
+        record(
+            &format!("GET {route}"),
+            serve_once(&wallpapers, false, get(route)),
+        );
+    }
+    record(
+        "malformed",
+        serve_once(&wallpapers, false, |_| b"garbage\r\n\r\n".to_vec()),
+    );
+    record(
+        "foreign host",
+        serve_once(&wallpapers, false, |_| {
+            b"GET /secret/info.json HTTP/1.1\r\nHost: evil.example\r\n\r\n".to_vec()
+        }),
+    );
+    record(
+        "POST no header",
+        serve_once(
+            &wallpapers,
+            false,
+            post("image/jpeg", false, image(1920, 1080)),
+        ),
+    );
+    record(
+        "POST bad type",
+        serve_once(&wallpapers, false, post("text/plain", true, b"x".to_vec())),
+    );
+    record(
+        "POST bad image",
+        serve_once(
+            &wallpapers,
+            false,
+            post("image/jpeg", true, b"not an image".to_vec()),
+        ),
+    );
+    record(
+        "POST wrong size",
+        serve_once(
+            &wallpapers,
+            false,
+            post("image/jpeg", true, image(100, 100)),
+        ),
+    );
+    record(
+        "POST awaiting",
+        serve_once(
+            &wallpapers,
+            true,
+            post("image/jpeg", true, image(1920, 1080)),
+        ),
+    );
+    record(
+        "POST blocked parent",
+        serve_once(&blocked, false, post("image/jpeg", true, image(1920, 1080))),
+    );
+    let ok = serve_once(
+        &wallpapers,
+        false,
+        post("image/jpeg", true, image(1920, 1080)),
+    );
+    assert!(ok.starts_with("HTTP/1.1 201"), "{ok}");
+    record("POST ok", ok);
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
