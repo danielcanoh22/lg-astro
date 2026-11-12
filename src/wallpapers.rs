@@ -27,7 +27,12 @@ const SESSION_TIME: Duration = Duration::from_secs(600);
 const STAGING_ABANDONED: Duration = Duration::from_secs(SESSION_TIME.as_secs() + 5 * 60);
 const SESSION_REQUEST_LIMIT: usize = 64;
 const REQUEST_TIME: Duration = Duration::from_secs(20);
+/// How long Astro's exit waits for the worker to delete an upload awaiting a decision.
+const EXIT_TIME: Duration = Duration::from_secs(2);
 const STOP: u64 = u64::MAX;
+/// Only one upload awaits the owner's decision on the TV at a time.
+const AWAITING_DECISION: &str = "Save or discard the previous image on your TV first";
+const GALLERY_FULL: &str = "The wallpaper gallery is full (20 images)";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Wallpaper {
@@ -78,17 +83,28 @@ pub enum Event {
     Deleted(String, Result<(), String>),
     Session(u64, Result<Session, String>),
     Ended(u64),
+    /// An upload of that session waits, hidden from the gallery, for Save or Discard on the TV.
+    /// Its `directory` is the staging directory holding the preview images.
+    Uploaded(u64, Wallpaper),
+    /// The owner's Save, followed by the updated catalog.
+    Saved(String, Result<(), String>),
+    /// An upload awaiting a decision was deleted: discarded, or its session ended.
+    Discarded(String),
 }
 
 enum Command {
     Wake,
     Delete { id: String, selected: String },
+    Save(String),
+    Discard(String),
 }
 
 pub struct Service {
     desired: Arc<AtomicU64>,
     wake: mpsc::Sender<Command>,
     pub receiver: mpsc::Receiver<Event>,
+    /// Disconnects when the worker returns.
+    finished: mpsc::Receiver<()>,
     active: bool,
     generation: u64,
 }
@@ -103,9 +119,11 @@ impl Service {
         let worker_desired = desired.clone();
         let (sender, receiver) = mpsc::sync_channel(4);
         let (wake, updates) = mpsc::channel();
+        let (finishing, finished) = mpsc::channel::<()>();
         thread::Builder::new()
             .name("astro-wallpapers".into())
             .spawn(move || {
+                let _finishing = finishing;
                 worker(
                     &directory,
                     &worker_desired,
@@ -119,6 +137,7 @@ impl Service {
             desired,
             wake,
             receiver,
+            finished,
             active: false,
             generation: 0,
         })
@@ -141,12 +160,33 @@ impl Service {
     pub fn delete(&self, id: String, selected: String) {
         let _ = self.wake.send(Command::Delete { id, selected });
     }
+
+    /// Adds the upload awaiting a decision to the gallery (the owner chose Save on the TV).
+    pub fn save_upload(&self, id: String) {
+        let _ = self.wake.send(Command::Save(id));
+    }
+
+    /// Deletes the upload awaiting a decision (the owner chose Discard on the TV).
+    pub fn discard_upload(&self, id: String) {
+        let _ = self.wake.send(Command::Discard(id));
+    }
 }
 
 impl Drop for Service {
     fn drop(&mut self) {
         self.desired.store(STOP, Ordering::Release);
         let _ = self.wake.send(Command::Wake);
+        // Give the worker a bounded moment to delete an upload still awaiting a decision before
+        // the process exits; draining its events keeps it from blocking on a full channel.
+        let deadline = Instant::now() + EXIT_TIME;
+        while Instant::now() < deadline {
+            while self.receiver.try_recv().is_ok() {}
+            if let Err(mpsc::RecvTimeoutError::Disconnected) =
+                self.finished.recv_timeout(Duration::from_millis(10))
+            {
+                break;
+            }
+        }
     }
 }
 
@@ -236,7 +276,8 @@ fn delete_wallpaper(directory: &Path, id: &str, selected: &str) -> Result<(), St
 }
 
 /// Removes `.custom-<id>` staging entries an interrupted upload left behind (power loss or a
-/// kill before the commit rename). Normal and takeover launches share this gallery and may run
+/// kill before the commit rename), including an upload that was still awaiting the owner's
+/// decision on the TV. Normal and takeover launches share this gallery and may run
 /// at once, so only entries last modified more than `STAGING_ABANDONED` ago are removed; an
 /// unreadable or future mtime keeps the entry until a later start. Symlinks are unlinked,
 /// never followed; real directories are removed like deleted wallpapers. Every other entry,
@@ -464,9 +505,13 @@ fn jpeg(image: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn store(directory: &Path, bytes: &[u8], valid: impl Fn() -> bool) -> Result<Wallpaper, String> {
+/// Decodes, normalizes and durably writes an upload into a hidden `.custom-<id>` staging
+/// directory, which the catalog never lists, so it awaits the owner's decision on the TV
+/// without joining the gallery, rotation or the 20-image count. The returned entry's
+/// `directory` is that staging directory.
+fn stage(directory: &Path, bytes: &[u8], valid: impl Fn() -> bool) -> Result<Wallpaper, String> {
     if catalog(directory).len() >= MAX_WALLPAPERS {
-        return Err("The wallpaper gallery is full (20 images)".into());
+        return Err(GALLERY_FULL.into());
     }
     let mut image = decode(bytes)?;
     let original = jpeg(&image, 94)?;
@@ -491,8 +536,8 @@ fn store(directory: &Path, bytes: &[u8], valid: impl Fn() -> bool) -> Result<Wal
     let staging = directory.join(format!(".{id}"));
     create_directory(&staging)?;
     let item = Wallpaper {
-        id: id.clone(),
-        directory: directory.join(&id),
+        id,
+        directory: staging.clone(),
         has_original: true,
     };
     let result = (|| {
@@ -506,28 +551,118 @@ fn store(directory: &Path, bytes: &[u8], valid: impl Fn() -> bool) -> Result<Wal
         if !valid() {
             return Err("Upload session ended".into());
         }
-        // The new directory's own entries must be durable before the rename publishes it.
-        sync_directory(&staging).map_err(|e| e.to_string())?;
-        fs::rename(&staging, &item.directory).map_err(|e| e.to_string())
+        // The new directory's own entries must be durable before a commit renames it.
+        sync_directory(&staging).map_err(|e| e.to_string())
     })();
     if result.is_err() {
-        // Only the files and fresh directory created by this operation.
-        for file in [
-            "wallpaper.jpg",
-            "original.jpg",
-            "thumbnail.jpg",
-            "metadata.json",
-        ] {
-            let _ = fs::remove_file(staging.join(file));
-        }
-        let _ = fs::remove_dir(&staging);
+        remove_staging(&staging);
     }
     result?;
+    Ok(item)
+}
+
+/// Deletes a staging directory created by `stage`: only the files it writes and then the
+/// directory itself. A staging entry that is not a real directory is unlinked, never followed.
+fn remove_staging(staging: &Path) {
+    match fs::symlink_metadata(staging) {
+        Ok(metadata) if metadata.is_dir() => {
+            for file in [
+                "wallpaper.jpg",
+                "original.jpg",
+                "thumbnail.jpg",
+                "metadata.json",
+            ] {
+                let _ = fs::remove_file(staging.join(file));
+            }
+            let _ = fs::remove_dir(staging);
+        }
+        Ok(_) => {
+            let _ = fs::remove_file(staging);
+        }
+        Err(_) => {}
+    }
+}
+
+/// Publishes a staged upload (the owner chose Save) as an ordinary `custom-<id>` gallery entry
+/// with an atomic rename, after checking again that the gallery has room. A failed commit
+/// deletes the staged files.
+fn commit(directory: &Path, staged: &Wallpaper) -> Result<Wallpaper, String> {
+    let item = Wallpaper {
+        id: staged.id.clone(),
+        directory: directory.join(&staged.id),
+        has_original: true,
+    };
+    let result = if !valid_id(&staged.id)
+        || staged.directory != directory.join(format!(".{}", staged.id))
+        || !real_directory(&staged.directory)
+    {
+        Err("Upload unavailable".to_owned())
+    } else if catalog(directory).len() >= MAX_WALLPAPERS {
+        Err(GALLERY_FULL.to_owned())
+    } else {
+        // Its files and directory entries were synced when it was staged.
+        fs::rename(&staged.directory, &item.directory).map_err(|e| e.to_string())
+    };
+    if let Err(error) = result {
+        remove_staging(&staged.directory);
+        return Err(error);
+    }
     // The rename already committed the upload, so a failed directory sync is only logged.
     if let Err(error) = sync_directory(directory) {
         eprintln!("Could not sync wallpaper storage after an upload: {error}");
     }
     Ok(item)
+}
+
+/// The single upload awaiting the owner's Save or Discard on the TV. Dropping it deletes the
+/// staged files, so no return path of the worker leaves an undecided upload behind.
+#[derive(Default)]
+struct Awaiting(Option<Wallpaper>);
+
+impl Awaiting {
+    fn take(&mut self, id: &str) -> Option<Wallpaper> {
+        self.0.take_if(|item| item.id == id)
+    }
+}
+
+impl Drop for Awaiting {
+    fn drop(&mut self) {
+        if let Some(item) = self.0.take() {
+            remove_staging(&item.directory);
+        }
+    }
+}
+
+/// Applies one command from the SDL thread; false once the receiver is gone.
+fn update(
+    directory: &Path,
+    sender: &mpsc::SyncSender<Event>,
+    awaiting: &mut Awaiting,
+    command: Command,
+) -> bool {
+    match command {
+        Command::Wake => true,
+        Command::Delete { id, selected } => {
+            let result = delete_wallpaper(directory, &id, &selected);
+            sender.send(Event::Deleted(id, result)).is_ok()
+                && sender.send(Event::Catalog(catalog(directory))).is_ok()
+        }
+        Command::Save(id) => {
+            let Some(staged) = awaiting.take(&id) else {
+                return true;
+            };
+            let result = commit(directory, &staged).map(|_| ());
+            sender.send(Event::Saved(id, result)).is_ok()
+                && sender.send(Event::Catalog(catalog(directory))).is_ok()
+        }
+        Command::Discard(id) => {
+            let Some(staged) = awaiting.take(&id) else {
+                return true;
+            };
+            remove_staging(&staged.directory);
+            sender.send(Event::Discarded(id)).is_ok()
+        }
+    }
 }
 
 fn worker(
@@ -542,19 +677,12 @@ fn worker(
     if sender.send(Event::Catalog(catalog(directory))).is_err() {
         return;
     }
-    let update = |command| match command {
-        Command::Wake => true,
-        Command::Delete { id, selected } => {
-            let result = delete_wallpaper(directory, &id, &selected);
-            sender.send(Event::Deleted(id, result)).is_ok()
-                && sender.send(Event::Catalog(catalog(directory))).is_ok()
-        }
-    };
+    let mut awaiting = Awaiting::default();
     let mut handled = 0;
     loop {
         // Finish queued mutations before starting another upload session.
         for command in updates.try_iter() {
-            if !update(command) {
+            if !update(directory, sender, &mut awaiting, command) {
                 return;
             }
         }
@@ -565,7 +693,7 @@ fn worker(
         if generation == 0 || generation == handled {
             match updates.recv() {
                 Ok(command) => {
-                    if !update(command) {
+                    if !update(directory, sender, &mut awaiting, command) {
                         break;
                     }
                 }
@@ -599,6 +727,12 @@ fn worker(
         // Only requests carrying the token count, so other LAN peers cannot use up the session.
         let mut requests = 0;
         'session: while valid() && requests < SESSION_REQUEST_LIMIT {
+            // The owner's Save or Discard arrives while the session stays open.
+            for command in updates.try_iter() {
+                if !update(directory, sender, &mut awaiting, command) {
+                    return;
+                }
+            }
             let mut idle = true;
             // Serve what arrived before accepting more, so closed connections free their slots.
             for (mut stream, received) in pending.poll() {
@@ -618,13 +752,23 @@ fn worker(
                     }
                     requests += 1;
                 }
-                match serve(&mut stream, &received, &host, &token, directory, valid) {
-                    Ok(true) => {
-                        if sender.send(Event::Catalog(catalog(directory))).is_err() {
+                let undecided = awaiting.0.is_some();
+                match serve(
+                    &mut stream,
+                    &received,
+                    &host,
+                    &token,
+                    directory,
+                    undecided,
+                    valid,
+                ) {
+                    Ok(Some(item)) => {
+                        awaiting.0 = Some(item.clone());
+                        if sender.send(Event::Uploaded(generation, item)).is_err() {
                             return;
                         }
                     }
-                    Ok(false) => {}
+                    Ok(None) => {}
                     Err(error) => eprintln!("Astro wallpaper upload: {error}"),
                 }
             }
@@ -660,6 +804,18 @@ fn worker(
             }
         }
         drop(listener);
+        // A Save chosen before the dialog closed still counts; an undecided upload is deleted.
+        for command in updates.try_iter() {
+            if !update(directory, sender, &mut awaiting, command) {
+                return;
+            }
+        }
+        if let Some(staged) = awaiting.0.take() {
+            remove_staging(&staged.directory);
+            if sender.send(Event::Discarded(staged.id)).is_err() {
+                return;
+            }
+        }
         if sender.send(Event::Ended(generation)).is_err() {
             break;
         }
@@ -684,15 +840,17 @@ fn reject(stream: &mut TcpStream, error: &str) -> Result<(), String> {
 }
 
 /// `received` holds bytes already read from `stream`: the complete headers and possibly the
-/// start of the body. The body gets its own REQUEST_TIME from here.
+/// start of the body. The body gets its own REQUEST_TIME from here. `awaiting` is whether an
+/// earlier upload still waits for the owner's decision; an accepted upload is returned staged.
 fn serve(
     stream: &mut TcpStream,
     received: &[u8],
     host: &str,
     token: &str,
     directory: &Path,
+    awaiting: bool,
     valid: impl Fn() -> bool,
-) -> Result<bool, String> {
+) -> Result<Option<Wallpaper>, String> {
     stream.set_nonblocking(false).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_millis(100)))
@@ -706,23 +864,23 @@ fn serve(
         Ok(request) => request,
         Err(error) => {
             error_response(stream, "400 Bad Request", &error)?;
-            return Ok(false);
+            return Ok(None);
         }
     };
     if request.foreign(host) {
         error_response(stream, "403 Forbidden", "Open the address shown on your TV")?;
-        return Ok(false);
+        return Ok(None);
     }
     if !valid() {
         return Err("Upload session ended".into());
     }
     if request.method == "GET" && request.length == 0 && request.target == format!("/{token}") {
         redirect_to_page(stream, token)?;
-        return Ok(false);
+        return Ok(None);
     }
     let Some(route) = request.target.strip_prefix(&format!("/{token}/")) else {
         error_response(stream, "404 Not Found", "Upload session not found")?;
-        return Ok(false);
+        return Ok(None);
     };
     if request.method == "GET" && request.length == 0 {
         if route == "info.json" {
@@ -733,7 +891,7 @@ fn serve(
                 "application/json; charset=utf-8",
                 body.as_bytes(),
             )?;
-            return Ok(false);
+            return Ok(None);
         }
         let (kind, body): (&str, &[u8]) = match route {
             "" => (
@@ -759,18 +917,18 @@ fn serve(
             "astro-mark.svg" => ("image/svg+xml", include_bytes!("../assets/app-icon.svg")),
             _ => {
                 error_response(stream, "404 Not Found", "Not found")?;
-                return Ok(false);
+                return Ok(None);
             }
         };
         response(stream, "200 OK", kind, body)?;
-        return Ok(false);
+        return Ok(None);
     }
     if request.method != "POST"
         || route != "upload"
         || request.headers.get("x-astro-upload").map(String::as_str) != Some(token)
     {
         error_response(stream, "403 Forbidden", "Invalid upload request")?;
-        return Ok(false);
+        return Ok(None);
     }
     if !request
         .headers
@@ -782,25 +940,30 @@ fn serve(
             "415 Unsupported Media Type",
             "Choose a JPEG, PNG or WebP image",
         )?;
-        return Ok(false);
+        return Ok(None);
     }
     let mut body = vec![0; request.length];
     read_exact(&mut reader, &mut body, &valid, deadline)?;
     drop(reader);
-    match store(directory, &body, valid) {
+    // Read the whole body first, so the browser receives this answer instead of a reset.
+    if awaiting {
+        error_response(stream, "409 Conflict", AWAITING_DECISION)?;
+        return Ok(None);
+    }
+    match stage(directory, &body, valid) {
         Ok(item) => {
-            // The commit succeeded even if the phone disconnects before receiving its reply.
+            // The upload awaits the TV's decision even if the phone disconnects before its reply.
             let _ = response(
                 stream,
                 "201 Created",
                 "application/json; charset=utf-8",
                 serde_json::json!({"id":item.id}).to_string().as_bytes(),
             );
-            Ok(true)
+            Ok(Some(item))
         }
         Err(error) => {
             error_response(stream, "422 Unprocessable Content", &error)?;
-            Ok(false)
+            Ok(None)
         }
     }
 }

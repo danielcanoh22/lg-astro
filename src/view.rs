@@ -285,6 +285,10 @@ struct Companion {
 }
 
 fn wallpaper_upload(out: &mut Scene, state: &State, assets: &Assets) {
+    if let Some(item) = &state.wallpaper_pending {
+        upload_preview(out, state, item);
+        return;
+    }
     companion(
         out,
         state,
@@ -298,6 +302,68 @@ fn wallpaper_upload(out: &mut Scene, state: &State, assets: &Assets) {
             starting: "wallpaperUploadStarting",
         },
     );
+}
+
+/// The uploaded image, as Home would show it, awaiting Save or Discard in the same panel as the
+/// QR code. Discard takes Close's exact place and Save sits above it, so a click or OK aimed at
+/// Close as the preview appears can only discard.
+fn upload_preview(out: &mut Scene, state: &State, item: &crate::wallpapers::Wallpaper) {
+    let language = state.preferences.language;
+    let panel = Rect::new(520., 144., 880., 816.);
+    out.modal = Some(panel);
+    out.shadow(panel, 24., 40., 12., 0.3);
+    out.shape(panel, 24., c(0x1b2023, 1.));
+    out.border(panel, 24., 1., c(0xffffff, 0.09));
+    out.text(
+        language.t("uploadPreviewTitle"),
+        Rect::new(584., 198., 752., 48.),
+        text(32., 550, -0.02),
+        WHITE,
+        true,
+    );
+    let preview = Rect::new(600., 268., 720., 405.);
+    out.shadow(preview, 16., 15., 3., 0.13);
+    out.image(
+        if state.preferences.wallpaper_gradient {
+            item.image()
+        } else {
+            item.unshaded_image()
+        },
+        preview,
+        16.,
+        false,
+    );
+    out.border(preview, 16., 1., c(0xffffff, 0.086));
+    out.text(
+        language.t("uploadPreviewHint"),
+        Rect::new(604., 694., 712., 52.),
+        text(17., 400, 0.).leading(1.4),
+        c(0xffffff, 0.65),
+        true,
+    );
+    for (target, label, rect) in [
+        (
+            Target::SaveUpload,
+            "saveUpload",
+            Rect::new(812., 782., 296., 56.),
+        ),
+        (
+            Target::DiscardUpload,
+            "discardUpload",
+            Rect::new(812., 862., 296., 56.),
+        ),
+    ] {
+        let focused = state.focus == target;
+        out.pill(rect, focused, false);
+        out.text(
+            language.t(label),
+            Rect::new(rect.x, rect.y + 15., rect.w, 28.),
+            text(20., 550, 0.),
+            if focused { c(0x171c20, 1.) } else { WHITE },
+            true,
+        );
+        out.control(target, rect, false);
+    }
 }
 
 /// A QR code and address for a page on the owner's phone or computer, with a Close button.

@@ -370,6 +370,8 @@ fn effects(
             Effect::DeleteWallpaper(id) => {
                 wallpapers.delete(id, state.preferences.background.clone())
             }
+            Effect::SaveUpload(id) => wallpapers.save_upload(id),
+            Effect::DiscardUpload(id) => wallpapers.discard_upload(id),
             Effect::Recent {
                 generation,
                 command,
@@ -438,8 +440,50 @@ fn script(
         }
         "await-recents" => vec![],
         "await-upload" => vec![],
+        "await-preview" => vec![],
+        action if action.starts_with("upload:") => {
+            let Some(Ok(session)) = &state.wallpaper_upload else {
+                return Err("upload: needs an open upload session".into());
+            };
+            scripted_upload(&session.url, &action[7..])?;
+            vec![]
+        }
         _ => return Err(format!("Unknown scripted action: {action}")),
     })
+}
+
+/// Scripted runs send a real JPEG upload to the open session over HTTP from a helper thread, as
+/// a phone would, so smoke tests cover the server, staging and the TV preview.
+fn scripted_upload(url: &str, path: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let body = std::fs::read(path).map_err(|error| format!("{path}: {error}"))?;
+    let (address, token) = url
+        .strip_prefix("http://")
+        .and_then(|rest| rest.trim_end_matches('/').split_once('/'))
+        .ok_or("Unexpected upload URL")?;
+    let (address, token) = (address.to_owned(), token.to_owned());
+    std::thread::spawn(move || {
+        let result = (|| {
+            let mut socket = std::net::TcpStream::connect(&address)?;
+            write!(
+                socket,
+                "POST /{token}/upload HTTP/1.1\r\nHost: {address}\r\nOrigin: http://{address}\r\nX-Astro-Upload: {token}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )?;
+            socket.write_all(&body)?;
+            let mut response = String::new();
+            socket.read_to_string(&mut response)?;
+            Ok::<_, std::io::Error>(response)
+        })();
+        match result {
+            Ok(response) => eprintln!(
+                "Scripted upload: {}",
+                response.lines().next().unwrap_or_default()
+            ),
+            Err(error) => eprintln!("Scripted upload: {error}"),
+        }
+    });
+    Ok(())
 }
 
 fn main() {
@@ -1055,9 +1099,21 @@ fn run() -> Result<(), String> {
                     if generation == wallpaper_service.generation()
                         && matches!(state.overlay, Some(Overlay::WallpaperUpload)) =>
                 {
-                    state.back();
+                    state.close_wallpaper_upload();
                     state.notify(state.preferences.language.t("wallpaperUploadEnded"));
                 }
+                wallpapers::Event::Uploaded(generation, item)
+                    if generation == wallpaper_service.generation() =>
+                {
+                    state.upload_received(item);
+                }
+                wallpapers::Event::Saved(id, result) => {
+                    // The preview's staging path is gone; the catalog that follows lists the
+                    // saved image under its permanent path.
+                    renderer.forget(&id);
+                    state.upload_saved(result);
+                }
+                wallpapers::Event::Discarded(id) => renderer.forget(&id),
                 _ => {}
             }
         }
@@ -1326,9 +1382,7 @@ fn run() -> Result<(), String> {
                     ..
                 } if window_id == window.id() => match win_event {
                     WindowEvent::Hidden | WindowEvent::Minimized => {
-                        if matches!(state.overlay, Some(Overlay::WallpaperUpload)) {
-                            state.back();
-                        }
+                        state.close_wallpaper_upload();
                         wallpaper_service.set_active(false);
                         visible = false;
                         focused = false;
@@ -1342,9 +1396,7 @@ fn run() -> Result<(), String> {
                     }
                     WindowEvent::FocusLost => {
                         if webos {
-                            if matches!(state.overlay, Some(Overlay::WallpaperUpload)) {
-                                state.back();
-                            }
+                            state.close_wallpaper_upload();
                             wallpaper_service.set_active(false);
                         }
                         focused = false;
@@ -1643,6 +1695,9 @@ fn run() -> Result<(), String> {
                     || (action == "await-upload"
                         && matches!(state.overlay, Some(Overlay::WallpaperUpload))
                         && state.wallpaper_upload.is_none())
+                    || (action == "await-preview"
+                        && matches!(state.overlay, Some(Overlay::WallpaperUpload))
+                        && state.wallpaper_pending.is_none())
             })
             && let Some(action) = options.script.pop_front()
         {

@@ -277,7 +277,9 @@ for the suggestion and API reference.
 
 Open **Settings → Background → Upload**, then scan the QR code or open the shown
 address on a phone or computer on the same network. Choose a JPEG, PNG or WebP and adjust
-its 16:9 crop before choosing **Save to TV**.
+its 16:9 crop before choosing **Save to TV**. The TV then shows the image: choose **Save** to add
+it to your backgrounds, or **Discard** (or Back) to delete it. Nothing joins the gallery until you
+save it on the TV, and an image not saved before the dialog closes is deleted.
 
 The upload link works only while its TV dialog is open and focused.
 
