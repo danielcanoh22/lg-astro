@@ -3248,3 +3248,48 @@ fn a_static_wallpaper_keeps_its_folded_fills_and_a_lone_wallpaper_its_own_pass()
     assert!(matches!(&draw[0], Draw::Image(path, ..) if path.ends_with("wallpapers/dunes.jpg")));
     assert_eq!(background(&draw), None);
 }
+
+#[test]
+fn an_image_above_a_folded_fill_is_not_mixed_into_the_wallpaper_beneath_it() {
+    use crate::renderer::{Background, Draw, Scrim, background};
+    use crate::state::Rect;
+    let screen = Rect::new(0., 0., 1920., 1080.);
+    // A full-screen image tinted in alpha that sits above a fill is drawn after the folded
+    // wallpaper, never mixed beneath that fill.
+    let commands = [
+        Draw::Image("a.jpg".into(), screen, 0., false),
+        Draw::Shape(screen, 0., 0., [0., 0., 0., 0.5]),
+        Draw::TintedImage("b.jpg".into(), screen, 0., false, [1., 1., 1., 0.5]),
+    ];
+    assert_eq!(
+        background(&commands),
+        Some(Background {
+            wallpaper: "a.jpg",
+            incoming: None,
+            scrims: vec![Scrim::Flat([0., 0., 0., 0.5])],
+            len: 2,
+        })
+    );
+}
+
+#[test]
+fn a_finished_or_starting_fade_is_still_one_cross_fade_group() {
+    use crate::renderer::{Draw, background};
+    use crate::state::Rect;
+    let screen = Rect::new(0., 0., 1920., 1080.);
+    for alpha in [0., 1.] {
+        let commands = [
+            Draw::Image("a.jpg".into(), screen, 0., false),
+            Draw::TintedImage("b.jpg".into(), screen, 0., false, [1., 1., 1., alpha]),
+        ];
+        let layers = background(&commands).unwrap();
+        assert_eq!(layers.incoming, Some(("b.jpg", alpha)));
+        assert_eq!(layers.len, 2);
+    }
+    // An outgoing wallpaper that is itself tinted (dimmed) is not a plain wallpaper.
+    let dimmed = [
+        Draw::TintedImage("a.jpg".into(), screen, 0., false, [0.85, 0.85, 0.85, 1.]),
+        Draw::TintedImage("b.jpg".into(), screen, 0., false, [1., 1., 1., 0.5]),
+    ];
+    assert_eq!(background(&dimmed), None);
+}
