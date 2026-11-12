@@ -617,6 +617,12 @@ draws the wallpaper once with m and k per vertex (16 strips keep gradients' colo
 exact) instead of one full-screen pass per fill. During the Recents crossfade these fills sit
 beneath the outgoing interface rather than over it, so they fold in while both fade.
 
+A wallpaper cross-fade (a newly chosen or rotated wallpaper drawn at alpha a over the previous one)
+is the same single pass: once both wallpapers are uploaded as opaque RGB textures, the paint shader
+samples the outgoing one on texture unit 1, mixes the two at a and then applies the folded fills,
+so a fade costs one full-screen pass like a static wallpaper. A wallpaper with an alpha channel, or
+one still decoding, keeps the layer-by-layer path.
+
 ### Idle preparation
 
 The first visit to a page pays for laying out its text, outlining new glyphs, loading logo meshes

@@ -3153,3 +3153,143 @@ fn the_home_log_never_writes_through_a_planted_link() {
     assert!(linked && replaced_link && shared);
     assert_eq!(target, b"keep");
 }
+
+#[test]
+fn a_wallpaper_cross_fade_is_one_background_layer_group_with_its_folded_fills() {
+    use crate::renderer::{Background, Draw, Scrim, TextStyle, background};
+    use crate::state::Rect;
+    let mut state = ready();
+    state.preferences.background = "dunes".into();
+    state.previous_background = Some(("forest".into(), std::time::Instant::now()));
+    let draw = scene(&state).draw;
+    let layers = background(&draw).expect("a cross-fade is drawn as one background pass");
+    assert!(layers.wallpaper.ends_with("wallpapers/forest.jpg"));
+    let (incoming, alpha) = layers
+        .incoming
+        .expect("the incoming wallpaper joins the pass");
+    assert!(incoming.ends_with("wallpapers/dunes.jpg"));
+    assert!((0. ..=1.).contains(&alpha));
+    assert!(layers.scrims.is_empty());
+    assert_eq!(layers.len, 2);
+
+    // Recents shown during a fade: its full-screen backdrop folds into the same pass.
+    state.open_recents();
+    state.recents.visibility = 1.;
+    let draw = scene(&state).draw;
+    let layers = background(&draw).unwrap();
+    assert!(layers.incoming.is_some());
+    assert!(!layers.scrims.is_empty());
+    assert!(
+        !matches!(&draw[layers.len], Draw::Shape(rect, radius, _, _) if *radius <= 0. && rect.w >= 1920. && rect.h >= 1080.),
+        "no full-screen fill directly above the wallpapers is left as a separate pass",
+    );
+
+    let screen = Rect::new(0., 0., 1920., 1080.);
+    let fill = Draw::Shape(screen, 0., 0., [0.1, 0.2, 0.3, 0.5]);
+    let gradient = Draw::RoundedGradient(screen, 0., [0., 0., 0., 0.2], [0., 0., 0., 0.8]);
+    let commands = [
+        Draw::Image("a.jpg".into(), screen, 0., false),
+        Draw::TintedImage("b.jpg".into(), screen, 0., false, [1., 1., 1., 0.25]),
+        fill.clone(),
+        gradient,
+        Draw::Text("x".into(), screen, TextStyle::new(20.), [1.; 4], false),
+    ];
+    assert_eq!(
+        background(&commands),
+        Some(Background {
+            wallpaper: "a.jpg",
+            incoming: Some(("b.jpg", 0.25)),
+            scrims: vec![
+                Scrim::Flat([0.1, 0.2, 0.3, 0.5]),
+                Scrim::Gradient([0., 0., 0., 0.2], [0., 0., 0., 0.8]),
+            ],
+            len: 4,
+        })
+    );
+    // Only a full-screen square image tinted in alpha alone is an incoming wallpaper.
+    for layer in [
+        Draw::TintedImage("b.jpg".into(), screen, 0., false, [0.85, 0.85, 0.85, 0.5]),
+        Draw::TintedImage("b.jpg".into(), screen, 12., false, [1., 1., 1., 0.5]),
+        Draw::TintedImage("b.jpg".into(), screen, 0., true, [1., 1., 1., 0.5]),
+        Draw::TintedImage(
+            "b.jpg".into(),
+            Rect::new(0., 0., 960., 1080.),
+            0.,
+            false,
+            [1., 1., 1., 0.5],
+        ),
+    ] {
+        let commands = [commands[0].clone(), layer, commands[4].clone()];
+        assert_eq!(background(&commands), None);
+    }
+}
+
+#[test]
+fn a_static_wallpaper_keeps_its_folded_fills_and_a_lone_wallpaper_its_own_pass() {
+    use crate::renderer::{Background, Draw, Scrim, TextStyle, background};
+    use crate::state::Rect;
+    let screen = Rect::new(0., 0., 1920., 1080.);
+    let wallpaper = Draw::Image("a.jpg".into(), screen, 0., false);
+    let fill = Draw::Shape(screen, 0., 0., [0.1, 0.2, 0.3, 0.7]);
+    let text = Draw::Text("x".into(), screen, TextStyle::new(20.), [1.; 4], false);
+    assert_eq!(
+        background(&[wallpaper.clone(), fill, text.clone()]),
+        Some(Background {
+            wallpaper: "a.jpg",
+            incoming: None,
+            scrims: vec![Scrim::Flat([0.1, 0.2, 0.3, 0.7])],
+            len: 2,
+        })
+    );
+    assert_eq!(background(&[wallpaper, text.clone()]), None);
+    assert_eq!(background(&[text]), None);
+    // A static scene starts with its plain wallpaper, drawn alone.
+    let draw = scene(&ready()).draw;
+    assert!(matches!(&draw[0], Draw::Image(path, ..) if path.ends_with("wallpapers/dunes.jpg")));
+    assert_eq!(background(&draw), None);
+}
+
+#[test]
+fn an_image_above_a_folded_fill_is_not_mixed_into_the_wallpaper_beneath_it() {
+    use crate::renderer::{Background, Draw, Scrim, background};
+    use crate::state::Rect;
+    let screen = Rect::new(0., 0., 1920., 1080.);
+    // A full-screen image tinted in alpha that sits above a fill is drawn after the folded
+    // wallpaper, never mixed beneath that fill.
+    let commands = [
+        Draw::Image("a.jpg".into(), screen, 0., false),
+        Draw::Shape(screen, 0., 0., [0., 0., 0., 0.5]),
+        Draw::TintedImage("b.jpg".into(), screen, 0., false, [1., 1., 1., 0.5]),
+    ];
+    assert_eq!(
+        background(&commands),
+        Some(Background {
+            wallpaper: "a.jpg",
+            incoming: None,
+            scrims: vec![Scrim::Flat([0., 0., 0., 0.5])],
+            len: 2,
+        })
+    );
+}
+
+#[test]
+fn a_finished_or_starting_fade_is_still_one_cross_fade_group() {
+    use crate::renderer::{Draw, background};
+    use crate::state::Rect;
+    let screen = Rect::new(0., 0., 1920., 1080.);
+    for alpha in [0., 1.] {
+        let commands = [
+            Draw::Image("a.jpg".into(), screen, 0., false),
+            Draw::TintedImage("b.jpg".into(), screen, 0., false, [1., 1., 1., alpha]),
+        ];
+        let layers = background(&commands).unwrap();
+        assert_eq!(layers.incoming, Some(("b.jpg", alpha)));
+        assert_eq!(layers.len, 2);
+    }
+    // An outgoing wallpaper that is itself tinted (dimmed) is not a plain wallpaper.
+    let dimmed = [
+        Draw::TintedImage("a.jpg".into(), screen, 0., false, [0.85, 0.85, 0.85, 1.]),
+        Draw::TintedImage("b.jpg".into(), screen, 0., false, [1., 1., 1., 0.5]),
+    ];
+    assert_eq!(background(&dimmed), None);
+}

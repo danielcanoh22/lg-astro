@@ -1,4 +1,5 @@
 uniform sampler2D u_texture;
+uniform sampler2D u_outgoing;
 uniform float u_aa;
 uniform vec4 u_edge_fade;
 uniform vec4 u_edge_fade_x;
@@ -24,8 +25,12 @@ float edge_coverage() {
 }
 void main() {
     if (v_params.x < 0.0) {
-        vec4 color = texture2D(u_texture, v_uv) * v_color;
-        // -2: wallpaper with folded full-screen fills, p * m + k (k in v_shape).
+        vec4 color = texture2D(u_texture, v_uv);
+        // -3: cross-fade of two opaque wallpapers, u_texture over u_outgoing at v_shape.w.
+        if (v_params.x < -2.5)
+            color = mix(texture2D(u_outgoing, v_uv), color, v_shape.w);
+        color *= v_color;
+        // -2 and -3: wallpaper with folded full-screen fills, p * m + k (k in v_shape).
         if (v_params.x < -1.5)
             color.rgb += v_shape.rgb;
         gl_FragColor = color * vec4(1.0, 1.0, 1.0, edge_coverage());
