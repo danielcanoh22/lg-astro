@@ -860,7 +860,10 @@ Startup prints `Astro persistent storage:` with the chosen path. Desktop preview
 `$XDG_CONFIG_HOME/astro-native/preferences.json` path, or `~/.config/astro-native/preferences.json`,
 so existing preview choices survive flattening. `--preferences PATH` isolates a manual run.
 Invalid preference files report an error rather than being overwritten. Writes use atomic
-temporary-file renames; use one instance per preferences file. Browser local storage is not
+temporary-file renames; use one instance per preferences file. `storage::Saver` writes and
+fsyncs them on a worker thread, never on the SDL thread: only the newest pending snapshot is
+written, a reload of the file first waits for this copy's pending save, and exiting writes what is
+still pending. A failed user-initiated save shows the save error notice. Browser local storage is not
 migrated into native JSON preferences.
 
 `assets/messages.json` supplies English and Spanish, including locale formatting. A saved
