@@ -1,5 +1,16 @@
 # lg-luma
 
+## 4.1.4
+
+### Patch Changes
+
+- 2a8d3f0: Build the Apps page list with less work per frame: each app title is lowercased and its favorite
+  position looked up once per update instead of in every comparison of the sort. The order is
+  unchanged.
+- 077c97e: Make the background upload QR code scannable by more phones. It is now drawn with dark modules on a
+  light square instead of light modules on the dark dialog, a polarity many camera and scanner apps
+  do not read.
+
 ## 4.1.3
 
 ### Patch Changes
