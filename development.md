@@ -266,8 +266,22 @@ presses, stale responses, failures, navigation, reduced motion, reversible cross
 **Settings → Background → Add a background** opens a native modal with a QR code and a
 temporary HTTP URL. On a phone or computer on the same network, choose a JPEG, PNG or WebP,
 enter a name, then drag the preview or use the zoom/position sliders to compose a 16:9 crop.
-**Add to TV** adds the named image to the gallery without selecting it. Close the TV modal
-and choose its thumbnail to use it. The upload page is currently English; the TV modal is localized.
+**Save to TV** sends the image to the TV, which replaces the QR code with a preview and
+**Save** / **Discard** buttons. Only **Save** adds the image to the gallery, without selecting it;
+close the TV modal and choose its thumbnail to use it. The upload page is currently English; the
+TV modal is localized.
+
+An upload never reaches the gallery or rotation without the owner accepting it on the TV.
+Discard takes Close's place and the initial focus, with Save above it, so a click or OK aimed at
+Close as a preview appears cannot accept it; Back also discards. Save or Discard returns to the QR
+code. Only one upload waits for a decision at a time: another upload meanwhile receives `409
+Conflict` ("Save or discard the previous image on your TV first"), which the page shows. An
+undecided upload stays in its hidden `.custom-<random-id>/` staging directory, outside the
+20-image count, and is deleted on Discard or when the session ends: modal closed, Astro hidden or
+losing TV focus, session time or request cap reached, or Astro exiting (which waits up to two
+seconds for this). Save checks the 20-image cap again and commits the staged directory with the
+same durable rename as below; one abandoned by a crash is removed by the startup sweep. The
+preview is the shaded or unshaded image, following **Gradient**, decoded on the image worker.
 
 The phone accepts files up to 16 MiB and 32 megapixels, applies image orientation, and exports
 only the selected 1920×1080 JPEG crop. The native worker independently verifies the image format,
@@ -351,7 +365,9 @@ or an inbound firewall may prevent the phone reaching the server; this needs man
 
 `pnpm test:wallpapers` checks browser crop/name math. Rust wallpaper tests use generated images,
 isolated temporary storage and loopback HTTP only. Scripted desktop runs bind the upload server
-to loopback rather than the real LAN; `await-upload` waits for the modal's link or error state.
+to loopback rather than the real LAN; `await-upload` waits for the modal's link or error state,
+`upload:PATH` sends that JPEG to the open session over loopback HTTP from a helper thread, and
+`await-preview` waits until the TV shows its Save/Discard preview.
 Verify the QR code, phone drag/zoom, upload,
 TV selection/restart, normal/takeover access, cancellation and timeout on real hardware; desktop
 checks do not establish webOS jail networking permissions or TV/browser behavior.

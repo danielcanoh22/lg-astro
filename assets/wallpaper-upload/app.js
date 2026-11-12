@@ -145,7 +145,8 @@ editor.addEventListener('submit', async (event) => {
       signal: controller.signal,
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'The TV could not save this background.');
+    // A 409 asks to save or discard the previous image on the TV first.
+    if (!response.ok) throw new Error(result.error || 'The TV could not receive this background.');
     element('success-path').textContent = destination;
     editor.hidden = true;
     element('success').hidden = false;
@@ -154,9 +155,9 @@ editor.addEventListener('submit', async (event) => {
   } catch (error) {
     message(
       error.name === 'AbortError'
-        ? 'The TV did not respond in time. Check the TV gallery before retrying.'
+        ? 'The TV did not respond in time. Check your TV before retrying.'
         : error instanceof TypeError
-          ? 'The connection was lost. Keep the TV dialog open and check the gallery before retrying.'
+          ? 'The connection was lost. Keep the TV dialog open and check your TV before retrying.'
           : error.message,
       true,
     );

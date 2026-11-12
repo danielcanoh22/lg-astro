@@ -111,6 +111,34 @@
     "en": "Upload session ended",
     "es": "La sesión de subida ha terminado"
   },
+  "uploadPreviewTitle": {
+    "en": "Save this background?",
+    "es": "¿Guardar este fondo?"
+  },
+  "uploadPreviewHint": {
+    "en": "Only saved images join your backgrounds. Discarded images are deleted from the TV.",
+    "es": "Solo las imágenes guardadas se añaden a tus fondos. Las descartadas se eliminan del televisor."
+  },
+  "saveUpload": {
+    "en": "Save",
+    "es": "Guardar"
+  },
+  "discardUpload": {
+    "en": "Discard",
+    "es": "Descartar"
+  },
+  "backgroundSaved": {
+    "en": "Background saved",
+    "es": "Fondo guardado"
+  },
+  "saveBackgroundError": {
+    "en": "Could not save background",
+    "es": "No se pudo guardar el fondo"
+  },
+  "backgroundDiscarded": {
+    "en": "Background discarded",
+    "es": "Fondo descartado"
+  },
   "textRendering": {
     "en": "Text rendering",
     "es": "Renderizado de texto"

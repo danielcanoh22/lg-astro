@@ -193,6 +193,42 @@ try {
   );
   assert.equal(uploadClosed.modal, false);
   assert.equal(uploadClosed.focus, 'UploadWallpaper');
+  // A real JPEG sent to the loopback session waits on the TV for Save or Discard. Debug-build
+  // image processing takes seconds, so these runs allow more frames.
+  const sent = path.join(temporary, 'sent.jpg');
+  await sharp({ create: { width: 1920, height: 1080, channels: 3, background: '#3a5f7d' } })
+    .jpeg()
+    .toFile(sent);
+  const gallery = path.join(temporary, 'wallpapers');
+  const galleryEntries = async () => (await fs.readdir(gallery).catch(() => [])).sort();
+  const sendUpload = `settings,down,down,enter,up,up,up,enter,await-upload,upload:${sent},await-preview`;
+  const preview = await scenario('wallpaper-upload-preview', sendUpload, [], 1500);
+  assert.equal(preview.modal, true);
+  assert.equal(preview.focus, 'DiscardUpload');
+  assert.ok(preview.ui_text.includes('Save this background?'));
+  assert.ok(preview.ui_text.includes('Save'));
+  assert.ok(preview.ui_text.includes('Discard'));
+  assert.ok(!preview.ui_text.includes('Scan this QR code'));
+  // Astro exited without a decision, so the upload was deleted and never joined the gallery.
+  assert.deepEqual(await galleryEntries(), []);
+  const discarded = await scenario('wallpaper-upload-discarded', `${sendUpload},back`, [], 1500);
+  assert.equal(discarded.modal, true);
+  assert.equal(discarded.focus, 'CloseDialog');
+  assert.ok(discarded.ui_text.includes('Scan this QR code'));
+  assert.deepEqual(await galleryEntries(), []);
+  const accepted = await scenario(
+    'wallpaper-upload-saved',
+    `${sendUpload},up,enter,wait,wait,wait,wait,wait,wait,back`,
+    [],
+    1500,
+  );
+  assert.equal(accepted.modal, false);
+  assert.equal(accepted.focus, 'UploadWallpaper');
+  const kept = await galleryEntries();
+  assert.equal(kept.length, 1);
+  assert.match(kept[0], /^custom-[0-9a-f]{32}$/);
+  // Later scenarios expect only their own custom wallpaper in the gallery.
+  await fs.rm(path.join(gallery, kept[0]), { recursive: true });
   const customId = `custom-${'1'.repeat(32)}`;
   const customDirectory = path.join(temporary, 'wallpapers', customId);
   await fs.mkdir(customDirectory, { recursive: true });

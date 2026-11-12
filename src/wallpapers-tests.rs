@@ -76,7 +76,13 @@ fn abandon(path: &Path) {
         .unwrap();
 }
 
+/// Stages and then commits an upload, as when the owner chooses Save on the TV.
+fn store(directory: &Path, bytes: &[u8], valid: impl Fn() -> bool) -> Result<Wallpaper, String> {
+    commit(directory, &stage(directory, bytes, valid)?)
+}
+
 /// The HTTP tests use only a loopback mock, never the TV or any external service.
+/// Returns the response and whether an upload now awaits the owner's decision.
 fn http(path: &Path, request: impl FnOnce(&str) -> Vec<u8>) -> (String, bool) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
@@ -89,9 +95,10 @@ fn http(path: &Path, request: impl FnOnce(&str) -> Vec<u8>) -> (String, bool) {
             &address.to_string(),
             "secret",
             &path,
+            false,
             || true,
         )
-        .unwrap_or(false)
+        .is_ok_and(|awaiting| awaiting.is_some())
     });
     let mut socket = TcpStream::connect(address).unwrap();
     socket
@@ -637,13 +644,20 @@ fn browser_assets_are_local_and_a_real_http_upload_needs_no_name() {
     });
     assert!(response.starts_with("HTTP/1.1 201"), "{response}");
     assert!(changed);
-    let items = catalog(&fixture.wallpapers());
-    assert_eq!(items.len(), 1);
-    assert!(response.contains(&items[0].id));
+    // The upload waits hidden for the owner's decision on the TV.
+    assert!(catalog(&fixture.wallpapers()).is_empty());
+    let staged: Vec<_> = fs::read_dir(fixture.wallpapers())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    assert_eq!(staged.len(), 1);
+    let id = staged[0].file_name().unwrap().to_str().unwrap()[1..].to_owned();
+    assert!(valid_id(&id));
+    assert!(response.contains(&id));
     let metadata: serde_json::Value =
-        serde_json::from_slice(&fs::read(items[0].directory.join("metadata.json")).unwrap())
-            .unwrap();
-    assert_eq!(metadata, serde_json::json!({"id": items[0].id}));
+        serde_json::from_slice(&fs::read(staged[0].join("metadata.json")).unwrap()).unwrap();
+    assert_eq!(metadata, serde_json::json!({"id": id}));
 }
 
 #[test]
@@ -877,7 +891,7 @@ fn headers_that_miss_their_deadline_are_rejected_before_the_request_time() {
 #[test]
 fn an_upload_body_keeps_its_own_time_after_the_headers_arrive() {
     let fixture = Fixture::new();
-    let (_service, address, token) = open_session(&fixture);
+    let (service, address, token) = open_session(&fixture);
     let bytes = image(1920, 1080);
     let mut socket = TcpStream::connect(&address).unwrap();
     socket
@@ -889,7 +903,7 @@ fn an_upload_body_keeps_its_own_time_after_the_headers_arrive() {
     let mut response = String::new();
     let _ = socket.read_to_string(&mut response);
     assert!(response.starts_with("HTTP/1.1 201 "), "{response}");
-    assert_eq!(catalog(&fixture.wallpapers()).len(), 1);
+    assert!(valid_id(&awaited(&service).id));
 }
 
 #[test]
@@ -911,6 +925,8 @@ fn one_peer_cannot_hold_more_than_its_share_of_pending_connections() {
         "{refused:?}"
     );
     drop(quiet);
+    // The server frees closed connections' slots on its next round, not at the instant of close.
+    thread::sleep(Duration::from_millis(200));
     let response = exchange(
         &address,
         &page_request(&address, &token),
@@ -1071,7 +1087,7 @@ fn parallel_page_load(address: &str, token: &str) {
 #[test]
 fn peer_at_its_limit_leaves_another_peer_a_full_page_load_and_upload() {
     let fixture = Fixture::new();
-    let (_service, address, token) = open_session(&fixture);
+    let (service, address, token) = open_session(&fixture);
     let attacker = Ipv4Addr::new(127, 0, 0, 2);
     let quiet: Vec<_> = (0..PENDING_PEER_LIMIT)
         .map(|_| stalled_from(attacker, &address))
@@ -1092,7 +1108,7 @@ fn peer_at_its_limit_leaves_another_peer_a_full_page_load_and_upload() {
         Duration::from_secs(20),
     );
     assert!(response.starts_with("HTTP/1.1 201 "), "{response}");
-    assert_eq!(catalog(&fixture.wallpapers()).len(), 1);
+    assert!(valid_id(&awaited(&service).id));
     drop(quiet);
 }
 
@@ -1220,7 +1236,7 @@ fn trickled_headers_are_cut_off_at_header_time() {
 fn upload_with_headers_and_partial_body_in_one_write_is_stored_whole() {
     for split in [1, 5000, 30000] {
         let fixture = Fixture::new();
-        let (_service, address, token) = open_session(&fixture);
+        let (service, address, token) = open_session(&fixture);
         let body = image(1920, 1080);
         assert!(body.len() > split);
         let request = upload_bytes(&address, &token, &body);
@@ -1238,9 +1254,7 @@ fn upload_with_headers_and_partial_body_in_one_write_is_stored_whole() {
             response.starts_with("HTTP/1.1 201 "),
             "split {split}: {response}"
         );
-        let items = catalog(&fixture.wallpapers());
-        assert_eq!(items.len(), 1);
-        let stored = image::open(items[0].directory.join("wallpaper.jpg")).unwrap();
+        let stored = image::open(awaited(&service).image()).unwrap();
         assert_eq!((stored.width(), stored.height()), (1920, 1080));
     }
 }
@@ -1330,4 +1344,496 @@ fn requests_with_the_token_still_end_the_session_at_the_cap() {
         Event::Ended(_)
     ));
     assert!(TcpStream::connect(&address).is_err());
+}
+
+fn next_event(service: &Service) -> Event {
+    service
+        .receiver
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+}
+
+/// The upload the worker reports as waiting for Save or Discard on the TV.
+fn awaited(service: &Service) -> Wallpaper {
+    match next_event(service) {
+        Event::Uploaded(_, item) => item,
+        _ => panic!("Expected an upload awaiting a decision"),
+    }
+}
+
+fn upload(address: &str, token: &str) -> String {
+    exchange(
+        address,
+        &upload_bytes(address, token, &image(1920, 1080)),
+        Duration::from_secs(10),
+    )
+}
+
+fn ids(items: &[Wallpaper]) -> Vec<&str> {
+    items.iter().map(|item| item.id.as_str()).collect()
+}
+
+#[test]
+fn an_upload_stays_out_of_the_gallery_until_the_tv_saves_it() {
+    let fixture = Fixture::new();
+    let (service, address, token) = open_session(&fixture);
+    let response = upload(&address, &token);
+    assert!(response.starts_with("HTTP/1.1 201 "), "{response}");
+    let item = awaited(&service);
+    assert!(valid_id(&item.id));
+    assert!(response.contains(&item.id));
+    // A hidden entry: not in the gallery, rotation or the 20-image count.
+    assert_eq!(
+        item.directory,
+        fixture.wallpapers().join(format!(".{}", item.id))
+    );
+    assert!(catalog(&fixture.wallpapers()).is_empty());
+    let preview = image::open(item.image()).unwrap();
+    assert_eq!((preview.width(), preview.height()), (1920, 1080));
+    assert!(item.has_original);
+    service.save_upload(item.id.clone());
+    assert!(matches!(next_event(&service), Event::Saved(id, Ok(())) if id == item.id));
+    let Event::Catalog(items) = next_event(&service) else {
+        panic!("Expected the catalog after saving");
+    };
+    assert_eq!(ids(&items), [item.id.as_str()]);
+    assert!(items[0].has_original);
+    assert!(fs::symlink_metadata(&item.directory).is_err());
+    assert_eq!(
+        image::open(items[0].image()).unwrap().to_rgb8(),
+        preview.to_rgb8()
+    );
+}
+
+#[test]
+fn discarding_an_upload_deletes_it_and_accepts_the_next_one() {
+    let fixture = Fixture::new();
+    let (service, address, token) = open_session(&fixture);
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let item = awaited(&service);
+    service.discard_upload(item.id.clone());
+    assert!(matches!(next_event(&service), Event::Discarded(id) if id == item.id));
+    assert!(fs::symlink_metadata(&item.directory).is_err());
+    assert!(catalog(&fixture.wallpapers()).is_empty());
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    assert_ne!(awaited(&service).id, item.id);
+}
+
+#[test]
+fn a_second_upload_is_refused_while_the_first_awaits_a_decision() {
+    let fixture = Fixture::new();
+    let (service, address, token) = open_session(&fixture);
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let item = awaited(&service);
+    let response = upload(&address, &token);
+    assert!(response.starts_with("HTTP/1.1 409 "), "{response}");
+    assert!(response.contains("Save or discard the previous image on your TV first"));
+    let entries: Vec<_> = fs::read_dir(fixture.wallpapers())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(entries, [std::ffi::OsString::from(format!(".{}", item.id))]);
+    assert!(
+        service
+            .receiver
+            .recv_timeout(Duration::from_millis(300))
+            .is_err()
+    );
+    // A saved upload frees the decision for the next one.
+    service.save_upload(item.id.clone());
+    assert!(matches!(next_event(&service), Event::Saved(_, Ok(()))));
+    assert!(matches!(next_event(&service), Event::Catalog(items) if items.len() == 1));
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+}
+
+#[test]
+fn closing_the_dialog_deletes_an_upload_that_was_not_saved() {
+    let fixture = Fixture::new();
+    let (mut service, address, token) = open_session(&fixture);
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let item = awaited(&service);
+    service.set_active(false);
+    assert!(matches!(next_event(&service), Event::Discarded(id) if id == item.id));
+    assert!(matches!(next_event(&service), Event::Ended(_)));
+    assert!(fs::symlink_metadata(&item.directory).is_err());
+    assert!(catalog(&fixture.wallpapers()).is_empty());
+}
+
+#[test]
+fn a_save_chosen_just_before_the_dialog_closes_is_kept() {
+    let fixture = Fixture::new();
+    let (mut service, address, token) = open_session(&fixture);
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let item = awaited(&service);
+    service.save_upload(item.id.clone());
+    service.set_active(false);
+    assert!(matches!(next_event(&service), Event::Saved(id, Ok(())) if id == item.id));
+    assert!(
+        matches!(next_event(&service), Event::Catalog(items) if ids(&items) == [item.id.as_str()])
+    );
+    assert!(matches!(next_event(&service), Event::Ended(_)));
+}
+
+#[test]
+fn reaching_the_request_cap_deletes_an_upload_that_was_not_saved() {
+    let fixture = Fixture::new();
+    let (service, address, token) = open_session(&fixture);
+    for _ in 1..SESSION_REQUEST_LIMIT {
+        let response = exchange(
+            &address,
+            &page_request(&address, &token),
+            Duration::from_secs(3),
+        );
+        assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+    }
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let item = awaited(&service);
+    assert!(matches!(next_event(&service), Event::Discarded(id) if id == item.id));
+    assert!(matches!(next_event(&service), Event::Ended(_)));
+    assert!(fs::symlink_metadata(&item.directory).is_err());
+}
+
+#[test]
+fn exiting_astro_deletes_an_upload_that_was_not_saved() {
+    let fixture = Fixture::new();
+    let (service, address, token) = open_session(&fixture);
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let item = awaited(&service);
+    drop(service);
+    assert!(fs::symlink_metadata(&item.directory).is_err());
+    assert!(fs::read_dir(fixture.wallpapers()).unwrap().next().is_none());
+}
+
+#[test]
+fn uploads_awaiting_a_decision_do_not_count_and_saving_rechecks_the_cap() {
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    create_directory(&root).unwrap();
+    for index in 0..MAX_WALLPAPERS - 2 {
+        listed_wallpaper(&root, index);
+    }
+    let (service, address, token) = open_session(&fixture);
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let first = awaited(&service);
+    assert_eq!(catalog(&root).len(), MAX_WALLPAPERS - 2);
+    service.save_upload(first.id.clone());
+    assert!(matches!(next_event(&service), Event::Saved(_, Ok(()))));
+    assert!(
+        matches!(next_event(&service), Event::Catalog(items) if items.len() == MAX_WALLPAPERS - 1)
+    );
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let second = awaited(&service);
+    assert_eq!(catalog(&root).len(), MAX_WALLPAPERS - 1);
+    // Another Astro copy fills the gallery before the owner decides.
+    listed_wallpaper(&root, MAX_WALLPAPERS);
+    service.save_upload(second.id.clone());
+    assert!(
+        matches!(next_event(&service), Event::Saved(id, Err(error)) if id == second.id && error.contains("full"))
+    );
+    assert!(matches!(next_event(&service), Event::Catalog(items) if items.len() == MAX_WALLPAPERS));
+    assert!(fs::symlink_metadata(&second.directory).is_err());
+    // The full gallery still refuses uploads before decoding them.
+    let response = upload(&address, &token);
+    assert!(response.starts_with("HTTP/1.1 422 "), "{response}");
+    assert!(response.contains("full"));
+}
+
+#[test]
+fn worker_start_removes_an_abandoned_upload_that_was_never_saved() {
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    let saved = store(&root, &image(1920, 1080), || true).unwrap();
+    let abandoned = stage(&root, &image(1920, 1080), || true).unwrap();
+    abandon(&abandoned.directory);
+    // Another running copy's upload is younger than any session and must stay.
+    let live = stage(&root, &image(1920, 1080), || true).unwrap();
+    assert_eq!(ids(&first_catalog(&fixture)), [saved.id.as_str()]);
+    assert!(fs::symlink_metadata(&abandoned.directory).is_err());
+    assert!(live.directory.join("wallpaper.jpg").exists());
+    assert!(saved.directory.join("wallpaper.jpg").exists());
+}
+
+/// Sorted names of every entry directly in the gallery directory.
+fn gallery_listing(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(root)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+fn assert_quiet(service: &Service) {
+    match service.receiver.recv_timeout(Duration::from_millis(400)) {
+        Err(_) => {}
+        Ok(Event::Uploaded(..)) => panic!("unexpected Uploaded"),
+        Ok(Event::Saved(id, result)) => panic!("unexpected Saved({id}, {result:?})"),
+        Ok(Event::Discarded(id)) => panic!("unexpected Discarded({id})"),
+        Ok(Event::Catalog(items)) => panic!("unexpected Catalog({})", items.len()),
+        Ok(Event::Deleted(id, _)) => panic!("unexpected Deleted({id})"),
+        Ok(Event::Ended(_)) => panic!("unexpected Ended"),
+        Ok(Event::Session(..)) => panic!("unexpected Session"),
+    }
+}
+
+/// An outside directory a symlink in the gallery points at; it must never be touched.
+fn outside_tree(fixture: &Fixture) -> PathBuf {
+    let outside = fixture.0.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    for file in [
+        "wallpaper.jpg",
+        "original.jpg",
+        "thumbnail.jpg",
+        "metadata.json",
+    ] {
+        fs::write(outside.join(file), b"keep").unwrap();
+    }
+    outside
+}
+
+fn assert_outside_intact(outside: &Path) {
+    for file in [
+        "wallpaper.jpg",
+        "original.jpg",
+        "thumbnail.jpg",
+        "metadata.json",
+    ] {
+        assert_eq!(fs::read(outside.join(file)).unwrap(), b"keep", "{file}");
+    }
+}
+
+#[test]
+fn decisions_and_endings_touch_only_the_pending_upload() {
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    let saved = store(&root, &image(1920, 1080), || true).unwrap();
+    let listed = listed_wallpaper(&root, 3);
+    fs::write(root.join("notes.txt"), b"unrelated").unwrap();
+    // Young staging of another running Astro copy, and a young staging-shaped symlink.
+    let other = stage(&root, &image(1920, 1080), || true).unwrap();
+    let outside = outside_tree(&fixture);
+    let linked = format!("custom-{:032x}", 0xabcdu32);
+    std::os::unix::fs::symlink(&outside, root.join(format!(".{linked}"))).unwrap();
+    let before = gallery_listing(&root);
+    let (mut service, address, token) = open_session(&fixture);
+    assert_eq!(
+        gallery_listing(&root),
+        before,
+        "worker start swept a young entry"
+    );
+
+    // 1) Save/Discard naming anything but the pending upload does nothing.
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let pending = awaited(&service);
+    for id in [&saved.id, &listed, &other.id, &linked] {
+        service.save_upload(id.clone());
+        service.discard_upload(id.clone());
+    }
+    assert_quiet(&service);
+    let mut with_pending = before.clone();
+    with_pending.push(format!(".{}", pending.id));
+    with_pending.sort();
+    assert_eq!(gallery_listing(&root), with_pending);
+    assert!(catalog(&root).iter().all(|item| item.id != pending.id));
+
+    // 2) Discard removes only the pending upload.
+    service.discard_upload(pending.id.clone());
+    assert!(matches!(next_event(&service), Event::Discarded(id) if id == pending.id));
+    assert_eq!(gallery_listing(&root), before);
+
+    // 3) A decision repeated after the first is ignored.
+    service.save_upload(pending.id.clone());
+    service.discard_upload(pending.id.clone());
+    assert_quiet(&service);
+
+    // 4) Closing the dialog removes only the new pending upload.
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let closed = awaited(&service);
+    service.set_active(false);
+    assert!(matches!(next_event(&service), Event::Discarded(id) if id == closed.id));
+    assert!(matches!(next_event(&service), Event::Ended(_)));
+    assert_eq!(gallery_listing(&root), before);
+    // A late Save for a deleted upload does not resurrect it.
+    service.save_upload(closed.id.clone());
+    assert_quiet(&service);
+
+    // 5) Exit removes only the pending upload of a reopened session.
+    service.set_active(true);
+    let Event::Session(_, Ok(session)) = next_event(&service) else {
+        panic!("Expected a session");
+    };
+    let parts: Vec<_> = session.url.split('/').collect();
+    assert!(upload(parts[2], parts[3]).starts_with("HTTP/1.1 201 "));
+    let exited = awaited(&service);
+    drop(service);
+    assert!(fs::symlink_metadata(&exited.directory).is_err());
+    assert_eq!(gallery_listing(&root), before);
+
+    assert_outside_intact(&outside);
+    assert!(saved.directory.join("wallpaper.jpg").exists());
+    assert!(root.join(&listed).join("wallpaper.jpg").exists());
+    assert!(other.directory.join("wallpaper.jpg").exists());
+    assert_eq!(ids(&catalog(&root)), {
+        let mut expected = vec![saved.id.as_str(), listed.as_str()];
+        expected.sort();
+        expected
+    });
+}
+
+#[test]
+fn a_pending_upload_replaced_by_a_symlink_is_unlinked_never_followed() {
+    for save in [false, true] {
+        let fixture = Fixture::new();
+        let root = fixture.wallpapers();
+        let outside = outside_tree(&fixture);
+        let (service, address, token) = open_session(&fixture);
+        assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+        let pending = awaited(&service);
+        fs::remove_dir_all(&pending.directory).unwrap();
+        std::os::unix::fs::symlink(&outside, &pending.directory).unwrap();
+        if save {
+            service.save_upload(pending.id.clone());
+            assert!(matches!(next_event(&service), Event::Saved(id, Err(_)) if id == pending.id));
+            assert!(matches!(next_event(&service), Event::Catalog(items) if items.is_empty()));
+        } else {
+            service.discard_upload(pending.id.clone());
+            assert!(matches!(next_event(&service), Event::Discarded(_)));
+        }
+        assert!(fs::symlink_metadata(&pending.directory).is_err());
+        assert!(gallery_listing(&root).is_empty());
+        assert_outside_intact(&outside);
+    }
+}
+
+#[test]
+fn gallery_delete_mid_session_keeps_the_pending_upload_and_the_selection() {
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    let first = store(&root, &image(1920, 1080), || true).unwrap();
+    let selected = store(&root, &image(1920, 1080), || true).unwrap();
+    let (service, address, token) = open_session(&fixture);
+    assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+    let pending = awaited(&service);
+    service.delete(selected.id.clone(), selected.id.clone());
+    assert!(matches!(next_event(&service), Event::Deleted(id, Err(_)) if id == selected.id));
+    assert!(matches!(next_event(&service), Event::Catalog(items) if items.len() == 2));
+    service.delete(first.id.clone(), selected.id.clone());
+    assert!(matches!(next_event(&service), Event::Deleted(id, Ok(())) if id == first.id));
+    assert!(
+        matches!(next_event(&service), Event::Catalog(items) if ids(&items) == [selected.id.as_str()])
+    );
+    // Deleting the pending upload's id through the gallery path does not touch it.
+    service.delete(pending.id.clone(), selected.id.clone());
+    assert!(matches!(next_event(&service), Event::Deleted(_, Err(_))));
+    assert!(matches!(next_event(&service), Event::Catalog(items) if items.len() == 1));
+    assert!(pending.directory.join("wallpaper.jpg").exists());
+    service.save_upload(pending.id.clone());
+    assert!(matches!(next_event(&service), Event::Saved(_, Ok(()))));
+    let Event::Catalog(items) = next_event(&service) else {
+        panic!("Expected the catalog after saving");
+    };
+    let mut expected = vec![selected.id.as_str(), pending.id.as_str()];
+    expected.sort();
+    assert_eq!(ids(&items), expected);
+}
+
+#[test]
+fn rejected_uploads_leave_the_gallery_and_catalog_unchanged() {
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    let saved = store(&root, &image(1920, 1080), || true).unwrap();
+    let before = gallery_listing(&root);
+    let (service, address, token) = open_session(&fixture);
+    let body = image(1920, 1080);
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (
+            format!("POST /{token}/upload HTTP/1.1\r\nHost: {address}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes(),
+            "403",
+        ),
+        (
+            format!("POST /{token}/upload HTTP/1.1\r\nHost: {address}\r\nX-Astro-Upload: {token}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes(),
+            "415",
+        ),
+        (upload_bytes(&address, &token, b"not an image"), "422"),
+        (
+            format!("POST /{token}/upload HTTP/1.1\r\nHost: {address}\r\nOrigin: https://evil.example\r\nX-Astro-Upload: {token}\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nabcd").into_bytes(),
+            "403",
+        ),
+    ];
+    for (mut request, status) in cases {
+        if status != "422" && !request.ends_with(b"abcd") {
+            request.extend_from_slice(&body);
+        }
+        let response = exchange(&address, &request, Duration::from_secs(10));
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status} ")),
+            "{status}: {response}"
+        );
+    }
+    assert_quiet(&service);
+    assert_eq!(gallery_listing(&root), before);
+    assert_eq!(ids(&catalog(&root)), [saved.id.as_str()]);
+}
+
+#[test]
+fn save_then_immediate_exit_keeps_the_saved_image() {
+    for _ in 0..5 {
+        let fixture = Fixture::new();
+        let root = fixture.wallpapers();
+        let (service, address, token) = open_session(&fixture);
+        assert!(upload(&address, &token).starts_with("HTTP/1.1 201 "));
+        let pending = awaited(&service);
+        service.save_upload(pending.id.clone());
+        drop(service);
+        assert_eq!(ids(&catalog(&root)), [pending.id.as_str()]);
+        assert_eq!(gallery_listing(&root), std::slice::from_ref(&pending.id));
+    }
+}
+
+#[test]
+fn exit_is_prompt_without_a_pending_upload() {
+    let fixture = Fixture::new();
+    let idle = Service::new(&fixture.0.join("preferences.json"), true).unwrap();
+    let _ = idle.receiver.recv_timeout(Duration::from_secs(3));
+    let started = Instant::now();
+    drop(idle);
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    let (service, _address, _token) = open_session(&fixture);
+    let started = Instant::now();
+    drop(service);
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn exit_wait_is_bounded_while_the_worker_is_stuck_decoding() {
+    // A slow body keeps the worker inside serve; exit must still return within ~2 s.
+    let fixture = Fixture::new();
+    let (service, address, token) = open_session(&fixture);
+    let body = image(1920, 1080);
+    let request = upload_bytes(&address, &token, &body);
+    let mut socket = TcpStream::connect(&address).unwrap();
+    let head = request.len() - body.len();
+    socket.write_all(&request[..head + 10]).unwrap();
+    thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    drop(service);
+    assert!(
+        started.elapsed() < Duration::from_millis(2500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(catalog(&fixture.wallpapers()).is_empty());
 }

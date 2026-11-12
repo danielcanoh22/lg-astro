@@ -129,6 +129,8 @@ pub enum Target {
     OpenApp,
     ConfirmDelete,
     CancelDelete,
+    SaveUpload,
+    DiscardUpload,
     Key(usize),
 }
 
@@ -213,6 +215,10 @@ pub enum Effect {
     Launch(String),
     Uninstall(String),
     DeleteWallpaper(String),
+    /// Add the upload awaiting a decision to the gallery.
+    SaveUpload(String),
+    /// Delete the upload awaiting a decision.
+    DiscardUpload(String),
     Recent {
         generation: u64,
         command: crate::recents::Command,
@@ -264,6 +270,9 @@ pub struct State {
     pub wallpapers: Vec<crate::wallpapers::Wallpaper>,
     pub deleting_wallpaper: Option<String>,
     pub wallpaper_upload: Option<Result<crate::wallpapers::Session, String>>,
+    /// An upload of the open dialog's session, previewed until the owner chooses Save or
+    /// Discard. It is not part of `wallpapers` (gallery and rotation) before Save.
+    pub wallpaper_pending: Option<crate::wallpapers::Wallpaper>,
     /// Astro update (Settings → System), driven by the update worker.
     pub update: crate::update::InstallStatus,
     pub panel_started: Option<Instant>,
@@ -313,6 +322,7 @@ impl State {
             wallpapers: vec![],
             deleting_wallpaper: None,
             wallpaper_upload: None,
+            wallpaper_pending: None,
             update: crate::update::InstallStatus::default(),
             panel_started: None,
             keyboard_field: TextField::Apps,
@@ -477,6 +487,7 @@ impl State {
         self.recents.visibility = 0.;
         self.recents.closing_focus = None;
         self.wallpaper_upload = None;
+        self.wallpaper_pending = None;
         self.pointer = false;
         self.pressed = None;
         self.open(0);
@@ -1067,6 +1078,64 @@ impl State {
         self.notify(self.preferences.language.t("backgroundDeleted"));
     }
 
+    /// The open upload dialog's session staged an upload: preview it until Save or Discard.
+    /// Discard takes the focus, where Close was, so a stray OK or click cannot accept an image
+    /// that appeared unexpectedly. Reports for a closed dialog are ignored; ending the session
+    /// already deletes them.
+    pub fn upload_received(&mut self, item: crate::wallpapers::Wallpaper) {
+        if !matches!(self.overlay, Some(Overlay::WallpaperUpload)) {
+            return;
+        }
+        self.wallpaper_pending = Some(item);
+        self.focus = Target::DiscardUpload;
+        self.pressed = None;
+        self.dirty = true;
+    }
+
+    /// The worker's answer to Save; the updated catalog follows it.
+    pub fn upload_saved(&mut self, result: Result<(), String>) {
+        let key = match result {
+            Ok(()) => "backgroundSaved",
+            Err(error) => {
+                eprintln!("Astro wallpaper upload: {error}");
+                "saveBackgroundError"
+            }
+        };
+        self.notify(self.preferences.language.t(key));
+    }
+
+    /// Save (`true`) or Discard the previewed upload; the dialog returns to its QR code.
+    fn decide_upload(&mut self, save: bool) -> Vec<Effect> {
+        let Some(item) = self.wallpaper_pending.take() else {
+            return vec![];
+        };
+        self.focus = Target::CloseDialog;
+        self.pressed = None;
+        self.dirty = true;
+        if save {
+            vec![Effect::SaveUpload(item.id)]
+        } else {
+            self.notify(self.preferences.language.t("backgroundDiscarded"));
+            vec![Effect::DiscardUpload(item.id)]
+        }
+    }
+
+    /// Closes the upload dialog without a decision, e.g. when Astro is hidden, loses TV focus or
+    /// its session ends. The worker then deletes an upload that was not saved.
+    pub fn close_wallpaper_upload(&mut self) {
+        if !matches!(self.overlay, Some(Overlay::WallpaperUpload)) {
+            return;
+        }
+        self.overlay = None;
+        self.panel_started = None;
+        self.wallpaper_upload = None;
+        self.wallpaper_pending = None;
+        self.focus = Target::UploadWallpaper;
+        self.pointer = false;
+        self.pressed = None;
+        self.dirty = true;
+    }
+
     pub fn set_wallpapers(&mut self, wallpapers: Vec<crate::wallpapers::Wallpaper>) {
         // A newly uploaded ID can sort before existing entries. Keep the focused
         // image, rather than moving the pointer's target to a different photograph.
@@ -1161,6 +1230,14 @@ impl State {
             return vec![];
         }
         if matches!(self.overlay, Some(Overlay::WallpaperUpload)) {
+            // Save sits above Discard while an upload awaits a decision.
+            if self.wallpaper_pending.is_some() {
+                match direction {
+                    Direction::Up => self.focus(Target::SaveUpload, controls),
+                    Direction::Down => self.focus(Target::DiscardUpload, controls),
+                    Direction::Left | Direction::Right => {}
+                }
+            }
             return vec![];
         }
         if let Some(id) = self.moving.clone() {
@@ -1923,8 +2000,11 @@ impl State {
             Target::Retry => return vec![Effect::Reload],
             Target::DismissNotice => self.notice = None,
             Target::CloseDialog => return self.back(),
+            Target::SaveUpload => return self.decide_upload(true),
+            Target::DiscardUpload => return self.decide_upload(false),
             Target::UploadWallpaper => {
                 self.wallpaper_upload = None;
+                self.wallpaper_pending = None;
                 self.overlay = Some(Overlay::WallpaperUpload);
                 self.focus = Target::CloseDialog;
                 self.pressed = None;
@@ -2356,6 +2436,12 @@ impl State {
         if self.moving.take().is_some() {
             return vec![];
         }
+        // Back is Discard while an upload awaits a decision; the dialog stays open.
+        if matches!(self.overlay, Some(Overlay::WallpaperUpload))
+            && self.wallpaper_pending.is_some()
+        {
+            return self.decide_upload(false);
+        }
         if let Some(overlay) = self.overlay.take() {
             self.panel_started = None;
             if let Overlay::BackgroundDelete { id, restore } = overlay {
@@ -2371,6 +2457,7 @@ impl State {
             }
             if matches!(overlay, Overlay::WallpaperUpload) {
                 self.wallpaper_upload = None;
+                self.wallpaper_pending = None;
                 self.focus = Target::UploadWallpaper;
                 self.pressed = None;
                 return vec![];

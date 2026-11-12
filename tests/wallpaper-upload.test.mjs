@@ -43,11 +43,31 @@ test('upload page needs no name and retains its storage-path success view', asyn
     'utf8',
   );
   assert.doesNotMatch(html, /id="name"|success-name|Background name/);
-  assert.match(html, /Your background was uploaded to/);
+  assert.match(html, /Saved backgrounds are stored at/);
   assert.match(html, /id="success-path"/);
   assert.match(html, /Add another one/);
   assert.match(script, /fetch\('upload',/);
   assert.doesNotMatch(script, /cleanName|upload\?name/);
+});
+
+test('a successful upload asks to accept it on the TV and refusals show the TV message', async () => {
+  const html = await readFile(
+    new URL('../assets/wallpaper-upload/index.html', import.meta.url),
+    'utf8',
+  );
+  const script = await readFile(
+    new URL('../assets/wallpaper-upload/app.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(html, /<h2>Sent to your TV<\/h2>/);
+  assert.match(html, /Choose Save on your TV to add it to your backgrounds\./);
+  assert.doesNotMatch(html, /Your background was uploaded to/);
+  // The server's error text, e.g. the 409 "Save or discard the previous image on your TV
+  // first", is shown as is; the page never claims the TV stored the image.
+  assert.match(script, /if \(!response\.ok\) throw new Error\(result\.error \|\|/);
+  assert.doesNotMatch(script, /check the gallery|TV gallery/i);
+  // The CSP allows no inline scripts: the page keeps its single external module.
+  assert.deepEqual(html.match(/<script[^>]*>/g), ['<script type="module" src="app.js">']);
 });
 
 test('storage path resolves to the exact absolute directory and rejects unavailable or unsafe values', async () => {

@@ -827,3 +827,223 @@ fn removed_popup_entry_closes_safely_and_preference_sanitizing_protects_the_sele
     );
     assert!(state.preferences.deleted_backgrounds.len() <= 1);
 }
+
+/// An upload staged by the worker, awaiting Save or Discard.
+fn staged(index: u32) -> Wallpaper {
+    Wallpaper {
+        id: format!("custom-{index:032x}"),
+        directory: PathBuf::from(format!("/preview/wallpapers/.custom-{index:032x}")),
+        has_original: true,
+    }
+}
+
+/// The upload dialog with its QR code, before anything was uploaded.
+fn upload_dialog() -> State {
+    let mut state = ready();
+    state.open(2);
+    state.section = 1;
+    state.focus = Target::UploadWallpaper;
+    state.activate();
+    state.wallpaper_upload = Some(Ok(crate::wallpapers::Session {
+        url: "http://192.168.100.100:54321/AbCd1234/".into(),
+        qr_size: 21,
+        qr: vec![false; 21 * 21],
+    }));
+    state
+}
+
+fn targets(state: &State) -> Vec<Target> {
+    controls(state).into_iter().map(|c| c.target).collect()
+}
+
+fn rect(state: &State, target: Target) -> crate::state::Rect {
+    controls(state)
+        .into_iter()
+        .find(|c| c.target == target)
+        .unwrap()
+        .rect
+}
+
+#[test]
+fn an_upload_shows_its_preview_with_save_and_discard_and_focuses_discard() {
+    let mut state = upload_dialog();
+    let item = staged(7);
+    state.upload_received(item.clone());
+    assert_eq!(state.focus, Target::DiscardUpload);
+    assert!(matches!(state.overlay, Some(Overlay::WallpaperUpload)));
+    // The preview never joins the gallery or rotation before Save.
+    assert!(state.wallpapers.is_empty());
+    for language in crate::i18n::Language::ALL {
+        state.preferences.language = language;
+        for gradient in [true, false] {
+            state.preferences.wallpaper_gradient = gradient;
+            let modal = scene(&state);
+            assert!(modal.modal.is_some());
+            let shown: Vec<_> = modal.controls.iter().map(|c| c.target.clone()).collect();
+            assert_eq!(shown, [Target::SaveUpload, Target::DiscardUpload]);
+            let preview = if gradient {
+                item.image()
+            } else {
+                item.unshaded_image()
+            };
+            assert!(
+                modal
+                    .draw
+                    .iter()
+                    .any(|draw| matches!(draw, Draw::Image(path, ..) if *path == preview))
+            );
+            let labels: Vec<_> = modal
+                .draw
+                .iter()
+                .filter_map(|draw| match draw {
+                    Draw::Text(label, ..) => Some(label.as_str()),
+                    _ => None,
+                })
+                .collect();
+            for key in [
+                "uploadPreviewTitle",
+                "uploadPreviewHint",
+                "saveUpload",
+                "discardUpload",
+            ] {
+                assert!(labels.contains(&language.t(key)), "{key}");
+                assert_ne!(language.t(key), key);
+            }
+            // The QR code and address are gone while a decision is pending.
+            assert!(!labels.contains(&"http://192.168.100.100:54321/AbCd1234"));
+        }
+    }
+}
+
+#[test]
+fn a_click_aimed_at_close_as_the_preview_appears_can_only_discard() {
+    let mut state = upload_dialog();
+    let close = rect(&state, Target::CloseDialog);
+    state.upload_received(staged(7));
+    let modal = controls(&state);
+    for (x, y) in [
+        close.center(),
+        (close.x + 1., close.y + 1.),
+        (close.x + close.w - 1., close.y + close.h - 1.),
+    ] {
+        assert_eq!(state.hit_test(&modal, x, y), Some(Target::DiscardUpload));
+    }
+}
+
+#[test]
+fn remote_moves_between_save_and_discard_and_save_returns_to_the_qr_code() {
+    let mut state = upload_dialog();
+    state.upload_received(staged(7));
+    let modal = controls(&state);
+    for direction in [Direction::Left, Direction::Right, Direction::Down] {
+        state.direction(direction, &modal);
+        assert_eq!(state.focus, Target::DiscardUpload);
+    }
+    state.direction(Direction::Up, &modal);
+    assert_eq!(state.focus, Target::SaveUpload);
+    for direction in [Direction::Left, Direction::Right, Direction::Up] {
+        state.direction(direction, &modal);
+        assert_eq!(state.focus, Target::SaveUpload);
+    }
+    assert_eq!(state.activate(), vec![Effect::SaveUpload(staged(7).id)]);
+    assert!(state.wallpaper_pending.is_none());
+    assert!(matches!(state.overlay, Some(Overlay::WallpaperUpload)));
+    assert_eq!(state.focus, Target::CloseDialog);
+    assert_eq!(targets(&state), [Target::CloseDialog]);
+    // A second activation cannot save twice.
+    state.focus = Target::SaveUpload;
+    assert!(state.activate().is_empty());
+    state.focus = Target::CloseDialog;
+    let language = state.preferences.language;
+    state.upload_saved(Ok(()));
+    assert_eq!(
+        state.notice.as_ref().unwrap().0,
+        language.t("backgroundSaved")
+    );
+    state.upload_saved(Err("The wallpaper gallery is full (20 images)".into()));
+    assert_eq!(
+        state.notice.as_ref().unwrap().0,
+        language.t("saveBackgroundError")
+    );
+    assert!(matches!(state.overlay, Some(Overlay::WallpaperUpload)));
+}
+
+#[test]
+fn discard_and_back_delete_the_preview_and_keep_the_dialog_open() {
+    let mut state = upload_dialog();
+    state.upload_received(staged(7));
+    assert_eq!(state.activate(), vec![Effect::DiscardUpload(staged(7).id)]);
+    assert!(state.wallpaper_pending.is_none());
+    assert!(matches!(state.overlay, Some(Overlay::WallpaperUpload)));
+    assert_eq!(state.focus, Target::CloseDialog);
+    let language = state.preferences.language;
+    assert_eq!(
+        state.notice.as_ref().unwrap().0,
+        language.t("backgroundDiscarded")
+    );
+    state.upload_received(staged(8));
+    state.direction(Direction::Up, &controls(&state));
+    assert_eq!(state.focus, Target::SaveUpload);
+    // Back is Discard, whichever button is focused.
+    assert_eq!(state.back(), vec![Effect::DiscardUpload(staged(8).id)]);
+    assert!(matches!(state.overlay, Some(Overlay::WallpaperUpload)));
+    assert_eq!(state.focus, Target::CloseDialog);
+    // Without a preview, Back still closes the dialog and restores its parent.
+    assert!(state.back().is_empty());
+    assert!(state.overlay.is_none());
+    assert_eq!(state.focus, Target::UploadWallpaper);
+}
+
+#[test]
+fn pointer_hover_and_press_keep_save_and_discard_in_place() {
+    let mut state = upload_dialog();
+    state.upload_received(staged(7));
+    let before = controls(&state);
+    for target in [Target::SaveUpload, Target::DiscardUpload] {
+        let (x, y) = before
+            .iter()
+            .find(|c| c.target == target)
+            .unwrap()
+            .rect
+            .center();
+        let hit = state.hit_test(&before, x, y).unwrap();
+        assert_eq!(hit, target);
+        state.pointer_focus(hit.clone());
+        state.pressed = Some(hit);
+        let after = controls(&state);
+        assert_eq!(after.len(), before.len());
+        for (old, new) in before.iter().zip(&after) {
+            assert_eq!(old.target, new.target);
+            assert_eq!(
+                (old.rect.x, old.rect.y, old.rect.w, old.rect.h),
+                (new.rect.x, new.rect.y, new.rect.w, new.rect.h)
+            );
+        }
+    }
+    state.pointer_focus(Target::SaveUpload);
+    assert_eq!(state.activate(), vec![Effect::SaveUpload(staged(7).id)]);
+}
+
+#[test]
+fn closing_the_dialog_or_returning_home_forgets_the_preview() {
+    let mut state = upload_dialog();
+    state.upload_received(staged(7));
+    state.close_wallpaper_upload();
+    assert!(state.overlay.is_none());
+    assert!(state.wallpaper_pending.is_none());
+    assert!(state.wallpaper_upload.is_none());
+    assert_eq!(state.focus, Target::UploadWallpaper);
+    // A late report for a closed dialog is not shown.
+    state.upload_received(staged(8));
+    assert!(state.wallpaper_pending.is_none());
+    assert!(state.overlay.is_none());
+    let mut state = upload_dialog();
+    state.upload_received(staged(7));
+    state.return_home();
+    assert!(state.overlay.is_none());
+    assert!(state.wallpaper_pending.is_none());
+    // Closing without a dialog leaves other focus alone.
+    state.focus = Target::Nav(1);
+    state.close_wallpaper_upload();
+    assert_eq!(state.focus, Target::Nav(1));
+}
