@@ -356,9 +356,9 @@ hold up or end the session. HTTP is **not
 encrypted**; use a trusted local network. The URL is not logged.
 The branded code follows the small center-logo approach shown in
 [Vercel's QR example](https://github.com/vercel/examples/tree/main/container-images/demo/apps/qr):
-Astro uses high error correction, light modules on the modal's dark background, and a compact center
-mark. QR readers vary in their support for inverted polarity; the URL remains visible as a manual
-fallback.
+Astro uses high error correction, dark modules on a light plate that includes the four-module quiet
+zone, and a compact center mark. The code keeps standard polarity because many phone readers do not
+decode inverted (light-on-dark) codes; the URL remains visible as a manual fallback.
 Requests are serialized and bounded by header/body sizes and a deadline, with cancellation checks
 while reading and before committing. No user-controlled path is opened by the server. No privileged
 helper or permanent system service is installed. Networks with client isolation, IPv6-only access

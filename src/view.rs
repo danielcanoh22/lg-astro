@@ -400,10 +400,10 @@ fn companion(
             let size = (session.qr_size + 8) as f32 * scale;
             let x = (1920. - size) / 2.;
             let y = 310.;
-            // Invert the normal QR polarity to blend into the dark modal, while
-            // retaining a high-contrast foreground and the full quiet zone.
-            let background = c(0x1b2023, 1.);
-            let modules = c(0xf5f4ef, 1.);
+            // Standard polarity: dark modules on a light plate that also forms the
+            // four-module quiet zone. Many phone readers do not try inverted codes.
+            let background = c(0xf5f4ef, 1.);
+            let modules = c(0x1b2023, 1.);
             out.shape(Rect::new(x, y, size, size), 0., background);
             for row in 0..session.qr_size {
                 // Merge contiguous modules so QR rendering stays a few hundred quads.
@@ -455,7 +455,7 @@ fn companion(
                 8.5 * scale,
                 8.5 * scale,
             );
-            out.icon(assets, "astro-mark", mark, WHITE);
+            out.icon(assets, "astro-mark", mark, modules);
             out.text(
                 language.t("wallpaperUploadBrowser"),
                 Rect::new(604., 670., 712., 32.),
