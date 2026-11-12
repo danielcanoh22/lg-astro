@@ -139,8 +139,7 @@ captions do not reserve layout space.
 Back from a widget returns to its row in Widgets. Input visibility/naming choices return to Inputs,
 then its Widgets row. Existing greeting, date and input preferences are unchanged. Preferences saved
 by earlier versions with the weather widget or shortcut tiles still load; those fields are ignored
-and dropped on the next save, and the old forecast cache beside the preferences file
-(`preferences.weather.json`) is deleted at startup (a symlink is unlinked, never followed).
+and dropped on the next save.
 Scrollable Settings lists
 reserve 64 logical pixels below their last item for both remote focus and wheel scrolling,
 with a tighter 48-pixel spacing for Languages and Backgrounds.
