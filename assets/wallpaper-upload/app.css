@@ -243,44 +243,9 @@ input:focus-visible {
   font-weight: 570;
   overflow-wrap: anywhere;
 }
-.success code {
-  display: block;
-  padding: 11px 12px;
-  border: 1px solid #303633;
-  border-radius: 8px;
-  background: #171a1a;
-  color: #aab6ad;
-  font:
-    11px/1.5 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-  overflow-wrap: anywhere;
-  text-align: left;
-}
 .success button {
   width: 100%;
   margin-top: 20px;
-}
-footer {
-  display: grid;
-  justify-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 27px;
-  color: #737d78;
-  font-size: 11px;
-}
-footer code {
-  max-width: 100%;
-  color: #929b96;
-  font:
-    11px/1.5 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-  text-align: center;
-  overflow-wrap: anywhere;
 }
 [hidden] {
   display: none !important;

@@ -526,7 +526,8 @@ fn stage(directory: &Path, bytes: &[u8], valid: impl Fn() -> bool) -> Result<Wal
         .parent()
         .ok_or("Missing wallpaper directory parent")?;
     if !parent.exists() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        crate::storage::create_directories(parent, crate::storage::effective_user())
+            .map_err(|e| e.to_string())?;
     }
     if !real_directory(parent) {
         return Err("Invalid wallpaper storage parent".into());
@@ -883,16 +884,6 @@ fn serve(
         return Ok(None);
     };
     if request.method == "GET" && request.length == 0 {
-        if route == "info.json" {
-            let body = serde_json::json!({"path": directory.to_string_lossy()}).to_string();
-            response(
-                stream,
-                "200 OK",
-                "application/json; charset=utf-8",
-                body.as_bytes(),
-            )?;
-            return Ok(None);
-        }
         let (kind, body): (&str, &[u8]) = match route {
             "" => (
                 "text/html; charset=utf-8",
@@ -909,10 +900,6 @@ fn serve(
             "crop.js" => (
                 "text/javascript; charset=utf-8",
                 include_bytes!("../assets/wallpaper-upload/crop.js"),
-            ),
-            "storage.js" => (
-                "text/javascript; charset=utf-8",
-                include_bytes!("../assets/wallpaper-upload/storage.js"),
             ),
             "astro-mark.svg" => ("image/svg+xml", include_bytes!("../assets/app-icon.svg")),
             _ => {

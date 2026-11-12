@@ -326,6 +326,56 @@ pub fn remove_weather_cache(preferences: &Path) {
     }
 }
 
+/// The effective user, or `u32::MAX` (never root) where ownership is not managed.
+pub fn effective_user() -> u32 {
+    #[cfg(all(feature = "webos", unix))]
+    return unsafe { libc::geteuid() };
+    #[cfg(not(all(feature = "webos", unix)))]
+    u32::MAX
+}
+
+/// Creates `directory` and its missing ancestors, like `fs::create_dir_all`. When root Home
+/// (`user` 0) creates one, it takes the owner of the directory it was created in, so the normal
+/// app can still use it after Home is disabled. The owner change never follows a symlink, and
+/// existing directories keep their owner. The steps follow `create_dir_all`'s order (the whole
+/// path first), so every outcome and error is the same as before.
+pub fn create_directories(directory: &Path, user: u32) -> std::io::Result<()> {
+    if directory.as_os_str().is_empty() {
+        return Ok(());
+    }
+    match fs::create_dir(directory) {
+        Ok(()) => return inherit_parent_owner(directory, user),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) if directory.is_dir() => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    match directory.parent() {
+        Some(parent) => create_directories(parent, user)?,
+        None => return Err(std::io::Error::other("failed to create whole tree")),
+    }
+    match fs::create_dir(directory) {
+        Ok(()) => inherit_parent_owner(directory, user),
+        Err(_) if directory.is_dir() => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Gives a directory root Home just created the owner of the directory it was created in.
+fn inherit_parent_owner(directory: &Path, user: u32) -> std::io::Result<()> {
+    #[cfg(all(feature = "webos", unix))]
+    if user == 0 {
+        use std::os::unix::fs::MetadataExt;
+        let parent = directory
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let owner = fs::metadata(parent)?;
+        std::os::unix::fs::lchown(directory, Some(owner.uid()), Some(owner.gid()))?;
+    }
+    let _ = (directory, user);
+    Ok(())
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::{
         io::Write,
@@ -333,7 +383,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     };
 
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::create_dir_all(parent).map_err(|e| {
+        create_directories(parent, effective_user()).map_err(|e| {
             format!(
                 "Could not prepare preferences directory {}: {e}",
                 parent.display()
@@ -453,6 +503,178 @@ mod tests {
                 tv_path_in(candidates, &fixture.legacy(), unsafe { libc::geteuid() }).unwrap();
             assert_eq!(normal, selected);
         }
+    }
+
+    #[test]
+    fn created_directories_match_create_dir_all_outcomes_and_errors() {
+        // Each case builds the same tree twice and compares the outcome of both functions.
+        type Setup = fn(&Path);
+        let cases: [(&str, Setup, &str); 8] = [
+            (
+                "existing",
+                |r| fs::create_dir_all(r.join("a/b")).unwrap(),
+                "a/b",
+            ),
+            ("nested missing", |_| {}, "a/b/c/d"),
+            (
+                "symlinked ancestor",
+                |r| {
+                    fs::create_dir(r.join("real")).unwrap();
+                    symlink(r.join("real"), r.join("link")).unwrap();
+                },
+                "link/x/y",
+            ),
+            (
+                "symlink leaf to dir",
+                |r| {
+                    fs::create_dir(r.join("real")).unwrap();
+                    symlink(r.join("real"), r.join("link")).unwrap();
+                },
+                "link",
+            ),
+            (
+                "dangling symlink ancestor",
+                |r| symlink(r.join("nowhere"), r.join("link")).unwrap(),
+                "link/x",
+            ),
+            (
+                "file as parent",
+                |r| fs::write(r.join("file"), b"").unwrap(),
+                "file/x",
+            ),
+            (
+                "file as ancestor",
+                |r| fs::write(r.join("file"), b"").unwrap(),
+                "file/x/y",
+            ),
+            (
+                "file as leaf",
+                |r| fs::write(r.join("file"), b"").unwrap(),
+                "file",
+            ),
+        ];
+        let fixture = Fixture::new();
+        let mut mismatches = Vec::new();
+        for (index, (name, setup, target)) in cases.into_iter().enumerate() {
+            let std_root = fixture.0.join(format!("std-{index}"));
+            let new_root = fixture.0.join(format!("new-{index}"));
+            for root in [&std_root, &new_root] {
+                fs::create_dir(root).unwrap();
+                setup(root);
+            }
+            let expected = fs::create_dir_all(std_root.join(target)).map_err(|e| e.to_string());
+            for user in [0, unsafe { libc::geteuid() }, u32::MAX] {
+                let _ = fs::remove_dir_all(&new_root);
+                fs::create_dir(&new_root).unwrap();
+                setup(&new_root);
+                let actual =
+                    create_directories(&new_root.join(target), user).map_err(|e| e.to_string());
+                if actual != expected {
+                    mismatches.push(format!("{name} (user {user}): create_dir_all {expected:?}, create_directories {actual:?}"));
+                }
+                if expected.is_ok() {
+                    assert!(new_root.join(target).is_dir(), "{name}");
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn concurrent_directory_creation_all_succeeds() {
+        let fixture = Fixture::new();
+        let target = fixture.0.join("a/b/c/d/e/f");
+        for round in 0..20 {
+            let target = target.join(round.to_string());
+            let threads: Vec<_> = (0..8)
+                .map(|_| {
+                    let target = target.clone();
+                    std::thread::spawn(move || create_directories(&target, 0))
+                })
+                .collect();
+            for thread in threads {
+                thread.join().unwrap().unwrap();
+            }
+            assert!(target.is_dir());
+        }
+    }
+
+    #[test]
+    fn root_home_keeps_an_existing_directorys_owner_and_mode() {
+        // Under `unshare -r` this runs the real euid-0 path; otherwise it models root Home.
+        let fixture = Fixture::new();
+        let existing = fixture.0.join("existing");
+        fs::create_dir(&existing).unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o750)).unwrap();
+        let before = fs::symlink_metadata(&existing).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        create_directories(&existing, 0).unwrap();
+        let after = fs::symlink_metadata(&existing).unwrap();
+        assert_eq!(
+            (
+                before.uid(),
+                before.gid(),
+                before.mode(),
+                before.ctime(),
+                before.ctime_nsec()
+            ),
+            (
+                after.uid(),
+                after.gid(),
+                after.mode(),
+                after.ctime(),
+                after.ctime_nsec()
+            ),
+            "an existing directory's inode was changed"
+        );
+        create_directories(&existing.join("child"), 0).unwrap();
+        let child = fs::symlink_metadata(existing.join("child")).unwrap();
+        assert_eq!((child.uid(), child.gid()), (before.uid(), before.gid()));
+    }
+
+    #[test]
+    fn a_file_in_place_of_the_preferences_directory_keeps_its_save_errors() {
+        let fixture = Fixture::new();
+        fs::write(fixture.0.join("file"), b"").unwrap();
+        let parent = save(
+            &fixture.0.join("file/preferences.json"),
+            &Preferences::default(),
+        );
+        assert!(parent.unwrap_err().ends_with("File exists (os error 17)"));
+        let ancestor = save(
+            &fixture.0.join("file/below/preferences.json"),
+            &Preferences::default(),
+        );
+        assert!(
+            ancestor
+                .unwrap_err()
+                .ends_with("Not a directory (os error 20)")
+        );
+    }
+
+    #[test]
+    fn directories_root_home_creates_take_the_owner_of_the_directory_they_are_created_in() {
+        let fixture = Fixture::new();
+        let nested = fixture.0.join("new").join("nested");
+        // Model root Home on a host-owned directory without requiring sudo.
+        create_directories(&nested, 0).unwrap();
+        let owner = fs::metadata(&fixture.0).unwrap();
+        for directory in [fixture.0.join("new"), nested.clone()] {
+            let metadata = fs::symlink_metadata(&directory).unwrap();
+            assert!(metadata.is_dir());
+            assert_eq!((metadata.uid(), metadata.gid()), (owner.uid(), owner.gid()));
+        }
+        // Existing directories are accepted as they are, for root and the normal app.
+        create_directories(&nested, 0).unwrap();
+        create_directories(&nested, unsafe { libc::geteuid() }).unwrap();
+        // Something other than a directory in the way still fails.
+        fs::write(fixture.0.join("file"), b"").unwrap();
+        assert!(create_directories(&fixture.0.join("file").join("below"), 0).is_err());
+        // A save creates its missing directory the same way.
+        let preferences = fixture.0.join("saved").join("preferences.json");
+        save(&preferences, &Preferences::default()).unwrap();
+        let metadata = fs::symlink_metadata(preferences.parent().unwrap()).unwrap();
+        assert_eq!((metadata.uid(), metadata.gid()), (owner.uid(), owner.gid()));
     }
 
     #[test]

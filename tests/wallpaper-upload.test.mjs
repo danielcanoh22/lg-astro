@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cropRect, panPosition } from '../assets/wallpaper-upload/crop.js';
 import { readFile } from 'node:fs/promises';
-import { loadStoragePath } from '../assets/wallpaper-upload/storage.js';
 
 test('portrait, landscape, panorama and zoom crops stay in bounds at 16:9', () => {
   for (const [width, height] of [
@@ -33,7 +32,7 @@ test('dragging clamps at both edges and handles axes without overflow', () => {
   assert.ok(panPosition(0.5, 20, 4000, 2000, 960) < 0.5);
 });
 
-test('upload page needs no name and retains its storage-path success view', async () => {
+test('upload page needs no name and keeps its success view', async () => {
   const html = await readFile(
     new URL('../assets/wallpaper-upload/index.html', import.meta.url),
     'utf8',
@@ -43,8 +42,6 @@ test('upload page needs no name and retains its storage-path success view', asyn
     'utf8',
   );
   assert.doesNotMatch(html, /id="name"|success-name|Background name/);
-  assert.match(html, /Saved backgrounds are stored at/);
-  assert.match(html, /id="success-path"/);
   assert.match(html, /Add another one/);
   assert.match(script, /fetch\('upload',/);
   assert.doesNotMatch(script, /cleanName|upload\?name/);
@@ -70,26 +67,19 @@ test('a successful upload asks to accept it on the TV and refusals show the TV m
   assert.deepEqual(html.match(/<script[^>]*>/g), ['<script type="module" src="app.js">']);
 });
 
-test('storage path resolves to the exact absolute directory and rejects unavailable or unsafe values', async () => {
-  const path = '/media/internal/.com.danielcanoh22.astro/wallpapers';
-  assert.equal(
-    await loadStoragePath(async (url, options) => {
-      assert.equal(url, 'info.json');
-      assert.deepEqual(options, { cache: 'no-store' });
-      return { ok: true, json: async () => ({ path }) };
-    }),
-    path,
+test('the upload page never asks for or shows the TV storage path', async () => {
+  const html = await readFile(
+    new URL('../assets/wallpaper-upload/index.html', import.meta.url),
+    'utf8',
   );
-  await assert.rejects(
-    loadStoragePath(async () => ({ ok: false })),
-    /unavailable/,
+  const script = await readFile(
+    new URL('../assets/wallpaper-upload/app.js', import.meta.url),
+    'utf8',
   );
-  await assert.rejects(
-    loadStoragePath(async () => ({ ok: true, json: async () => ({ path: 'relative/path' }) })),
-    /Invalid storage location/,
+  assert.doesNotMatch(
+    html,
+    /storage-path|success-path|storage-footer|Stored on this TV|stored at/i,
   );
-  await assert.rejects(
-    loadStoragePath(async () => ({ ok: true, json: async () => ({ path: 42 }) })),
-    /Invalid storage location/,
-  );
+  assert.doesNotMatch(script, /info\.json|storage\.js|storage-path|success-path|storage-footer/);
+  assert.match(html, /Choose Save on your TV to add it to your backgrounds\./);
 });

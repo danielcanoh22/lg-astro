@@ -265,7 +265,7 @@ presses, stale responses, failures, navigation, reduced motion, reversible cross
 
 **Settings → Background → Add a background** opens a native modal with a QR code and a
 temporary HTTP URL. On a phone or computer on the same network, choose a JPEG, PNG or WebP,
-enter a name, then drag the preview or use the zoom/position sliders to compose a 16:9 crop.
+then drag the preview to position it and use the zoom slider to compose a 16:9 crop.
 **Save to TV** sends the image to the TV, which replaces the QR code with a preview and
 **Save** / **Discard** buttons. Only **Save** adds the image to the gallery, without selecting it;
 close the TV modal and choose its thumbnail to use it. The upload page is currently English; the
@@ -292,9 +292,9 @@ are converted in place; only translucent PNG/WebP sources are composited on the 
 GPU uploads remain on SDL. Nothing is fetched from external services.
 
 The gallery holds up to 20 uploaded images under `wallpapers/custom-<random-id>/` beside the
-selected preferences file. The phone page shows this resolved absolute directory path. Names are
-trimmed, control-free and limited to 40 characters; they
-never become file paths. Files and metadata are committed in a new directory by atomic rename,
+selected preferences file. The upload page never learns or shows where the TV stores images,
+and uploads carry no name: the server generates every ID and path. Files and metadata are
+committed in a new directory by atomic rename,
 with immutable paths so existing GPU texture caches cannot show an older upload. Each file and
 the new directory are synced before the rename and the `wallpapers/` directory after it, so a
 committed upload survives power loss. An upload interrupted before its commit leaves a hidden
@@ -303,7 +303,9 @@ listing the gallery, unlinking symlinks without following them and leaving every
 alone. Because normal and takeover launches can run at once, only staging last modified more
 than 15 minutes ago (the 10-minute session plus 5) is removed; newer entries, or ones with an
 unreadable or future mtime, wait for a later start. Discovery scans at most 128 `custom-<random-id>` entries; other names do not count. Root Home
-preserves the app storage owner's UID/GID for new directories and files. Preferences retain only
+preserves the app storage owner's UID/GID for new directories and files, including a missing
+preferences directory that a save or upload creates (each new directory takes the owner of the
+directory it was created in). Preferences retain only
 the generated selected ID. Invalid metadata and entries with missing files are skipped; an unavailable selected image
 renders the bundled default without destroying the saved selection. These files survive app
 updates, and normal/takeover launches using the shared preferences location use the same gallery.
