@@ -307,25 +307,6 @@ impl Drop for Saver {
     }
 }
 
-/// Deletes the forecast cache earlier versions kept beside the preferences file
-/// (`preferences.weather.json`), now that the weather widget is gone. A symlink is unlinked,
-/// never followed; anything that is not a regular file or a link is left alone.
-pub fn remove_weather_cache(preferences: &Path) {
-    let cache = preferences.with_extension("weather.json");
-    let Ok(metadata) = fs::symlink_metadata(&cache) else {
-        return;
-    };
-    if !(metadata.is_file() || metadata.file_type().is_symlink()) {
-        return;
-    }
-    if let Err(error) = fs::remove_file(&cache) {
-        eprintln!(
-            "Could not remove the old weather cache {}: {error}",
-            cache.display()
-        );
-    }
-}
-
 /// The effective user, or `u32::MAX` (never root) where ownership is not managed.
 pub fn effective_user() -> u32 {
     #[cfg(all(feature = "webos", unix))]

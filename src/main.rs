@@ -720,7 +720,6 @@ fn run() -> Result<(), String> {
     } else {
         default_preferences.clone()
     };
-    storage::remove_weather_cache(&preferences_path);
     // Start the preview with the user's current choices, but keep test favorites
     // and hidden placeholders out of their normal preferences file.
     let initial_preferences = if options.test_extra_apps > 0

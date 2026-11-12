@@ -865,42 +865,6 @@ fn preferences_round_trip_and_corrupt_data_is_not_silently_overwritten() {
 }
 
 #[test]
-fn the_old_weather_cache_is_deleted_without_touching_other_files_or_link_targets() {
-    let directory =
-        std::env::temp_dir().join(format!("astro-weather-cache-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
-    let preferences = directory.join("preferences.json");
-    std::fs::write(&preferences, b"{}").unwrap();
-    let cache = directory.join("preferences.weather.json");
-    std::fs::write(&cache, br#"{"temperature":20}"#).unwrap();
-    let neighbour = directory.join("weather.json");
-    std::fs::write(&neighbour, b"kept").unwrap();
-    storage::remove_weather_cache(&preferences);
-    assert!(!cache.exists(), "the cache file is deleted");
-    assert!(preferences.exists() && neighbour.exists());
-    // Nothing to delete is not an error.
-    storage::remove_weather_cache(&preferences);
-    #[cfg(unix)]
-    {
-        let outside = directory.join("outside.json");
-        std::fs::write(&outside, b"target").unwrap();
-        std::os::unix::fs::symlink(&outside, &cache).unwrap();
-        storage::remove_weather_cache(&preferences);
-        assert!(
-            std::fs::symlink_metadata(&cache).is_err(),
-            "the link is removed"
-        );
-        assert_eq!(std::fs::read(&outside).unwrap(), b"target");
-    }
-    // A directory in its place is left alone.
-    std::fs::create_dir(&cache).unwrap();
-    storage::remove_weather_cache(&preferences);
-    assert!(cache.is_dir());
-    std::fs::remove_dir_all(&directory).unwrap();
-}
-
-#[test]
 fn preferences_from_versions_with_weather_and_shortcut_tiles_keep_every_other_setting() {
     let directory =
         std::env::temp_dir().join(format!("astro-removed-fields-test-{}", std::process::id()));
