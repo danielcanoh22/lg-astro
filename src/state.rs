@@ -5,6 +5,7 @@ use crate::model::{
 };
 use crate::text_rendering::TextRendering;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub const WIDGETS_SECTION: usize = 2;
@@ -645,6 +646,12 @@ impl State {
                 .collect();
         }
         let query = self.query.to_lowercase();
+        // Lowercase each listed title and look up its favorite rank once, rather than in
+        // every comparison of the sort; this runs several times per frame.
+        let mut ranks = HashMap::with_capacity(ids.len());
+        for (rank, id) in ids.iter().enumerate() {
+            ranks.entry(id.as_str()).or_insert(rank);
+        }
         let mut apps: Vec<_> = self
             .inventory
             .apps
@@ -654,20 +661,18 @@ impl State {
                     && (self.filter == 0
                         || self.filter == 5
                         || app.category == CATEGORIES[self.filter - 1])
-                    && app.title.to_lowercase().contains(&query)
+            })
+            .filter_map(|app| {
+                let title = app.title.to_lowercase();
+                title.contains(&query).then(|| {
+                    let rank = ranks.get(app.id.as_str()).copied().unwrap_or(usize::MAX);
+                    (rank, title, app)
+                })
             })
             .collect();
-        apps.sort_by(|a, b| {
-            let rank = |app: &App| {
-                ids.iter()
-                    .position(|id| id == &app.id)
-                    .unwrap_or(usize::MAX)
-            };
-            rank(a)
-                .cmp(&rank(b))
-                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-        });
-        apps
+        // Stable, so titles that differ only in case keep their inventory order.
+        apps.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        apps.into_iter().map(|(_, _, app)| app).collect()
     }
 
     pub fn content_viewport(&self) -> Rect {

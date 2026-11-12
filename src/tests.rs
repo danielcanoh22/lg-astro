@@ -3541,3 +3541,60 @@ fn a_reload_still_picks_up_the_other_copys_newer_save() {
     );
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn apps_page_lists_favorites_first_then_titles_case_insensitively_and_filters_by_query() {
+    let mut state = State::new(Preferences::default());
+    state.set_inventory(
+        crate::model::Inventory {
+            apps: vec![
+                App::new("com.example.zeta", "zeta"),
+                App::new("com.example.alpha", "Alpha"),
+                App::new("com.example.beta", "beta"),
+                App::new("com.example.beta-two", "BETA"),
+                App::new("com.example.gamma", "Gamma"),
+                App::new("com.example.delta", "Delta"),
+            ],
+            inputs: vec![],
+        },
+        None,
+    );
+    state.preferences.favorites = Some(vec!["com.example.gamma".into(), "com.example.zeta".into()]);
+    state.preferences.hidden = vec!["com.example.delta".into()];
+    state.open(1);
+    let ids =
+        |state: &State| -> Vec<String> { state.apps().iter().map(|app| app.id.clone()).collect() };
+
+    // Favorites keep their saved order; the rest sort by title ignoring case, and
+    // titles that differ only in case keep their inventory order.
+    assert_eq!(
+        ids(&state),
+        [
+            "com.example.gamma",
+            "com.example.zeta",
+            "com.example.alpha",
+            "com.example.beta",
+            "com.example.beta-two",
+        ]
+    );
+
+    state.query = "BeT".into();
+    assert_eq!(ids(&state), ["com.example.beta", "com.example.beta-two"]);
+
+    state.query = "A".into();
+    assert_eq!(
+        ids(&state),
+        [
+            "com.example.gamma",
+            "com.example.zeta",
+            "com.example.alpha",
+            "com.example.beta",
+            "com.example.beta-two",
+        ]
+    );
+
+    // The hidden filter lists only hidden apps.
+    state.query.clear();
+    state.filter = 5;
+    assert_eq!(ids(&state), ["com.example.delta"]);
+}
