@@ -86,6 +86,8 @@ struct Texture {
     height: u32,
     bytes: usize,
     frame: u64,
+    /// Uploaded without an alpha channel.
+    opaque: bool,
 }
 impl Drop for Texture {
     fn drop(&mut self) {
@@ -201,6 +203,8 @@ enum BatchKind {
         start: usize,
         count: usize,
         backdrop: Option<[[u8; 3]; 2]>,
+        /// The outgoing wallpaper of a cross-fade, sampled from texture unit 1.
+        outgoing: Option<GLuint>,
     },
     Vector {
         path: String,
@@ -238,9 +242,61 @@ fn plain_wallpaper(command: &Draw) -> Option<&str> {
     }
 }
 
+/// The incoming wallpaper of a cross-fade: full-screen and square, tinted only in alpha.
+fn incoming_wallpaper(command: &Draw) -> Option<(&str, f32)> {
+    match command {
+        Draw::TintedImage(path, rect, radius, false, tint)
+            if full_screen(rect) && *radius <= 0. && tint[..3] == [1.; 3] =>
+        {
+            Some((path, tint[3]))
+        }
+        _ => None,
+    }
+}
+
+/// Full-screen layers the renderer draws in one pass: a wallpaper, the wallpaper fading in over
+/// it during a cross-fade, and the full-screen fills directly above them.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Background<'a> {
+    pub wallpaper: &'a str,
+    /// The incoming wallpaper and its opacity.
+    pub incoming: Option<(&'a str, f32)>,
+    pub scrims: Vec<Scrim>,
+    /// Commands these layers span, the wallpaper's included.
+    pub len: usize,
+}
+
+/// The background layers starting at `commands[0]`, unless it is a lone wallpaper (or none).
+pub(crate) fn background(commands: &[Draw]) -> Option<Background<'_>> {
+    let wallpaper = commands.first().and_then(plain_wallpaper)?;
+    let incoming = commands
+        .get(1)
+        .filter(|command| !profile_skip(command))
+        .and_then(incoming_wallpaper);
+    let mut len = 1 + usize::from(incoming.is_some());
+    let mut scrims = Vec::new();
+    while let Some(next) = commands.get(len) {
+        if profile_skip(next) {
+            len += 1;
+        } else if let Some(scrim) = Scrim::of(next) {
+            scrims.push(scrim);
+            len += 1;
+        } else {
+            break;
+        }
+    }
+    (incoming.is_some() || !scrims.is_empty()).then_some(Background {
+        wallpaper,
+        incoming,
+        scrims,
+        len,
+    })
+}
+
 /// A full-screen translucent fill without corners or border: a flat colour or a vertical
 /// gradient (straight alpha, interpolated like the paint shader's vertex colours).
-enum Scrim {
+#[derive(Debug, PartialEq)]
+pub(crate) enum Scrim {
     Flat(Color),
     Gradient(Color, Color),
 }
@@ -636,17 +692,18 @@ impl Renderer {
                 border,
             ]);
         }
-        self.paint_batch(start, 6, texture, backdrop);
+        self.paint_batch(start, 6, texture, backdrop, None);
     }
 
     /// Appends `count` paint vertices from `start`, merged into the previous batch when it uses
-    /// the same texture, clip and fade.
+    /// the same textures, clip and fade.
     fn paint_batch(
         &mut self,
         start: usize,
         count: usize,
         texture: GLuint,
         backdrop: Option<[[u8; 3]; 2]>,
+        outgoing: Option<GLuint>,
     ) {
         if let Some(batch) = self.batches.last_mut() {
             let same_clip = match (batch.clip, self.clip) {
@@ -660,10 +717,12 @@ impl Renderer {
                     texture: previous,
                     count: batch_count,
                     backdrop: previous_backdrop,
+                    outgoing: previous_outgoing,
                     ..
                 } = &mut batch.kind
                 && *previous == texture
                 && *previous_backdrop == backdrop
+                && *previous_outgoing == outgoing
             {
                 *batch_count += count;
                 return;
@@ -675,6 +734,7 @@ impl Renderer {
                 start,
                 count,
                 backdrop,
+                outgoing,
             },
             clip: self.clip,
             fade: self.fade,
@@ -684,7 +744,19 @@ impl Renderer {
     /// The wallpaper with full-screen translucent fills folded in: each fill maps a pixel p to
     /// p * (1 - a) + c * a, so together they are p * m + k, drawn in one pass instead of one
     /// full-screen layer each. Strips keep gradients' products of colour and alpha exact.
-    fn folded_quad(&mut self, rect: Rect, texture: GLuint, scrims: &[Scrim]) {
+    /// With `outgoing` (texture, alpha), p is the mix of that wallpaper and `texture` at alpha:
+    /// what `texture` drawn at alpha over it leaves, so a cross-fade is one pass as well.
+    fn folded_quad(
+        &mut self,
+        rect: Rect,
+        texture: GLuint,
+        scrims: &[Scrim],
+        outgoing: Option<(GLuint, f32)>,
+    ) {
+        let (mode, mix) = match outgoing {
+            Some((_, alpha)) => (-3., alpha),
+            None => (-2., 0.),
+        };
         const STRIPS: usize = 16;
         let fold = |t: f32| {
             let (mut m, mut k) = ([1f32; 3], [0f32; 3]);
@@ -719,13 +791,19 @@ impl Renderer {
                     k[0],
                     k[1],
                     k[2],
-                    0.,
-                    -2.,
+                    mix,
+                    mode,
                     0.,
                 ]);
             }
         }
-        self.paint_batch(start, STRIPS * 6, texture, None);
+        self.paint_batch(
+            start,
+            STRIPS * 6,
+            texture,
+            None,
+            outgoing.map(|(texture, _)| texture),
+        );
     }
 
     fn text(&mut self, text: &str, rect: Rect, style: TextStyle, color: Color, centered: bool) {
@@ -1147,21 +1225,69 @@ impl Renderer {
             self.vector_image(path, rect, contain, tint);
             return;
         }
-        // Offscreen cards, e.g. gallery thumbnails scrolled out of view, are not loaded.
-        if !visible(&rect, self.clip) {
+        let Some((id, width, height)) = self.texture_for(path, &rect, radius, contain) else {
             return;
+        };
+        if contain {
+            let scale = (rect.w / width as f32).min(rect.h / height as f32);
+            let w = width as f32 * scale;
+            let h = height as f32 * scale;
+            rect = Rect::new(rect.x + (rect.w - w) / 2., rect.y + (rect.h - h) / 2., w, h);
+        }
+        if scrims.is_empty() {
+            self.quad(rect, [0., 0., 1., 1.], plain_radius(radius), 0., tint, id);
+        } else {
+            self.folded_quad(rect, id, scrims, None);
+        }
+    }
+
+    /// Whether `path` (its 4K variant, if drawn instead) is uploaded without an alpha channel.
+    fn opaque(&mut self, path: &str) -> bool {
+        let path = self.resolve(path);
+        self.textures
+            .get(&path)
+            .is_some_and(|texture| texture.opaque)
+    }
+
+    /// A cross-fade between two uploaded opaque wallpapers in one pass with `scrims` folded in:
+    /// the incoming wallpaper drawn at `alpha` over the outgoing one is their mix, which the
+    /// shader computes before applying the folded fills.
+    fn crossfade(&mut self, outgoing: &str, incoming: &str, alpha: f32, scrims: &[Scrim]) {
+        let screen = Rect::new(0., 0., 1920., 1080.);
+        let Some((outgoing, ..)) = self.texture_for(outgoing, &screen, 0., false) else {
+            return;
+        };
+        let Some((incoming, ..)) = self.texture_for(incoming, &screen, 0., false) else {
+            return;
+        };
+        self.folded_quad(screen, incoming, scrims, Some((outgoing, alpha)));
+    }
+
+    /// The texture (id, width, height) drawn for an image command this frame, requested if not
+    /// yet loaded; none for an offscreen, failed or still decoding image. A full-screen wallpaper
+    /// still decoding is replaced by the last wallpaper drawn.
+    fn texture_for(
+        &mut self,
+        path: &str,
+        rect: &Rect,
+        radius: f32,
+        contain: bool,
+    ) -> Option<(GLuint, u32, u32)> {
+        // Offscreen cards, e.g. gallery thumbnails scrolled out of view, are not loaded.
+        if !visible(rect, self.clip) {
+            return None;
         }
         let path = self.resolve(path);
         if path.ends_with("@2x.jpg") {
             self.stats.high_resolution_wallpaper = true;
         }
-        let wallpaper = !contain && radius <= 0. && full_screen(&rect);
+        let wallpaper = !contain && radius <= 0. && full_screen(rect);
         self.request_resolved(&path);
         let path = if self.textures.contains_key(&path) {
             path
         } else if self.failed_images.contains(&path) {
             self.stats.missing_images += 1;
-            return;
+            return None;
         } else if wallpaper
             && let Some(last) = self
                 .last_wallpaper
@@ -1171,28 +1297,15 @@ impl Renderer {
             last
         } else {
             self.stats.pending_images += 1;
-            return;
+            return None;
         };
         if wallpaper {
             self.last_wallpaper = Some(path.clone());
         }
         let frame = self.frame;
-        let Some(texture) = self.textures.get_mut(&path) else {
-            return;
-        };
+        let texture = self.textures.get_mut(&path)?;
         texture.frame = frame;
-        let id = texture.id;
-        if contain {
-            let scale = (rect.w / texture.width as f32).min(rect.h / texture.height as f32);
-            let w = texture.width as f32 * scale;
-            let h = texture.height as f32 * scale;
-            rect = Rect::new(rect.x + (rect.w - w) / 2., rect.y + (rect.h - h) / 2., w, h);
-        }
-        if scrims.is_empty() {
-            self.quad(rect, [0., 0., 1., 1.], plain_radius(radius), 0., tint, id);
-        } else {
-            self.folded_quad(rect, id, scrims);
-        }
+        Some((texture.id, texture.width, texture.height))
     }
 
     /// Edges on whole drawable pixels. The TV scales its 1080p graphics plane up 2x, which
@@ -1375,25 +1488,34 @@ impl Renderer {
             if profile_skip(command) {
                 continue;
             }
-            if let Some(path) = plain_wallpaper(command)
-                && self.clip.is_none()
+            if self.clip.is_none()
                 && self.fade.is_none()
+                && let Some(layers) = background(&commands[index - 1..])
             {
-                let mut scrims = Vec::new();
-                while let Some(next) = commands.get(index) {
-                    if profile_skip(next) {
-                        index += 1;
-                    } else if let Some(scrim) = Scrim::of(next) {
-                        scrims.push(scrim);
-                        index += 1;
-                    } else {
-                        break;
+                match layers.incoming {
+                    None => {
+                        index += layers.len - 1;
+                        let screen = Rect::new(0., 0., 1920., 1080.);
+                        self.folded_image(
+                            layers.wallpaper,
+                            screen,
+                            0.,
+                            false,
+                            [1.; 4],
+                            &layers.scrims,
+                        );
+                        continue;
                     }
-                }
-                if !scrims.is_empty() {
-                    let screen = Rect::new(0., 0., 1920., 1080.);
-                    self.folded_image(path, screen, 0., false, [1.; 4], &scrims);
-                    continue;
+                    // Otherwise drawn layer by layer, as is a wallpaper still decoding or with
+                    // transparency, whose layers do not reduce to one mix of the two.
+                    Some((incoming, alpha))
+                        if self.opaque(layers.wallpaper) && self.opaque(incoming) =>
+                    {
+                        index += layers.len - 1;
+                        self.crossfade(layers.wallpaper, incoming, alpha, &layers.scrims);
+                        continue;
+                    }
+                    Some(_) => {}
                 }
             }
             // Outside the damage the scissor would discard it anyway; skip its layout too.
@@ -1499,6 +1621,10 @@ impl Renderer {
                 gl::GetUniformLocation(self.program, c"u_texture".as_ptr()),
                 0,
             );
+            gl::Uniform1i(
+                gl::GetUniformLocation(self.program, c"u_outgoing".as_ptr()),
+                1,
+            );
             gl::ActiveTexture(gl::TEXTURE0);
             let mut paint_bound = false;
             let mut current_fade = None;
@@ -1545,6 +1671,7 @@ impl Renderer {
                         start,
                         count,
                         backdrop,
+                        outgoing,
                     } => {
                         if !paint_bound {
                             gl::UseProgram(self.program);
@@ -1563,6 +1690,11 @@ impl Renderer {
                                 offset += size as usize;
                             }
                             paint_bound = true;
+                        }
+                        if let Some(outgoing) = outgoing {
+                            gl::ActiveTexture(gl::TEXTURE1);
+                            gl::BindTexture(gl::TEXTURE_2D, *outgoing);
+                            gl::ActiveTexture(gl::TEXTURE0);
                         }
                         gl::BindTexture(gl::TEXTURE_2D, *texture);
                         gl::Uniform1i(
@@ -1950,6 +2082,7 @@ fn texture_with(width: u32, height: u32, format: GLenum, pixels: &[u8]) -> Textu
         height,
         bytes: width as usize * height as usize * channels,
         frame: 0,
+        opaque: format == gl::RGB,
     }
 }
 
