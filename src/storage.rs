@@ -52,6 +52,35 @@ fn storage_rank(existing: bool, owner: Option<u32>, user: u32) -> (bool, bool) {
     (!existing, user == 0 && owner == Some(0))
 }
 
+/// Removes group and other permissions from `directory` when it is a real directory owned by
+/// `owner`. A symlink is never followed, a missing directory is skipped and a private one is left
+/// untouched; entries inside keep their own permissions.
+#[cfg(all(feature = "webos", unix))]
+fn restrict_to_owner(directory: &Path, owner: u32) -> std::io::Result<()> {
+    use std::os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, OpenOptionsExt},
+    };
+    let directory = match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(directory)
+    {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let metadata = directory.metadata()?;
+    let mode = metadata.mode() & 0o7777;
+    if metadata.uid() != owner || mode & 0o077 == 0 {
+        return Ok(());
+    }
+    if unsafe { libc::fchmod(directory.as_raw_fd(), (mode & !0o077) as libc::mode_t) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 #[cfg(all(feature = "webos", unix))]
 fn tv_path_in(mut candidates: [PathBuf; 3], legacy: &Path, user: u32) -> Result<PathBuf, String> {
     use std::{
@@ -142,6 +171,13 @@ fn tv_path_in(mut candidates: [PathBuf; 3], legacy: &Path, user: u32) -> Result<
                         legacy.display()
                     ));
                 }
+            }
+        }
+        // webOS developer mode creates the app's data directory world-writable. Only this app
+        // and root Home use it, so group and other access is removed from it and its gallery.
+        for private in [directory.to_path_buf(), directory.join("wallpapers")] {
+            if let Err(error) = restrict_to_owner(&private, metadata.uid()) {
+                eprintln!("Could not make {} private: {error}", private.display());
             }
         }
         eprintln!("Astro persistent storage: {}", directory.display());
@@ -666,6 +702,130 @@ mod tests {
             storage_rank(true, Some(5000), 5000),
             storage_rank(true, Some(0), 5000)
         );
+    }
+
+    #[test]
+    fn the_selected_storage_and_its_gallery_lose_group_and_other_access() {
+        let mode = |path: &Path| fs::symlink_metadata(path).unwrap().mode() & 0o7777;
+        for user in [0, unsafe { libc::geteuid() }] {
+            let fixture = Fixture::new();
+            let candidates = fixture.candidates();
+            let directory = candidates[0].parent().unwrap().to_owned();
+            let wallpapers = directory.join("wallpapers");
+            let upload = wallpapers.join("custom-00000000000000000000000000000001");
+            fs::create_dir_all(&upload).unwrap();
+            save(&candidates[0], &Preferences::default()).unwrap();
+            // As webOS developer mode leaves the app's data directory: world-writable.
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
+            fs::set_permissions(&wallpapers, fs::Permissions::from_mode(0o775)).unwrap();
+            fs::set_permissions(&upload, fs::Permissions::from_mode(0o755)).unwrap();
+            let selected = tv_path_in(candidates, &fixture.legacy(), user).unwrap();
+            assert_eq!(selected.parent().unwrap(), directory);
+            assert_eq!(mode(&directory), 0o700, "user {user}");
+            assert_eq!(mode(&wallpapers), 0o700, "user {user}");
+            assert_eq!(mode(&upload), 0o755, "entries inside are left alone");
+            assert_eq!(mode(&selected), 0o600);
+        }
+    }
+
+    #[test]
+    fn a_private_storage_is_unchanged_and_a_linked_gallery_is_not_followed() {
+        for user in [0, unsafe { libc::geteuid() }] {
+            let fixture = Fixture::new();
+            let candidates = fixture.candidates();
+            let directory = candidates[0].parent().unwrap().to_owned();
+            fs::create_dir(&directory).unwrap();
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            save(&candidates[0], &Preferences::default()).unwrap();
+            let outside = fixture.0.join("outside");
+            fs::create_dir(&outside).unwrap();
+            fs::set_permissions(&outside, fs::Permissions::from_mode(0o777)).unwrap();
+            symlink(&outside, directory.join("wallpapers")).unwrap();
+            tv_path_in(candidates, &fixture.legacy(), user).unwrap();
+            assert_eq!(mode_of(&directory), 0o700, "user {user}");
+            assert_eq!(
+                mode_of(&outside),
+                0o777,
+                "a linked gallery is never followed"
+            );
+        }
+    }
+
+    fn insecure_storage(fixture: &Fixture) -> PathBuf {
+        let candidates = fixture.candidates();
+        let directory = candidates[0].parent().unwrap().to_owned();
+        save(&candidates[0], &Preferences::default()).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
+        directory
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        fs::symlink_metadata(path).unwrap().mode() & 0o7777
+    }
+
+    #[test]
+    fn private_storage_keeps_setgid_and_sticky_bits() {
+        for user in [0, unsafe { libc::geteuid() }] {
+            let fixture = Fixture::new();
+            let directory = insecure_storage(&fixture);
+            let wallpapers = directory.join("wallpapers");
+            fs::create_dir(&wallpapers).unwrap();
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o3777)).unwrap();
+            fs::set_permissions(&wallpapers, fs::Permissions::from_mode(0o1757)).unwrap();
+            tv_path_in(fixture.candidates(), &fixture.legacy(), user).unwrap();
+            assert_eq!(mode_of(&directory), 0o3700, "user {user}");
+            assert_eq!(mode_of(&wallpapers), 0o1700, "user {user}");
+        }
+    }
+
+    #[test]
+    fn a_directory_owned_by_someone_else_is_not_restricted() {
+        let fixture = Fixture::new();
+        let directory = insecure_storage(&fixture);
+        restrict_to_owner(&directory, unsafe { libc::geteuid() }.wrapping_add(1)).unwrap();
+        assert_eq!(mode_of(&directory), 0o777);
+    }
+
+    #[test]
+    fn odd_galleries_are_logged_without_following_or_creating_anything() {
+        for user in [0, unsafe { libc::geteuid() }] {
+            for kind in ["missing", "file", "dangling", "fifo"] {
+                let fixture = Fixture::new();
+                let directory = insecure_storage(&fixture);
+                let gallery = directory.join("wallpapers");
+                match kind {
+                    "file" => {
+                        fs::write(&gallery, b"x").unwrap();
+                        fs::set_permissions(&gallery, fs::Permissions::from_mode(0o666)).unwrap();
+                    }
+                    "dangling" => symlink(fixture.0.join("nowhere"), &gallery).unwrap(),
+                    "fifo" => {
+                        let path =
+                            std::ffi::CString::new(gallery.as_os_str().as_encoded_bytes()).unwrap();
+                        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o666) }, 0);
+                    }
+                    _ => {}
+                }
+                let (candidates, legacy) = (fixture.candidates(), fixture.legacy());
+                let (sender, receiver) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    sender
+                        .send(tv_path_in(candidates, &legacy, user).is_ok())
+                        .unwrap()
+                });
+                let selected = receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("startup blocked");
+                assert!(selected, "{kind}");
+                assert_eq!(mode_of(&directory), 0o700, "{kind} user {user}");
+                match kind {
+                    "missing" => assert!(fs::symlink_metadata(&gallery).is_err()),
+                    "file" => assert_eq!(mode_of(&gallery), 0o666),
+                    "dangling" => assert!(!fixture.0.join("nowhere").exists()),
+                    _ => {}
+                }
+            }
+        }
     }
 
     #[test]

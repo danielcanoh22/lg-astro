@@ -849,7 +849,13 @@ payload. Startup probes `/media/developer/<appid>/`, `/media/developer/temp/<app
 `/media/internal/.<appid>/`, selecting a directory the jailed app can actually create and write.
 Production `/media/cryptofs` installations prefer internal storage. `/media/developer/temp` is
 on the persistent developer partition, not the reboot-cleared `/tmp`. No settings are placed
-in `/tmp` and no system/app-payload permissions are widened. Root Home takeover reuses these
+in `/tmp` and no system/app-payload permissions are widened. webOS developer mode creates
+`/media/developer/<appid>/` world-writable (mode 0777, like the rest of `/media/developer`), so
+once a directory is selected Astro removes group and other permissions from it and from its
+`wallpapers/` gallery when each is a real directory owned like the selected one; symlinks are
+not followed, private directories are left untouched and entries inside keep their own modes.
+The shared `/media/developer` parent stays world-writable without a sticky bit; Astro cannot
+change that. Root Home takeover reuses these
 same app-owned directories, preferring existing app-owned preferences over root-owned fallback
 files left by an earlier takeover. It does not merge or delete duplicate preferences. Preference
 saves retain the directory owner's UID/GID so the normal app can still read
