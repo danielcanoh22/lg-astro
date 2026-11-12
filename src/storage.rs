@@ -181,6 +181,132 @@ pub fn save(path: &Path, preferences: &Preferences) -> Result<(), String> {
     write_atomic(path, &bytes)
 }
 
+/// The outcome of one background preferences write. `report` is set when any snapshot it
+/// wrote came from a user action, whose failure the user is told about.
+pub struct Saved {
+    pub result: Result<(), String>,
+    pub report: bool,
+}
+
+#[derive(Default)]
+struct SaveQueue {
+    next: Option<(Vec<u8>, bool)>,
+    writing: bool,
+    stop: bool,
+}
+
+/// Writes preferences on a worker thread, so the fsync of an atomic save never stalls the SDL
+/// thread. Each save encodes the whole preferences at the call, so only the newest pending
+/// snapshot is written: an older one that has not started is superseded. Writes keep call order,
+/// `flush` waits for every pending write, and dropping the saver writes what is still pending.
+pub struct Saver {
+    path: PathBuf,
+    queue: std::sync::Arc<(std::sync::Mutex<SaveQueue>, std::sync::Condvar)>,
+    sender: std::sync::mpsc::Sender<Saved>,
+    results: std::sync::mpsc::Receiver<Saved>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Saver {
+    pub fn new(path: PathBuf) -> Self {
+        let queue = std::sync::Arc::new((
+            std::sync::Mutex::new(SaveQueue::default()),
+            std::sync::Condvar::new(),
+        ));
+        let (sender, results) = std::sync::mpsc::channel();
+        let worker = {
+            let (queue, path, sender) = (queue.clone(), path.clone(), sender.clone());
+            std::thread::Builder::new()
+                .name("astro-preferences".into())
+                .spawn(move || {
+                    let (lock, ready) = &*queue;
+                    loop {
+                        let (bytes, report) = {
+                            let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+                            loop {
+                                // A pending snapshot is written before stopping.
+                                if let Some(next) = state.next.take() {
+                                    state.writing = true;
+                                    break next;
+                                }
+                                if state.stop {
+                                    return;
+                                }
+                                state = ready.wait(state).unwrap_or_else(|e| e.into_inner());
+                            }
+                        };
+                        let result = write_atomic(&path, &bytes);
+                        let _ = sender.send(Saved { result, report });
+                        lock.lock().unwrap_or_else(|e| e.into_inner()).writing = false;
+                        ready.notify_all();
+                        crate::wake::wake();
+                    }
+                })
+                .ok()
+        };
+        if worker.is_none() {
+            eprintln!("Could not start the preferences writer; saving on the UI thread");
+        }
+        Self {
+            path,
+            queue,
+            sender,
+            results,
+            worker,
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Queues the current preferences. An encoding error returns at once; a write error
+    /// arrives later through `results`.
+    pub fn save(&self, preferences: &Preferences, report: bool) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(preferences)
+            .map_err(|e| format!("Could not encode preferences: {e}"))?;
+        if self.worker.is_none() {
+            let result = write_atomic(&self.path, &bytes);
+            let _ = self.sender.send(Saved { result, report });
+            return Ok(());
+        }
+        let (lock, ready) = &*self.queue;
+        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let report = report || state.next.as_ref().is_some_and(|(_, earlier)| *earlier);
+        state.next = Some((bytes, report));
+        ready.notify_all();
+        Ok(())
+    }
+
+    /// Waits until every queued snapshot is on disk (or failed).
+    pub fn flush(&self) {
+        if self.worker.is_none() {
+            return;
+        }
+        let (lock, ready) = &*self.queue;
+        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while state.next.is_some() || state.writing {
+            state = ready.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Drains the results of finished writes, oldest first.
+    pub fn results(&self) -> Vec<Saved> {
+        self.results.try_iter().collect()
+    }
+}
+
+impl Drop for Saver {
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.queue;
+        lock.lock().unwrap_or_else(|e| e.into_inner()).stop = true;
+        ready.notify_all();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 /// Deletes the forecast cache earlier versions kept beside the preferences file
 /// (`preferences.weather.json`), now that the weather widget is gone. A symlink is unlinked,
 /// never followed; anything that is not a regular file or a link is left alone.

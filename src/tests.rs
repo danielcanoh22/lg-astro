@@ -735,13 +735,14 @@ fn auto_input_visibility_requires_a_positive_connection_report() {
 fn a_save_by_the_other_astro_copy_is_reloaded_once_and_a_broken_file_keeps_preferences() {
     let directory = std::env::temp_dir().join(format!("astro-reload-test-{}", std::process::id()));
     let path = directory.join("preferences.json");
+    let saver = storage::Saver::new(path.clone());
     let mut state = ready();
     storage::save(&path, &state.preferences).unwrap();
     let mut stamp = storage::stamp(&path);
     assert!(stamp.is_some());
     // Nothing changed: the current preferences stay as they are.
     state.preferences.background = "unsaved".into();
-    crate::reload_changed_preferences(&path, &mut stamp, &mut state);
+    crate::reload_changed_preferences(&saver, &mut stamp, &mut state);
     assert_eq!(state.preferences.background, "unsaved");
     // A different size, so the change shows even within one file-time tick.
     let other = Preferences {
@@ -751,13 +752,93 @@ fn a_save_by_the_other_astro_copy_is_reloaded_once_and_a_broken_file_keeps_prefe
     };
     assert_ne!(other.background.len(), state.preferences.background.len());
     storage::save(&path, &other).unwrap();
-    crate::reload_changed_preferences(&path, &mut stamp, &mut state);
+    crate::reload_changed_preferences(&saver, &mut stamp, &mut state);
     assert_eq!(state.preferences.background, "midnight");
     assert_eq!(state.preferences.show_home_names, other.show_home_names);
     assert_eq!(stamp, storage::stamp(&path));
     std::fs::write(&path, "broken file").unwrap();
-    crate::reload_changed_preferences(&path, &mut stamp, &mut state);
+    crate::reload_changed_preferences(&saver, &mut stamp, &mut state);
     assert_eq!(state.preferences.background, "midnight");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn background_preference_saves_write_the_newest_snapshot_and_report_each_result() {
+    let directory = std::env::temp_dir().join(format!("astro-saver-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let path = directory.join("preferences.json");
+    let saver = storage::Saver::new(path.clone());
+    let mut preferences = Preferences {
+        background: "forest".into(),
+        ..Preferences::default()
+    };
+    saver.save(&preferences, false).unwrap();
+    preferences.background = "midnight".into();
+    saver.save(&preferences, true).unwrap();
+    saver.flush();
+    assert_eq!(storage::load(&path).unwrap().background, "midnight");
+    let results = saver.results();
+    // The worker may coalesce the two snapshots into one write; either way each write is
+    // reported, and the user's save keeps its report flag.
+    assert!(
+        (1..=2).contains(&results.len()),
+        "{} results",
+        results.len()
+    );
+    assert!(results.iter().all(|saved| saved.result.is_ok()));
+    assert!(results.last().unwrap().report);
+    assert!(saver.results().is_empty(), "results are drained once");
+    // Dropping the saver (Astro exiting) still writes a save that is pending.
+    preferences.background = "dunes".into();
+    saver.save(&preferences, false).unwrap();
+    drop(saver);
+    assert_eq!(storage::load(&path).unwrap().background, "dunes");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_failed_background_preference_save_is_reported_with_its_error() {
+    let directory =
+        std::env::temp_dir().join(format!("astro-saver-error-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    // A file where the preferences directory should be makes every save fail.
+    let blocker = directory.join("not-a-directory");
+    std::fs::write(&blocker, b"").unwrap();
+    let saver = storage::Saver::new(blocker.join("preferences.json"));
+    saver.save(&Preferences::default(), true).unwrap();
+    saver.flush();
+    let results = saver.results();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].report);
+    let error = results[0].result.as_ref().unwrap_err();
+    assert!(
+        error.contains("Could not prepare preferences directory"),
+        "{error}"
+    );
+    drop(saver);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_reload_waits_for_this_copys_pending_save_so_the_newer_change_is_kept() {
+    let directory =
+        std::env::temp_dir().join(format!("astro-saver-reload-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let path = directory.join("preferences.json");
+    let saver = storage::Saver::new(path.clone());
+    let mut state = ready();
+    let mut stamp = storage::stamp(&path);
+    state.preferences.background = "forest".into();
+    saver.save(&state.preferences, false).unwrap();
+    state.preferences.background = "midnight".into();
+    saver.save(&state.preferences, true).unwrap();
+    // Returning to the foreground re-reads the file; it must not bring back "forest".
+    crate::reload_changed_preferences(&saver, &mut stamp, &mut state);
+    assert_eq!(state.preferences.background, "midnight");
+    assert_eq!(storage::load(&path).unwrap().background, "midnight");
+    assert_eq!(stamp, storage::stamp(&path));
+    drop(saver);
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -3292,4 +3373,207 @@ fn a_finished_or_starting_fade_is_still_one_cross_fade_group() {
         Draw::TintedImage("b.jpg".into(), screen, 0., false, [1., 1., 1., 0.5]),
     ];
     assert_eq!(background(&dimmed), None);
+}
+
+fn saver_test_directory(name: &str) -> PathBuf {
+    let directory = std::env::temp_dir().join(format!("astro-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    directory
+}
+
+/// Runs `work` on another thread and fails instead of hanging when it does not finish in time.
+fn within_seconds(seconds: u64, work: impl FnOnce() + Send + 'static) {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        work();
+        let _ = done.send(());
+    });
+    finished
+        .recv_timeout(std::time::Duration::from_secs(seconds))
+        .expect("the saver did not finish in time (deadlock?)");
+}
+
+#[test]
+fn many_rapid_background_saves_leave_the_last_snapshot_and_keep_a_user_report() {
+    let directory = saver_test_directory("saver-rapid");
+    let path = directory.join("preferences.json");
+    let saver = storage::Saver::new(path.clone());
+    // One user save followed by many rotation saves: the user's report must survive coalescing.
+    let mut preferences = Preferences {
+        background: "user-choice".into(),
+        ..Preferences::default()
+    };
+    saver.save(&preferences, true).unwrap();
+    for index in 0..500 {
+        preferences.background = format!("rotation-{index}");
+        saver.save(&preferences, false).unwrap();
+    }
+    saver.flush();
+    let on_disk = std::fs::read(&path).unwrap();
+    assert_eq!(on_disk, serde_json::to_vec_pretty(&preferences).unwrap());
+    let results = saver.results();
+    assert!(!results.is_empty() && results.len() <= 501);
+    assert!(results.iter().all(|saved| saved.result.is_ok()));
+    assert!(
+        results.iter().any(|saved| saved.report),
+        "a user save lost its report"
+    );
+    drop(saver);
+    // No temporary file is left behind.
+    let leftovers: Vec<_> = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        leftovers,
+        vec![std::ffi::OsString::from("preferences.json")]
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn background_saves_are_byte_identical_to_a_synchronous_save() {
+    let directory = saver_test_directory("saver-bytes");
+    let saver = storage::Saver::new(directory.join("background.json"));
+    let preferences = Preferences {
+        background: "forest".into(),
+        favorites: Some(vec!["netflix".into()]),
+        ..Preferences::default()
+    };
+    storage::save(&directory.join("synchronous.json"), &preferences).unwrap();
+    saver.save(&preferences, true).unwrap();
+    saver.flush();
+    assert_eq!(
+        std::fs::read(directory.join("background.json")).unwrap(),
+        std::fs::read(directory.join("synchronous.json")).unwrap()
+    );
+    drop(saver);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn each_flush_sees_the_snapshot_queued_last() {
+    let directory = saver_test_directory("saver-order");
+    let path = directory.join("preferences.json");
+    let saver = storage::Saver::new(path.clone());
+    let mut preferences = Preferences::default();
+    for round in 0..50 {
+        for step in 0..(round % 4 + 1) {
+            preferences.background = format!("round-{round}-{step}");
+            saver.save(&preferences, step % 2 == 0).unwrap();
+        }
+        saver.flush();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            serde_json::to_vec_pretty(&preferences).unwrap()
+        );
+    }
+    drop(saver);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn flush_and_drop_never_hang() {
+    within_seconds(20, || {
+        let directory = saver_test_directory("saver-hang");
+        let path = directory.join("preferences.json");
+        // Idle saver: flush returns and drop joins.
+        let saver = storage::Saver::new(path.clone());
+        saver.flush();
+        saver.flush();
+        drop(saver);
+        assert!(!path.exists(), "an idle saver writes nothing");
+        // Dropping right after a save, many times: the last snapshot is always written.
+        for index in 0..200 {
+            let saver = storage::Saver::new(path.clone());
+            let preferences = Preferences {
+                background: format!("exit-{index}"),
+                ..Preferences::default()
+            };
+            saver.save(&preferences, index % 2 == 0).unwrap();
+            if index % 3 == 0 {
+                saver.flush();
+            }
+            drop(saver);
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                serde_json::to_vec_pretty(&preferences).unwrap()
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    });
+}
+
+#[test]
+fn a_failed_save_then_a_successful_one_report_in_order() {
+    let directory = saver_test_directory("saver-recover");
+    std::fs::create_dir_all(&directory).unwrap();
+    let parent = directory.join("storage");
+    std::fs::write(&parent, b"").unwrap();
+    let saver = storage::Saver::new(parent.join("preferences.json"));
+    saver.save(&Preferences::default(), false).unwrap();
+    saver.flush();
+    std::fs::remove_file(&parent).unwrap();
+    saver.save(&Preferences::default(), true).unwrap();
+    saver.flush();
+    let results = saver.results();
+    assert_eq!(results.len(), 2);
+    assert!(results[0].result.is_err() && !results[0].report);
+    assert!(results[1].result.is_ok() && results[1].report);
+    drop(saver);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn failed_saves_notify_only_for_user_saves() {
+    let directory = saver_test_directory("saver-notify");
+    std::fs::create_dir_all(&directory).unwrap();
+    let blocker = directory.join("not-a-directory");
+    std::fs::write(&blocker, b"").unwrap();
+    let saver = storage::Saver::new(blocker.join("preferences.json"));
+    let platform = crate::platform::Platform::new(false, false);
+    let mut state = ready();
+    // A rotation save that fails is only logged.
+    saver.save(&state.preferences, false).unwrap();
+    saver.flush();
+    crate::saved(&saver, &mut state, &platform);
+    assert!(state.notice.is_none());
+    // A user save that fails shows the save error notice.
+    saver.save(&state.preferences, true).unwrap();
+    saver.flush();
+    crate::saved(&saver, &mut state, &platform);
+    let expected = state.preferences.language.t("savedError");
+    assert_eq!(
+        state.notice.as_ref().map(|(text, _)| text.as_str()),
+        Some(expected)
+    );
+    drop(saver);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_reload_still_picks_up_the_other_copys_newer_save() {
+    let directory = saver_test_directory("saver-other-copy");
+    let path = directory.join("preferences.json");
+    let saver = storage::Saver::new(path.clone());
+    let mut state = ready();
+    state.preferences.background = "forest".into();
+    saver.save(&state.preferences, true).unwrap();
+    saver.flush();
+    let mut stamp = storage::stamp(&path);
+    // The other Astro copy saves later, with a different size.
+    let other = Preferences {
+        background: "midnight".into(),
+        ..Preferences::default()
+    };
+    storage::save(&path, &other).unwrap();
+    crate::reload_changed_preferences(&saver, &mut stamp, &mut state);
+    assert_eq!(state.preferences.background, "midnight");
+    drop(saver);
+    // Dropping a saver with nothing pending must not rewrite the other copy's file.
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        serde_json::to_vec_pretty(&other).unwrap()
+    );
+    std::fs::remove_dir_all(directory).unwrap();
 }

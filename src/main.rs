@@ -297,10 +297,13 @@ impl BackButton {
 /// be running, and each saves its changes to the same file. A file that cannot be read keeps the
 /// current preferences.
 fn reload_changed_preferences(
-    path: &std::path::Path,
+    saver: &storage::Saver,
     stamp: &mut storage::Stamp,
     state: &mut State,
 ) {
+    // This copy's own pending save is newer than the file: write it before reading the file.
+    saver.flush();
+    let path = saver.path();
     let current = storage::stamp(path);
     if current == *stamp {
         return;
@@ -312,22 +315,40 @@ fn reload_changed_preferences(
     }
 }
 
+/// Applies finished background preference writes as the synchronous save did: a failed user
+/// save is announced, and a successful one updates the launch splash.
+fn saved(saver: &storage::Saver, state: &mut State, platform: &Platform) {
+    for saved in saver.results() {
+        match saved.result {
+            Ok(()) if saved.report => {
+                platform.sync_splash(state.preferences.splash_background());
+            }
+            Ok(()) => {}
+            Err(error) => {
+                eprintln!("{error}");
+                if saved.report {
+                    state.notify(state.preferences.language.t("savedError"));
+                }
+            }
+        }
+    }
+}
+
 fn effects(
     effects: Vec<Effect>,
     state: &mut State,
     platform: &Platform,
-    preferences: &std::path::Path,
+    saver: &storage::Saver,
     wallpapers: &wallpapers::Service,
     updates: &update::Worker,
 ) -> bool {
     for effect in effects {
         match effect {
+            // The write and its fsync run on the saver's worker; `saved` reports the result.
             Effect::Save => {
-                if let Err(error) = storage::save(preferences, &state.preferences) {
+                if let Err(error) = saver.save(&state.preferences, true) {
                     eprintln!("{error}");
                     state.notify(state.preferences.language.t("savedError"));
-                } else {
-                    platform.sync_splash(state.preferences.splash_background());
                 }
             }
             effect @ (Effect::Refresh | Effect::Reload) => {
@@ -715,6 +736,8 @@ fn run() -> Result<(), String> {
         options.test_update_version.is_some(),
     );
     let mut preferences_stamp = storage::stamp(&preferences_path);
+    // Saves write and fsync off the SDL thread; dropping it at exit writes what is pending.
+    let saver = storage::Saver::new(preferences_path.clone());
     let mut state = State::new(initial_preferences);
     // A preloaded Home is behind another app by definition: only its relaunch switches.
     if webos && options.webos_home && !options.preloaded {
@@ -749,7 +772,7 @@ fn run() -> Result<(), String> {
         vec![Effect::Refresh],
         &mut state,
         &platform,
-        &preferences_path,
+        &saver,
         &wallpaper_service,
         &updates,
     );
@@ -1058,7 +1081,7 @@ fn run() -> Result<(), String> {
                 vec![effect],
                 &mut state,
                 &platform,
-                &preferences_path,
+                &saver,
                 &wallpaper_service,
                 &updates,
             );
@@ -1068,7 +1091,7 @@ fn run() -> Result<(), String> {
                 vec![effect],
                 &mut state,
                 &platform,
-                &preferences_path,
+                &saver,
                 &wallpaper_service,
                 &updates,
             );
@@ -1150,10 +1173,11 @@ fn run() -> Result<(), String> {
             if startup_cycle {
                 startup_cycle_pending = false;
             }
-            if cycled && let Err(error) = storage::save(&preferences_path, &state.preferences) {
+            if cycled && let Err(error) = saver.save(&state.preferences, false) {
                 eprintln!("{error}");
             }
         }
+        saved(&saver, &mut state, &platform);
         while let Ok(response) = updates.receiver.try_recv() {
             state.install_response(response);
         }
@@ -1235,7 +1259,7 @@ fn run() -> Result<(), String> {
                         pending,
                         &mut state,
                         &platform,
-                        &preferences_path,
+                        &saver,
                         &wallpaper_service,
                         &updates,
                     );
@@ -1246,7 +1270,7 @@ fn run() -> Result<(), String> {
                         pending,
                         &mut state,
                         &platform,
-                        &preferences_path,
+                        &saver,
                         &wallpaper_service,
                         &updates,
                     );
@@ -1269,7 +1293,7 @@ fn run() -> Result<(), String> {
                         pending,
                         &mut state,
                         &platform,
-                        &preferences_path,
+                        &saver,
                         &wallpaper_service,
                         &updates,
                     );
@@ -1351,11 +1375,7 @@ fn run() -> Result<(), String> {
                         preloaded = false;
                         press = None;
                         back_button.cancel();
-                        reload_changed_preferences(
-                            &preferences_path,
-                            &mut preferences_stamp,
-                            &mut state,
-                        );
+                        reload_changed_preferences(&saver, &mut preferences_stamp, &mut state);
                         pending = state.return_home();
                         state.home_opened(false);
                         // A staged Home must come forward itself. If it does not, its
@@ -1421,7 +1441,7 @@ fn run() -> Result<(), String> {
                         if webos {
                             if returned {
                                 reload_changed_preferences(
-                                    &preferences_path,
+                                    &saver,
                                     &mut preferences_stamp,
                                     &mut state,
                                 );
@@ -1650,7 +1670,7 @@ fn run() -> Result<(), String> {
                 pending,
                 &mut state,
                 &platform,
-                &preferences_path,
+                &saver,
                 &wallpaper_service,
                 &updates,
             );
@@ -1675,7 +1695,7 @@ fn run() -> Result<(), String> {
                 pending,
                 &mut state,
                 &platform,
-                &preferences_path,
+                &saver,
                 &wallpaper_service,
                 &updates,
             );
@@ -1714,7 +1734,7 @@ fn run() -> Result<(), String> {
                     pending,
                     &mut state,
                     &platform,
-                    &preferences_path,
+                    &saver,
                     &wallpaper_service,
                     &updates,
                 );
@@ -1749,7 +1769,7 @@ fn run() -> Result<(), String> {
                 pending,
                 &mut state,
                 &platform,
-                &preferences_path,
+                &saver,
                 &wallpaper_service,
                 &updates,
             );
