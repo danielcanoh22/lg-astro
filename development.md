@@ -389,6 +389,14 @@ copies the selected background's splash into the staged Home app on every apply,
 preferences from the TV storage candidates in `storage.rs`. Production installations prefer internal
 storage; developer installations prefer developer storage, with existing files taking precedence over
 the legacy installation-local preferences. Reapplying an active Home mount also refreshes the splash.
+
+`sync-splash` and the Home stage also accept an uploaded background's ID (`custom-` and 32 lowercase
+hex digits). The helper finds Astro's storage itself, with the same precedence, and reads the
+1920×1080 PNG the app writes to `wallpapers/custom-<id>/splash.png`; the request never carries a
+path. Running as root, it refuses a symlink at any path component, a file replaced between its
+check and its opening, a file not owned by the storage directory's owner, and anything but a
+1920×1080 PNG within 32 MiB. A refused image leaves both splashes unchanged; the Home stage then
+copies the installed `splash.png` instead.
 `pnpm test:home` checks splash selection, runtime updates and mounted refreshes with a mocked filesystem
 and no TV calls. Verify the system-rendered splash on a real TV by changing Background, quitting Astro,
 and relaunching its normal tile; desktop checks cannot establish SAM/compositor image caching behavior.

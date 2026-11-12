@@ -61,6 +61,16 @@ pub fn valid_background(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
+/// An uploaded background's ID, `custom-` and 32 lowercase hex digits, as Astro creates it.
+/// Longer than any packaged background ID, so the two never overlap.
+pub fn valid_upload(id: &str) -> bool {
+    id.strip_prefix("custom-").is_some_and(|hex| {
+        hex.len() == 32
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
 pub fn accepted(reply: serde_json::Value) -> Result<serde_json::Value> {
     if reply
         .get("returnValue")
