@@ -5,8 +5,16 @@ use std::{
     collections::BTreeMap,
     io::{Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
-    time::Instant,
+    time::{Duration, Instant},
 };
+
+/// Request headers must arrive this soon after the connection opens; a body has its own time.
+pub const HEADER_TIME: Duration = Duration::from_secs(5);
+/// Connections still sending headers, across the session and from one peer address, so a slow
+/// or abusive peer cannot take every slot. A browser opens up to six connections at once.
+pub const PENDING_LIMIT: usize = 32;
+pub const PENDING_PEER_LIMIT: usize = 8;
+const HEADER_LIMIT: usize = 8192;
 
 // Base58 excludes easily confused 0/O and I/l while staying URL-safe.
 pub const TOKEN_ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -75,6 +83,113 @@ pub fn session(address: SocketAddr, token: &str) -> Result<Session, String> {
             .map(|(x, y)| qr.get_module(x, y))
             .collect(),
     })
+}
+
+struct Connection {
+    stream: TcpStream,
+    peer: IpAddr,
+    received: Vec<u8>,
+    deadline: Instant,
+}
+
+/// Connections whose request headers are still arriving. They are read without blocking, so one
+/// slow peer cannot hold up requests from others.
+#[derive(Default)]
+pub struct Pending(Vec<Connection>);
+
+impl Pending {
+    /// Drops the connection and returns false when the session or this peer is at its limit.
+    pub fn admit(&mut self, stream: TcpStream, peer: IpAddr) -> bool {
+        if self.0.len() >= PENDING_LIMIT
+            || self.0.iter().filter(|c| c.peer == peer).count() >= PENDING_PEER_LIMIT
+            || stream.set_nonblocking(true).is_err()
+        {
+            return false;
+        }
+        self.0.push(Connection {
+            stream,
+            peer,
+            received: Vec::new(),
+            deadline: Instant::now() + HEADER_TIME,
+        });
+        true
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Reads what has arrived and returns each connection whose headers are complete, with every
+    /// byte received so far, or that failed. A peer that closed early is dropped silently.
+    pub fn poll(&mut self) -> Vec<(TcpStream, Result<Vec<u8>, String>)> {
+        let mut done = Vec::new();
+        let mut index = 0;
+        while index < self.0.len() {
+            let progress = receive(&mut self.0[index]);
+            if matches!(progress, Progress::Waiting) {
+                index += 1;
+                continue;
+            }
+            let connection = self.0.swap_remove(index);
+            match progress {
+                Progress::Arrived => done.push((connection.stream, Ok(connection.received))),
+                Progress::Failed(error) => done.push((connection.stream, Err(error))),
+                Progress::Waiting | Progress::Closed => {}
+            }
+        }
+        done
+    }
+}
+
+enum Progress {
+    Waiting,
+    Arrived,
+    Failed(String),
+    Closed,
+}
+
+fn receive(connection: &mut Connection) -> Progress {
+    let mut buffer = [0; 1024];
+    let chunk = buffer.len();
+    loop {
+        // The blank line must end within HEADER_LIMIT bytes, as `request` requires.
+        let room = HEADER_LIMIT.saturating_sub(connection.received.len());
+        if room == 0 {
+            return Progress::Failed("Request headers too large".into());
+        }
+        match connection.stream.read(&mut buffer[..room.min(chunk)]) {
+            Ok(0) => return Progress::Closed,
+            Ok(n) => {
+                let from = connection.received.len().saturating_sub(3);
+                connection.received.extend_from_slice(&buffer[..n]);
+                if connection.received[from..]
+                    .windows(4)
+                    .any(|window| window == b"\r\n\r\n")
+                {
+                    return Progress::Arrived;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(_) => return Progress::Closed,
+        }
+    }
+    if Instant::now() >= connection.deadline {
+        Progress::Failed("Request headers timed out".into())
+    } else {
+        Progress::Waiting
+    }
+}
+
+/// Whether a request's target is inside the session addressed by `token`.
+pub fn carries_token(received: &[u8], token: &str) -> bool {
+    let line = received
+        .split(|byte| *byte == b'\r')
+        .next()
+        .unwrap_or_default();
+    let target = line.split(|byte| *byte == b' ').nth(1).unwrap_or_default();
+    let session = format!("/{token}");
+    target == session.as_bytes() || target.starts_with(format!("{session}/").as_bytes())
 }
 
 pub fn read_exact(
