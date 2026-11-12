@@ -2,8 +2,8 @@
 //! Network I/O, decoding, normalization, metadata discovery and QR generation stay on this worker.
 pub use crate::companion::Session;
 use crate::companion::{
-    Request, error_response, listen, local_peer, random_token, read_exact, redirect_to_page,
-    response, session,
+    PENDING_LIMIT, Pending, Request, carries_token, error_response, listen, local_peer,
+    random_token, read_exact, redirect_to_page, response, session,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -592,37 +592,71 @@ fn worker(
             break;
         }
         let deadline = Instant::now() + SESSION_TIME;
+        let valid = || desired.load(Ordering::Acquire) == generation && Instant::now() < deadline;
+        let host = address.to_string();
+        // Headers from every peer are read side by side, so a slow one cannot hold up the rest.
+        let mut pending = Pending::default();
+        // Only requests carrying the token count, so other LAN peers cannot use up the session.
         let mut requests = 0;
-        while desired.load(Ordering::Acquire) == generation
-            && Instant::now() < deadline
-            && requests < SESSION_REQUEST_LIMIT
-        {
-            match listener.accept() {
-                Ok((mut stream, peer)) => {
-                    if !local_peer(peer.ip()) {
+        'session: while valid() && requests < SESSION_REQUEST_LIMIT {
+            let mut idle = true;
+            // Serve what arrived before accepting more, so closed connections free their slots.
+            for (mut stream, received) in pending.poll() {
+                idle = false;
+                let received = match received {
+                    Ok(received) => received,
+                    Err(error) => {
+                        if let Err(error) = reject(&mut stream, &error) {
+                            eprintln!("Astro wallpaper upload: {error}");
+                        }
                         continue;
                     }
+                };
+                if carries_token(&received, &token) {
+                    if requests == SESSION_REQUEST_LIMIT {
+                        break;
+                    }
                     requests += 1;
-                    let valid = || {
-                        desired.load(Ordering::Acquire) == generation && Instant::now() < deadline
-                    };
-                    match serve(&mut stream, &address.to_string(), &token, directory, valid) {
-                        Ok(true) => {
-                            if sender.send(Event::Catalog(catalog(directory))).is_err() {
-                                return;
-                            }
+                }
+                match serve(&mut stream, &received, &host, &token, directory, valid) {
+                    Ok(true) => {
+                        if sender.send(Event::Catalog(catalog(directory))).is_err() {
+                            return;
                         }
-                        Ok(false) => {}
-                        Err(error) => eprintln!("Astro wallpaper upload: {error}"),
+                    }
+                    Ok(false) => {}
+                    Err(error) => eprintln!("Astro wallpaper upload: {error}"),
+                }
+            }
+            for _ in 0..PENDING_LIMIT {
+                match listener.accept() {
+                    Ok((stream, peer)) => {
+                        idle = false;
+                        if local_peer(peer.ip()) {
+                            pending.admit(stream, peer.ip());
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    // A peer that resets before it is accepted must not end the session.
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(error) => {
+                        eprintln!("Astro wallpaper server: {error}");
+                        break 'session;
                     }
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(25))
-                }
-                Err(error) => {
-                    eprintln!("Astro wallpaper server: {error}");
-                    break;
-                }
+            }
+            if idle {
+                thread::sleep(Duration::from_millis(if pending.is_empty() {
+                    25
+                } else {
+                    10
+                }));
             }
         }
         drop(listener);
@@ -640,13 +674,26 @@ fn request(
     crate::companion::request(reader, valid, deadline, MAX_BODY, "Image exceeds 12 MiB")
 }
 
+/// Answers a connection whose headers did not arrive whole or in time.
+fn reject(stream: &mut TcpStream, error: &str) -> Result<(), String> {
+    stream
+        .set_nonblocking(false)
+        .and_then(|_| stream.set_write_timeout(Some(Duration::from_secs(2))))
+        .map_err(|e| e.to_string())?;
+    error_response(stream, "400 Bad Request", error)
+}
+
+/// `received` holds bytes already read from `stream`: the complete headers and possibly the
+/// start of the body. The body gets its own REQUEST_TIME from here.
 fn serve(
     stream: &mut TcpStream,
+    received: &[u8],
     host: &str,
     token: &str,
     directory: &Path,
     valid: impl Fn() -> bool,
 ) -> Result<bool, String> {
+    stream.set_nonblocking(false).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_millis(100)))
         .map_err(|e| e.to_string())?;
@@ -654,7 +701,7 @@ fn serve(
         .set_write_timeout(Some(Duration::from_secs(2)))
         .map_err(|e| e.to_string())?;
     let deadline = Instant::now() + REQUEST_TIME;
-    let mut reader = BufReader::new(&mut *stream);
+    let mut reader = Cursor::new(received).chain(BufReader::new(&mut *stream));
     let request = match request(&mut reader, &valid, deadline) {
         Ok(request) => request,
         Err(error) => {

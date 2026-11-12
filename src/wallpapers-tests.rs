@@ -1,5 +1,5 @@
 use super::*;
-use crate::companion::TOKEN_ALPHABET;
+use crate::companion::{HEADER_TIME, PENDING_LIMIT, PENDING_PEER_LIMIT, Pending, TOKEN_ALPHABET};
 use std::{
     net::{Ipv4Addr, TcpListener},
     sync::atomic::AtomicUsize,
@@ -83,7 +83,15 @@ fn http(path: &Path, request: impl FnOnce(&str) -> Vec<u8>) -> (String, bool) {
     let path = path.to_owned();
     let worker = thread::spawn(move || {
         let (mut socket, _) = listener.accept().unwrap();
-        serve(&mut socket, &address.to_string(), "secret", &path, || true).unwrap_or(false)
+        serve(
+            &mut socket,
+            &[],
+            &address.to_string(),
+            "secret",
+            &path,
+            || true,
+        )
+        .unwrap_or(false)
     });
     let mut socket = TcpStream::connect(address).unwrap();
     socket
@@ -769,4 +777,217 @@ fn cancelling_a_slow_request_releases_the_worker_without_waiting_for_the_body() 
         Event::Ended(_)
     ));
     assert!(catalog(&fixture.wallpapers()).is_empty());
+}
+
+/// Opens a loopback upload session and returns the service, its `host:port` and its token.
+fn open_session(fixture: &Fixture) -> (Service, String, String) {
+    let mut service = Service::new(&fixture.0.join("preferences.json"), true).unwrap();
+    service
+        .receiver
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
+    service.set_active(true);
+    let Event::Session(_, Ok(session)) = service
+        .receiver
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+    else {
+        panic!("Expected a session");
+    };
+    let parts: Vec<_> = session.url.split('/').collect();
+    (service, parts[2].to_owned(), parts[3].to_owned())
+}
+
+/// Sends one request and returns the response, or whatever arrived within `wait`.
+fn exchange(address: &str, request: &[u8], wait: Duration) -> String {
+    let mut socket = TcpStream::connect(address).unwrap();
+    socket.set_read_timeout(Some(wait)).unwrap();
+    socket.write_all(request).unwrap();
+    let mut response = Vec::new();
+    let _ = socket.read_to_end(&mut response);
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+fn page_request(address: &str, token: &str) -> Vec<u8> {
+    format!("GET /{token}/ HTTP/1.1\r\nHost: {address}\r\n\r\n").into_bytes()
+}
+
+/// A connection that sent part of its request line and then went quiet.
+fn stalled(address: &str) -> TcpStream {
+    let mut socket = TcpStream::connect(address).unwrap();
+    socket.write_all(b"GET /").unwrap();
+    socket
+}
+
+#[test]
+fn requests_without_the_token_do_not_count_toward_the_session_cap() {
+    let fixture = Fixture::new();
+    let (_service, address, token) = open_session(&fixture);
+    let tokenless = format!("GET /favicon.ico HTTP/1.1\r\nHost: {address}\r\n\r\n");
+    for _ in 0..SESSION_REQUEST_LIMIT + 4 {
+        let response = exchange(&address, tokenless.as_bytes(), Duration::from_secs(3));
+        assert!(response.starts_with("HTTP/1.1 404 "), "{response}");
+    }
+    let response = exchange(
+        &address,
+        &page_request(&address, &token),
+        Duration::from_secs(3),
+    );
+    assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+}
+
+#[test]
+fn requests_with_the_token_still_end_the_session_at_the_cap() {
+    let fixture = Fixture::new();
+    let (service, address, token) = open_session(&fixture);
+    for _ in 0..SESSION_REQUEST_LIMIT {
+        let response = exchange(
+            &address,
+            &page_request(&address, &token),
+            Duration::from_secs(3),
+        );
+        assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+    }
+    assert!(matches!(
+        service
+            .receiver
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap(),
+        Event::Ended(_)
+    ));
+    assert!(TcpStream::connect(&address).is_err());
+}
+
+#[test]
+fn a_peer_stalling_its_headers_does_not_hold_up_other_requests() {
+    let fixture = Fixture::new();
+    let (_service, address, token) = open_session(&fixture);
+    let quiet: Vec<_> = (1..PENDING_PEER_LIMIT).map(|_| stalled(&address)).collect();
+    let started = Instant::now();
+    let response = exchange(
+        &address,
+        &page_request(&address, &token),
+        Duration::from_secs(2),
+    );
+    assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(quiet);
+}
+
+#[test]
+fn headers_that_miss_their_deadline_are_rejected_before_the_request_time() {
+    let fixture = Fixture::new();
+    let (_service, address, token) = open_session(&fixture);
+    let started = Instant::now();
+    let response = exchange(
+        &address,
+        format!("GET /{token}/ HTTP/1.1\r\nHost: {address}\r\n").as_bytes(),
+        HEADER_TIME + Duration::from_secs(2),
+    );
+    assert!(response.starts_with("HTTP/1.1 400 "), "{response}");
+    assert!(response.contains("Request headers timed out"), "{response}");
+    assert!(started.elapsed() >= HEADER_TIME);
+    assert!(started.elapsed() < HEADER_TIME + Duration::from_secs(2));
+    let response = exchange(
+        &address,
+        &page_request(&address, &token),
+        Duration::from_secs(3),
+    );
+    assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+}
+
+#[test]
+fn an_upload_body_keeps_its_own_time_after_the_headers_arrive() {
+    let fixture = Fixture::new();
+    let (_service, address, token) = open_session(&fixture);
+    let bytes = image(1920, 1080);
+    let mut socket = TcpStream::connect(&address).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    write!(socket, "POST /{token}/upload HTTP/1.1\r\nHost: {address}\r\nX-Astro-Upload: {token}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", bytes.len()).unwrap();
+    thread::sleep(HEADER_TIME + Duration::from_secs(1));
+    socket.write_all(&bytes).unwrap();
+    let mut response = String::new();
+    let _ = socket.read_to_string(&mut response);
+    assert!(response.starts_with("HTTP/1.1 201 "), "{response}");
+    assert_eq!(catalog(&fixture.wallpapers()).len(), 1);
+}
+
+#[test]
+fn one_peer_cannot_hold_more_than_its_share_of_pending_connections() {
+    let fixture = Fixture::new();
+    let (_service, address, token) = open_session(&fixture);
+    let quiet: Vec<_> = (0..PENDING_PEER_LIMIT).map(|_| stalled(&address)).collect();
+    let mut extra = TcpStream::connect(&address).unwrap();
+    extra
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let refused = extra.read(&mut [0; 1]);
+    assert!(
+        matches!(&refused, Ok(0))
+            || refused.as_ref().is_err_and(|error| matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            )),
+        "{refused:?}"
+    );
+    drop(quiet);
+    let response = exchange(
+        &address,
+        &page_request(&address, &token),
+        Duration::from_secs(2),
+    );
+    assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+}
+
+#[test]
+fn pending_connections_are_bounded_across_peers() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let _clients: Vec<_> = (0..=PENDING_LIMIT)
+        .map(|_| TcpStream::connect(address).unwrap())
+        .collect();
+    let mut pending = Pending::default();
+    for index in 0..PENDING_LIMIT {
+        let (stream, _) = listener.accept().unwrap();
+        let peer = Ipv4Addr::new(192, 168, 1, index as u8 + 1);
+        assert!(pending.admit(stream, peer.into()));
+    }
+    let (stream, _) = listener.accept().unwrap();
+    assert!(!pending.admit(stream, Ipv4Addr::new(192, 168, 1, 200).into()));
+}
+
+#[test]
+fn a_browser_loading_the_page_assets_in_parallel_gets_every_one() {
+    let fixture = Fixture::new();
+    let (_service, address, token) = open_session(&fixture);
+    let routes = [
+        "",
+        "app.css",
+        "app.js",
+        "crop.js",
+        "storage.js",
+        "astro-mark.svg",
+    ];
+    let mut sockets: Vec<_> = routes
+        .iter()
+        .map(|_| TcpStream::connect(&address).unwrap())
+        .collect();
+    for (socket, route) in sockets.iter_mut().zip(routes) {
+        write!(
+            socket,
+            "GET /{token}/{route} HTTP/1.1\r\nHost: {address}\r\n\r\n"
+        )
+        .unwrap();
+    }
+    for mut socket in sockets {
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut response = Vec::new();
+        let _ = socket.read_to_end(&mut response);
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+    }
 }

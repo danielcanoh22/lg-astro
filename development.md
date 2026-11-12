@@ -333,7 +333,11 @@ hiding Astro or exiting invalidates the session. On TV, losing focus also closes
 invalidates the session; desktop previews keep it alive when switching to a browser. An unpredictable 128-bit capability
 URL, exact Host/Origin checks, a custom upload header, no CORS, and restrictive browser security
 headers limit access. The 8-character case-sensitive base-58 token has about 47 bits of entropy;
-each session accepts at most 64 local requests and expires after ten minutes. HTTP is **not
+each session accepts at most 64 local requests to its token URL and expires after ten minutes.
+Requests without the token do not count. Headers from every connection are read side by side and
+must arrive within 5 seconds; an upload body then has its own 20 seconds. At most 32 connections
+may still be sending headers, 8 from one address, so a slow or noisy device on the network cannot
+hold up or end the session. HTTP is **not
 encrypted**; use a trusted local network. The URL is not logged.
 The branded code follows the small center-logo approach shown in
 [Vercel's QR example](https://github.com/vercel/examples/tree/main/container-images/demo/apps/qr):
