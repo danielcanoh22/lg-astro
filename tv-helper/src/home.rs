@@ -519,18 +519,10 @@ pub fn load(system: &impl System) -> Result<Option<Config>> {
     config.validate()?;
     Ok(Some(config))
 }
-pub fn dispatch(
-    system: &impl System,
-    command: &str,
-    app: Option<&str>,
-    selected: Option<&str>,
-) -> Result<Value> {
+pub fn dispatch(system: &impl System, command: &str, app: Option<&str>) -> Result<Value> {
     system::root(system)?;
     let saved = load(system)?;
-    let id = selected
-        .filter(|id| !id.is_empty())
-        .or_else(|| saved.as_ref().map(|c| c.home_id.as_str()))
-        .unwrap_or(HOME);
+    let id = HOME;
     let home = Home::new(system, id)?;
     match command {
         "status" => Ok(

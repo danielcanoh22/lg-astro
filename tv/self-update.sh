@@ -89,17 +89,11 @@ launch() {
   printf '%s\n' "$reply" >>"$LOG"
   printf '%s\n' "$reply" | grep -q '"returnValue": *true'
 }
-HOME_ID=$(json_string "$HOME_STATE/state.json" homeId)
-HOME_ID=${HOME_ID:-com.webos.app.home}
-case "$HOME_ID" in
-  com.webos.app.home|com.webos.app.fullhome) ;;
-  *) fail 'The saved Home target is invalid.' ;;
-esac
+HOME_ID=com.webos.app.home
 recover_home() {
-  # Disable must complete, then independently verify both takeover methods are detached.
+  # Disable must complete, then independently verify the staged Home manifest is detached.
   if sh "$HOME_STATE/home.sh" disable >>"$LOG" 2>&1 </dev/null &&
-     ! awk '$2 == "/usr/bin/com.webos.app.home" || $2 == "/usr/palm/applications/com.webos.app.home" || $2 == "/usr/bin/com.webos.app.fullhome" || $2 == "/usr/palm/applications/com.webos.app.fullhome" { found=1 } END { exit !found }' /proc/mounts &&
-     [ ! -e /var/run/astro-home ]; then
+     ! awk '$2 == "/usr/palm/applications/com.webos.app.home" { found=1 } END { exit !found }' /proc/mounts; then
     launch "$HOME_ID" || fail 'LG Home was restored but could not be opened.'
     fail 'Update installed, but Home takeover failed; LG Home restored. Enable Astro Home again to retry.'
   fi
@@ -107,7 +101,7 @@ recover_home() {
 }
 if grep -q '"enabled": *true' "$HOME_STATE/state.json" 2>/dev/null; then
   # Use the NEW scripts: refresh copied helpers and staged manifest as well as the executable.
-  if ! printf 'y\n' | sh "$APP_DIR/home.sh" enable "$APP_DIR" "$HOME_ID" >>"$LOG" 2>&1; then recover_home; fi
+  if ! printf 'y\n' | sh "$APP_DIR/home.sh" enable "$APP_DIR" >>"$LOG" 2>&1; then recover_home; fi
   launch "$HOME_ID" || recover_home
 else
   launch com.danielcanoh22.astro || fail 'Update installed, but Astro could not be opened.'

@@ -14,9 +14,8 @@ function run({
   recover = true,
   launch = true,
   checksum = true,
-  method = 'executable',
-  homeId = 'com.webos.app.home',
   pretty = false,
+  mounted = false,
 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astro-installer-'));
   const app = `${dir}/app`;
@@ -35,9 +34,18 @@ function run({
   );
   write(
     `${homeState}/state.json`,
-    json({ enabled: home, method, homeId, appDir: app, stock: { id: 'x', version: '1.0.0' } }),
+    json({
+      enabled: home,
+      method: 'manifest',
+      homeId: 'com.webos.app.home',
+      appDir: app,
+      stock: { id: 'x', version: '1.0.0' },
+    }),
   );
-  write(`${dir}/mounts`, '');
+  write(
+    `${dir}/mounts`,
+    mounted ? 'none /usr/palm/applications/com.webos.app.home none rw,bind 0 0\n' : '',
+  );
   write(`${bin}/id`, '#!/bin/sh\necho 0\n');
   // The installer must not need the TV's Node runtime.
   write(`${bin}/node`, '#!/bin/sh\nexit 127\n');
@@ -62,8 +70,7 @@ esac
     .replaceAll('/var/lib/astro-update', state)
     .replaceAll('/var/lib/astro-home', homeState)
     .replaceAll('/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro', app)
-    .replaceAll('/proc/mounts', `${dir}/mounts`)
-    .replaceAll('/var/run/astro-home', `${dir}/marker`);
+    .replaceAll('/proc/mounts', `${dir}/mounts`);
   write(`${dir}/installer.sh`, script);
   const attempt = 'a'.repeat(32);
   const sha = checksum ? createHash('sha256').update('test package').digest('hex') : '0'.repeat(64);
@@ -101,41 +108,33 @@ test('checksum and install failures publish retryable failure, never launch', ()
     assert.doesNotMatch(result.calls, /launch/);
   }
 });
-test('both Home methods refresh from the new package and fail visibly when reapply fails', () => {
-  for (const method of ['executable', 'manifest']) {
-    const success = run({ home: true, method });
-    assert.equal(success.status.state, 'success');
-    assert.match(success.calls, /refresh/);
-    const failed = run({ home: true, method, reapply: false });
-    assert.equal(failed.exit, 1);
-    assert.equal(failed.status.state, 'failed');
-    assert.match(failed.status.message, /LG Home restored/);
-    assert.match(failed.calls, /restore[\s\S]*launch.*com.webos.app.home/);
-    const unrecovered = run({ home: true, method, reapply: false, recover: false });
-    assert.equal(unrecovered.status.state, 'failed');
-    assert.doesNotMatch(unrecovered.calls, /launch/);
-  }
+test('Home takeover refreshes from the new package and fails visibly when reapply fails', () => {
+  const success = run({ home: true });
+  assert.equal(success.status.state, 'success');
+  assert.match(success.calls, /refresh/);
+  const failed = run({ home: true, reapply: false });
+  assert.equal(failed.exit, 1);
+  assert.equal(failed.status.state, 'failed');
+  assert.match(failed.status.message, /LG Home restored/);
+  assert.match(failed.calls, /restore[\s\S]*launch.*com.webos.app.home/);
+  const unrecovered = run({ home: true, reapply: false, recover: false });
+  assert.equal(unrecovered.status.state, 'failed');
+  assert.doesNotMatch(unrecovered.calls, /launch/);
+});
+test('a Home manifest still mounted after disable is not reported as restored', () => {
+  const result = run({ home: true, reapply: false, mounted: true });
+  assert.equal(result.exit, 1);
+  assert.equal(result.status.state, 'failed');
+  assert.match(result.status.message, /needs attention/);
+  assert.doesNotMatch(result.calls, /launch/);
 });
 test('a rejected launch is not reported as a successful update', () => {
   assert.equal(run({ launch: false }).status.state, 'failed');
 });
 
-test('fullhome remains the launch and recovery target after an update', () => {
-  const homeId = 'com.webos.app.fullhome';
-  const success = run({ home: true, homeId });
-  assert.equal(success.status.state, 'success');
-  assert.match(success.calls, /launch.*com.webos.app.fullhome/);
-  assert.doesNotMatch(success.calls, /launch.*com.webos.app.home/);
-  const failed = run({ home: true, homeId, reapply: false });
-  assert.match(failed.status.message, /LG Home restored/);
-  assert.match(failed.calls, /restore[\s\S]*launch.*com.webos.app.fullhome/);
-});
-
-test('pretty-printed manifests and old configurations without a target are read without Node', () => {
-  for (const homeId of ['com.webos.app.fullhome', undefined]) {
-    const result = run({ home: true, homeId, pretty: true });
-    assert.equal(result.exit, 0, result.status.message);
-    assert.equal(result.status.state, 'success');
-    assert.match(result.calls, new RegExp(`launch.*${homeId ?? 'com.webos.app.home'}"`));
-  }
+test('pretty-printed manifests are read without Node', () => {
+  const result = run({ home: true, pretty: true });
+  assert.equal(result.exit, 0, result.status.message);
+  assert.equal(result.status.state, 'success');
+  assert.match(result.calls, /launch.*com.webos.app.home"/);
 });

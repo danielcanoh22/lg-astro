@@ -12,27 +12,13 @@ COMMAND=${1:-boot}
 case "$COMMAND" in
   # fallback: LG Home until the next boot, started by Astro after repeated failed starts.
   enable|disable|restore|status|apply|boot|fallback) ;;
-  *) printf '%s\n' 'Usage: home.sh enable [APP_DIR] [HOME_ID] | disable | restore | status' >&2; exit 1 ;;
+  *) printf '%s\n' 'Usage: home.sh enable [APP_DIR] | disable | restore | status' >&2; exit 1 ;;
 esac
 [ "$(id -u)" = 0 ] || { printf '%s\n' 'Run as root.' >&2; exit 1; }
 # boot only schedules the copied $STATE/home.sh apply, which checks for the helper itself.
 [ "$COMMAND" = boot ] || [ -x "$SCRIPT_DIR/astro-helper" ] ||
   { printf '%s\n' 'The native Astro TV helper is missing.' >&2; exit 1; }
-if [ "$COMMAND" = enable ] && grep -q 'release [569]\.' /etc/starfish-release 2>/dev/null; then
-  printf '%s\n' \
-    'Enabling Astro Home (webOS 5/6/24) will:' \
-    '  1. Close any running normal Astro instance.' \
-    "  2. Create $STATE with integration scripts and saved state." \
-    "  3. Bind-mount Astro's executable over the selected LG Home executable." \
-    "     LG's Home manifest and role stay; Astro registers with SAM itself." \
-    '  4. Stop the previous Home process and launch Astro as Home.' \
-    '  5. Install /var/lib/webosbrew/init.d/64-astro-home to reapply the mount at cold boot.' \
-    '' \
-    "LG Home's original executable remains underneath the mount." \
-    'Home Auto Launch and Quick Start+ retain their current settings.' \
-    "Restore LG Home with: sh $STATE/home.sh disable" \
-    ''
-elif [ "$COMMAND" = enable ]; then
+if [ "$COMMAND" = enable ]; then
   printf '%s\n' \
     'Enabling Astro Home will:' \
     '  1. Close any running normal Astro instance.' \
@@ -46,10 +32,6 @@ elif [ "$COMMAND" = enable ]; then
     'Home Auto Launch and Quick Start+ retain their current settings.' \
     "Restore LG Home with: sh $STATE/home.sh disable" \
     ''
-fi
-if [ "$COMMAND" = enable ]; then
-  printf '%s\n' "Selected Home target: ${3:-saved target, otherwise com.webos.app.home}"
-
   while :; do
     printf '%s' 'Apply these changes? [y/n]: '
     if ! IFS= read -r answer; then
@@ -88,4 +70,4 @@ if [ "$COMMAND" = boot ]; then
 fi
 exec 9>"$STATE/lock"
 flock -n 9 || { printf '%s\n' 'Astro Home integration is already being changed.' >&2; exit 1; }
-exec "$SCRIPT_DIR/astro-helper" home "$COMMAND" "${2:-$SCRIPT_DIR}" "${3:-}"
+exec "$SCRIPT_DIR/astro-helper" home "$COMMAND" "${2:-$SCRIPT_DIR}"
