@@ -1038,6 +1038,60 @@ fn stage_uses_the_package_splash_when_the_upload_splash_is_unusable() {
 }
 
 #[test]
+fn the_package_directory_is_never_storage_for_uploaded_splashes() {
+    let f = Fixture::new();
+    enabled_stage(&f);
+    f.put_json(
+        &format!("{DIR}/preferences.json"),
+        json!({"splash_background":UPLOAD}),
+    );
+    f.put(
+        &format!("{DIR}/wallpapers/{UPLOAD}/splash.png"),
+        &splash_png(1920, 1080, b"package"),
+    );
+    assert!(files::sync_splash(&f, Path::new(DIR), UPLOAD).is_err());
+    assert_eq!(f.read(&format!("{DIR}/splash.png")), b"default");
+    files::stage_splash(&f, Path::new(DIR)).unwrap();
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"default");
+}
+
+#[test]
+fn storage_under_a_symlinked_system_directory_still_provides_uploaded_splashes() {
+    let f = Fixture::new();
+    let production = format!("/media/cryptofs/apps/usr/palm/applications/{APP}");
+    f.put_json(
+        &format!("{production}/appinfo.json"),
+        json!({"id":APP,"type":"native","main":"astro"}),
+    );
+    f.put(&format!("{production}/splash.png"), b"default");
+    let image = splash_png(1920, 1080, b"internal");
+    f.put_json(
+        &format!("/real-internal/.{APP}/preferences.json"),
+        json!({"splash_background":UPLOAD}),
+    );
+    f.put(
+        &format!("/real-internal/.{APP}/wallpapers/{UPLOAD}/splash.png"),
+        &image,
+    );
+    fs::create_dir_all(f.p("/media")).unwrap();
+    system::link(&f, "/real-internal", "/media/internal").unwrap();
+    files::sync_splash(&f, Path::new(&production), UPLOAD).unwrap();
+    assert_eq!(f.read(&format!("{production}/splash.png")), image);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn opened_files_are_located_by_the_kernel_not_by_the_requested_path() {
+    let f = Fixture::new();
+    f.put("/real/splash.png", b"image");
+    system::link(&f, "/real", "/linked").unwrap();
+    let real = f.p("/real/splash.png");
+    let file = fs::File::open(f.p("/linked/splash.png")).unwrap();
+    assert!(!files::opened_at(&file, &f.p("/linked/splash.png")));
+    assert!(files::opened_at(&file, &real));
+}
+
+#[test]
 fn uninstall_requires_matching_completion_not_just_acceptance() {
     let mut s = uninstall::Stream::default();
     assert!(!s.feed(br#"{"returnValue":true}"#, false, "sample").unwrap());

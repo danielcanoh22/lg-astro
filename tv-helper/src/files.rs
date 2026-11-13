@@ -123,8 +123,8 @@ pub fn sync_splash(system: &impl System, directory: &Path, background: &str) -> 
     let image = if valid_upload(background) {
         // The first ranked storage that holds this upload, as native preferences select it.
         let storage = preference_files(system, directory)
-            .into_iter()
-            .filter_map(|path| path.parent().map(Path::to_path_buf))
+            .iter()
+            .filter_map(|path| storage_of(path, directory).map(Path::to_path_buf))
             .find(|storage| system::exists(system, storage.join("wallpapers").join(background)))
             .ok_or("Uploaded background unavailable")?;
         uploaded_splash(system, &storage, background)?
@@ -198,6 +198,19 @@ fn uploaded_splash(system: &impl System, storage: &Path, id: &str) -> Result<Vec
         }
     }
     let _ = owner;
+    // A directory component swapped for a symlink after its own check would redirect the
+    // open: ask where the opened file really is. The storage's parent is a system directory
+    // that may itself be reached through a symlink, so it is compared resolved.
+    let parent = storage.parent().ok_or("Invalid storage directory")?;
+    let expected = fs::canonicalize(system.path(parent))
+        .map_err(|e| e.to_string())?
+        .join(storage.file_name().ok_or("Invalid storage directory")?)
+        .join("wallpapers")
+        .join(id)
+        .join("splash.png");
+    if !opened_at(&file, &expected) {
+        return Err("Uploaded splash moved while it was opened".into());
+    }
     let bytes = system::read_open(file, SPLASH_LIMIT)?;
     let png = bytes.len() >= 24
         && bytes.starts_with(b"\x89PNG\r\n\x1a\n")
@@ -208,6 +221,28 @@ fn uploaded_splash(system: &impl System, storage: &Path, id: &str) -> Result<Vec
         return Err("Uploaded splash is not a 1920x1080 PNG".into());
     }
     Ok(bytes)
+}
+/// Whether an opened file is the one at `path` (an absolute path without symlinks), according
+/// to the kernel. Elsewhere than Linux there is no such record, and this only accepts.
+pub(crate) fn opened_at(file: &fs::File, path: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+            .is_ok_and(|opened| opened == path)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (file, path);
+        true
+    }
+}
+/// The storage directory a `preferences.json` candidate belongs to; never the package itself,
+/// whose legacy preferences file does not make it a place for uploaded backgrounds.
+fn storage_of<'a>(preferences: &'a Path, directory: &Path) -> Option<&'a Path> {
+    (preferences != directory.join("preferences.json"))
+        .then(|| preferences.parent())
+        .flatten()
 }
 /// Ranked `preferences.json` candidates: the same app-owned storage precedence as native
 /// preferences, root-owned directories after the others, symlinked storage directories never
@@ -269,7 +304,7 @@ pub(crate) fn stage_splash(system: &impl System, directory: &Path) -> Result<()>
     let bytes = if valid_upload(&background) {
         preferences
             .as_deref()
-            .and_then(Path::parent)
+            .and_then(|preferences| storage_of(preferences, directory))
             .ok_or_else(|| "Missing storage".to_string())
             .and_then(|storage| uploaded_splash(system, storage, &background))
             .or_else(|_| fallback())?
