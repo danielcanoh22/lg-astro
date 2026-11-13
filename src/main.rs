@@ -96,10 +96,8 @@ impl Options {
                 let metadata: serde_json::Value =
                     serde_json::from_str(&argument).map_err(|error| error.to_string())?;
                 // Astro's staged Home manifest passes "nid".
-                result.webos_home = metadata
-                    .get("nid")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(platform::is_home_id);
+                result.webos_home = metadata.get("nid").and_then(serde_json::Value::as_str)
+                    == Some(platform::HOME_ID);
                 result.launched_by_home = platform::launched_by_home(&metadata);
                 result.preloaded = platform::preloaded(&metadata);
             }
