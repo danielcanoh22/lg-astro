@@ -77,6 +77,10 @@ backend. Avoid copying the whole SDK library directory or the TV's graphics driv
 uses isolated temporary preferences, sample inventory and a fixed date/time, and captures actual
 1920×1080 OpenGL framebuffers. It does not execute the test suites. A desktop display is required; on headless Linux use
 `xvfb-run -a pnpm screenshots`. These images document the native design, not TV hardware behavior.
+To show an uploaded background instead of `dunes`, copy its folder from the TV
+(`/media/developer/com.danielcanoh22.astro/wallpapers/custom-<id>`) and set
+`ASTRO_SCREENSHOT_BACKGROUND` to that folder; the script copies it into the temporary storage and
+selects it.
 
 ### Input
 
