@@ -217,8 +217,8 @@ Open [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop), conn
 IP on port **22** as **root**, and install the IPK. Open **Astro** from the TV menu. Homebrew
 Channel must be elevated.
 
-The native package uses **`com.danielcanoh22.astro`**. Native preferences are local JSON files
-and are separate for each installation.
+The native package uses **`com.danielcanoh22.astro`**. Preferences and uploaded backgrounds are
+stored in `/media/developer/com.danielcanoh22.astro`.
 
 Wait for installation success; Ctrl+C closes an ongoing subscription. Fully close and reopen
 Astro after updating. The [development guide](development.md#tv-startup-diagnostics) has a jailed
