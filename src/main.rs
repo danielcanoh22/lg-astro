@@ -95,17 +95,11 @@ impl Options {
             if let Some(argument) = args.next() {
                 let metadata: serde_json::Value =
                     serde_json::from_str(&argument).map_err(|error| error.to_string())?;
-                // Astro's own Home manifest passes "nid"; LG's Home manifest (Astro run in
-                // place of LG's Home executable) passes "appId" with lifecycle v2.
+                // Astro's staged Home manifest passes "nid".
                 result.webos_home = metadata
                     .get("nid")
                     .and_then(serde_json::Value::as_str)
-                    .is_some_and(platform::is_home_id)
-                    || metadata
-                        .get("appId")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(platform::is_home_id)
-                    || platform::runs_as_lg_home();
+                    .is_some_and(platform::is_home_id);
                 result.launched_by_home = platform::launched_by_home(&metadata);
                 result.preloaded = platform::preloaded(&metadata);
             }
@@ -654,15 +648,10 @@ fn next_prewarm(
 
 fn run() -> Result<(), String> {
     let startup = Instant::now();
-    // In place of LG's Home, before parsing, so option errors are kept too.
-    #[cfg(all(feature = "webos", unix))]
-    if platform::runs_as_lg_home() {
-        log_home_output();
-    }
     let mut options = Options::parse()?;
-    // A staged Home manifest (webOS 10/11) is only recognised from its launch parameters.
+    // The staged Home manifest is only recognised from its launch parameters.
     #[cfg(all(feature = "webos", unix))]
-    if options.webos_home && !platform::runs_as_lg_home() {
+    if options.webos_home {
         log_home_output();
     }
     let webos = cfg!(feature = "webos");
@@ -687,7 +676,7 @@ fn run() -> Result<(), String> {
             return Ok(());
         }
         let surface_id = if options.webos_home {
-            platform::home_id()
+            platform::HOME_ID
         } else {
             platform::APP_ID
         };
@@ -712,11 +701,6 @@ fn run() -> Result<(), String> {
         // SDL suspends the screen saver unless this hint allows it: LG's screen saver never
         // started while Astro was in front. A launcher has no video to protect.
         sdl2::hint::set("SDL_VIDEO_ALLOW_SCREENSAVER", "1");
-        // In place of LG's Home executable, SDL's own registration cannot reach the bus under
-        // LG's Home role; Astro registers with sam itself below (lifecycle v2).
-        if platform::runs_as_lg_home() {
-            sdl2::hint::set("SDL_WEBOS_REGISTER_APP", "0");
-        }
     }
     // Resolve the local offset before artwork, HTTP or platform workers start.
     let local_offset = OffsetDateTime::now_local()
@@ -927,7 +911,7 @@ fn run() -> Result<(), String> {
     let mut events = sdl.event_pump()?;
     // Lifecycle as Home: sam sends "relaunch" (bring the running Astro to the front) instead of
     // killing and restarting it, and "close" when it wants Astro to exit. `end_registration`
-    // drops a staged Home's registration (webOS 10/11) if a relaunch did not reach the front.
+    // drops the staged Home's registration if a relaunch did not reach the front.
     type EndRegistration = Box<dyn Fn()>;
     #[cfg(not(all(feature = "webos", target_os = "linux", target_arch = "arm")))]
     let (lifecycle_event, end_registration): (Option<u32>, Option<EndRegistration>) = (None, None);
@@ -955,33 +939,7 @@ fn run() -> Result<(), String> {
             };
             // SAFETY: geteuid has no preconditions.
             let as_root = unsafe { libc::geteuid() } == 0;
-            if platform::runs_as_lg_home() {
-                // In place of LG's Home executable (webOS 5/6), LG's role is bound to that path,
-                // so Astro registers through lifecycle v2 on its own connection.
-                let push = pusher(subsystem.event_sender());
-                luna::subscribe(
-                    Some(platform::home_id()),
-                    "luna://com.webos.applicationManager/registerApp",
-                    &serde_json::json!({"id": platform::home_id()}),
-                    // sam answers "registered" at once; without it sam would end Home later.
-                    Duration::from_secs(10),
-                    move |message| {
-                        eprintln!("Astro lifecycle: {message}");
-                        let refused = message
-                            .get("returnValue")
-                            .and_then(serde_json::Value::as_bool)
-                            == Some(false);
-                        match platform::Lifecycle::from_reply(&message) {
-                            Some(lifecycle) => push(lifecycle),
-                            // Registration lost (e.g. sam restarted): quit, so sam starts Home
-                            // afresh.
-                            None if refused => push(platform::Lifecycle::Close),
-                            None => {}
-                        }
-                    },
-                )?;
-                (Some(event_type), None)
-            } else if !as_root {
+            if !as_root {
                 (None, None)
             } else if std::path::Path::new(platform::HOME_LIFECYCLE_OFF).exists() {
                 eprintln!(
@@ -990,14 +948,14 @@ fn run() -> Result<(), String> {
                 );
                 (None, None)
             } else {
-                // A staged Home manifest (webOS 10/11) runs Astro's own executable as root under
-                // LG's app-ID based Home role, which Astro's connection cannot claim. Hold the
-                // registration as that app through `luna-send -a`; sam then expects lifecycle v1.
-                // This does not wait for sam: until it answers, Home is simply unregistered.
+                // The staged Home manifest runs Astro's own executable as root under LG's app-ID
+                // based Home role, which Astro's connection cannot claim. Hold the registration
+                // as that app through `luna-send -a`; sam then expects lifecycle v1. This does
+                // not wait for sam: until it answers, Home is simply unregistered.
                 let push = pusher(subsystem.event_sender());
                 let close = pusher(subsystem.event_sender());
                 match luna::subscribe_as_app(
-                    platform::home_id(),
+                    platform::HOME_ID,
                     "luna://com.webos.applicationManager/registerNativeApp",
                     &serde_json::json!({}),
                     Duration::from_secs(10),
