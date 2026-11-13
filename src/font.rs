@@ -1,4 +1,7 @@
-//! Lazy TTF metrics and individual outlines; never preprocess an entire font.
+//! Reads TrueType metrics and individual glyph outlines on demand.
+//!
+//! Glyphs are outlined and tessellated one at a time as text needs them; the font is never
+//! preprocessed as a whole, which keeps CJK coverage cheap until it is used.
 use astro_vector_geometry::{self as geometry, Vertex};
 use geometry::lyon_tessellation::{
     FillRule,
@@ -7,26 +10,35 @@ use geometry::lyon_tessellation::{
 };
 use owned_ttf_parser::{AsFaceRef, GlyphId, OutlineBuilder, OwnedFace};
 
+/// A parsed TrueType face; metrics are scaled to the requested size in pixels.
 pub struct Font {
     face: OwnedFace,
 }
 
+/// Vertical metrics in pixels at a size; `descent` is negative below the baseline.
 pub struct LineMetrics {
     pub ascent: f32,
     pub descent: f32,
 }
 
+/// Horizontal metrics of one character in pixels at a size.
 pub struct Metrics {
     pub advance_width: f32,
 }
 
 impl Font {
+    /// Parses the first face of a font file.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the data is not a valid TrueType or OpenType font.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, String> {
         OwnedFace::from_vec(bytes, 0)
             .map(|face| Self { face })
             .map_err(|e| e.to_string())
     }
 
+    /// Returns the glyph for a character, or 0 (`.notdef`) when the font lacks it.
     pub fn lookup_glyph_index(&self, character: char) -> u16 {
         self.face
             .as_face_ref()
@@ -34,6 +46,7 @@ impl Font {
             .map_or(0, |id| id.0)
     }
 
+    /// Returns the ascent and descent at `size` pixels per em; always `Some`.
     pub fn horizontal_line_metrics(&self, size: f32) -> Option<LineMetrics> {
         let face = self.face.as_face_ref();
         let scale = size / f32::from(face.units_per_em());
@@ -43,6 +56,7 @@ impl Font {
         })
     }
 
+    /// Returns the advance width of a character at `size` pixels per em.
     pub fn metrics(&self, character: char, size: f32) -> Metrics {
         let face = self.face.as_face_ref();
         let glyph = GlyphId(self.lookup_glyph_index(character));
@@ -52,6 +66,7 @@ impl Font {
         }
     }
 
+    /// Returns the pair adjustment at `size` pixels per em from the legacy `kern` table, if any.
     pub fn horizontal_kern(&self, left: char, right: char, size: f32) -> Option<f32> {
         let face = self.face.as_face_ref();
         let left = face.glyph_index(left)?;
@@ -67,6 +82,13 @@ impl Font {
         None
     }
 
+    /// Tessellates a character's outline in ems with y pointing down, origin on the baseline.
+    ///
+    /// Characters without an outline, such as spaces, return no vertices.
+    ///
+    /// # Errors
+    ///
+    /// Fails when [`geometry::tessellate`] rejects the outline.
     pub fn geometry(&self, character: char) -> Result<Vec<Vertex>, String> {
         let face = self.face.as_face_ref();
         let mut outline = GlyphOutline {
@@ -87,6 +109,7 @@ impl Font {
     }
 }
 
+/// Converts font-unit outline callbacks into a lyon path in ems, flipping y to point down.
 struct GlyphOutline {
     builder: Builder,
     scale: f32,

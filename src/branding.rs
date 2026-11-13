@@ -1,16 +1,27 @@
-//! Curated artwork is an exact application-ID allowlist. Inventory titles and
-//! partial ID matches must never replace another application's installed icon.
+//! Lists the curated brands whose bundled vector logos replace installed app artwork.
+//!
+//! Curated artwork is an exact application-ID allowlist. Inventory titles and partial ID matches
+//! must never replace another application's installed icon. Every brand has a logo at
+//! `assets/logos/<key>.svg` and a desktop demo app.
+/// One curated brand.
 #[derive(Debug)]
 pub struct Brand {
+    /// The logo file stem and the stable brand identifier.
     pub key: &'static str,
+    /// The display name used for desktop demo apps.
     pub title: &'static str,
+    /// The exact webOS app IDs that show this brand.
     pub ids: &'static [&'static str],
+    /// The category assigned to matching apps.
     pub category: &'static str,
 }
 
 impl Brand {
-    /// Optical bounds, rather than a shared bounding box: heavy wordmarks need
-    /// more breathing room than wide, fine-lettered logos such as YouTube.
+    /// Returns the logo's width as a fraction of the card and its height in logical pixels on a
+    /// full-size card face.
+    ///
+    /// These are optical bounds, rather than a shared bounding box: heavy wordmarks need more
+    /// breathing room than wide, fine-lettered logos such as YouTube.
     pub fn artwork_size(&self) -> (f32, f32) {
         match self.key {
             "netflix" => (0.76, 88.),
@@ -36,6 +47,7 @@ impl Brand {
     }
 }
 
+/// Builds a streaming brand.
 const fn video(key: &'static str, title: &'static str, ids: &'static [&'static str]) -> Brand {
     Brand {
         key,
@@ -44,6 +56,7 @@ const fn video(key: &'static str, title: &'static str, ids: &'static [&'static s
         category: "Streaming",
     }
 }
+/// Builds a music brand.
 const fn music(key: &'static str, title: &'static str, ids: &'static [&'static str]) -> Brand {
     Brand {
         key,
@@ -53,6 +66,7 @@ const fn music(key: &'static str, title: &'static str, ids: &'static [&'static s
     }
 }
 
+/// Every curated brand; each app ID appears at most once.
 pub const BRANDS: &[Brand] = &[
     video("live-tv", "Live TV", &["com.webos.app.livetv"]),
     Brand {
@@ -141,10 +155,12 @@ pub const BRANDS: &[Brand] = &[
     video("tv2-play", "TV 2 Play", &["tv2sumo"]),
 ];
 
+/// Returns the brand whose allowlist contains exactly `id`.
 pub fn for_app(id: &str) -> Option<&'static Brand> {
     BRANDS.iter().find(|brand| brand.ids.contains(&id))
 }
 
+/// Returns the brand with this logo key.
 pub fn for_key(key: &str) -> Option<&'static Brand> {
     BRANDS.iter().find(|brand| brand.key == key)
 }

@@ -1,5 +1,7 @@
-//! Decodes raster images (wallpapers, thumbnails, Recents previews) on a worker thread, so
-//! the SDL thread only uploads finished pixels to the GPU.
+//! Decodes raster images (wallpapers, thumbnails, Recents previews) on a worker thread.
+//!
+//! The SDL thread only queues paths and uploads finished pixels to the GPU; each reply wakes the
+//! event loop through [`crate::wake::wake`].
 use std::{
     fs,
     io::{Cursor, Read},
@@ -11,13 +13,16 @@ use std::{
 
 /// Largest accepted width or height: 4K wallpaper variants are 3840 × 2160.
 const MAX_DIMENSION: u32 = 4096;
+/// Largest accepted file size.
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 /// Decoder allocation cap: a 4096 × 4096 RGBA frame plus decoder working memory.
 const MAX_ALLOC: u64 = 80 * 1024 * 1024;
 
+/// Decoded 8-bit pixels, tightly packed, ready for a texture upload.
 pub enum Pixels {
     /// Opaque images keep three channels: a quarter less memory and no RGBA expansion.
     Rgb(image::RgbImage),
+    /// Images with an alpha channel, not premultiplied.
     Rgba(image::RgbaImage),
 }
 
@@ -40,6 +45,7 @@ impl Pixels {
         matches!(self, Self::Rgba(_))
     }
 
+    /// Returns the packed rows, top row first.
     pub fn raw(&self) -> &[u8] {
         match self {
             Self::Rgb(image) => image.as_raw(),
@@ -48,6 +54,7 @@ impl Pixels {
     }
 }
 
+/// A worker reply: the requested path and its pixels, or `None` when decoding failed.
 pub struct Decoded {
     pub path: String,
     pub pixels: Option<Pixels>,
@@ -55,6 +62,11 @@ pub struct Decoded {
 
 /// Reads an image file without following a final symlink, bounded in file size, dimensions
 /// and decoder allocations.
+///
+/// # Errors
+///
+/// Fails when the path is not a regular file, exceeds [`MAX_FILE_BYTES`], [`MAX_DIMENSION`] or
+/// [`MAX_ALLOC`], or cannot be read or decoded.
 pub fn decode(path: &Path) -> Result<Pixels, String> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
@@ -103,16 +115,19 @@ pub fn decode(path: &Path) -> Result<Pixels, String> {
     })
 }
 
+/// The handle to the `astro-images` decoding worker, which decodes requests in order.
 pub struct Loader {
     requests: Option<mpsc::Sender<String>>,
     replies: mpsc::Receiver<Decoded>,
 }
 
 impl Loader {
+    /// Starts the worker with the bounded file [`decode`].
     pub fn new() -> Self {
         Self::with_decoder(|path| decode(Path::new(path)))
     }
 
+    /// Starts the worker with a custom decoder; tests inject failing or slow ones.
     fn with_decoder(decoder: impl Fn(&str) -> Result<Pixels, String> + Send + 'static) -> Self {
         let (requests, queue) = mpsc::channel::<String>();
         let (sender, replies) = mpsc::channel();
@@ -143,14 +158,15 @@ impl Loader {
         }
     }
 
-    /// Queues a decode. `false` when the worker is unavailable, so the caller can decode
-    /// on its own thread instead of waiting forever.
+    /// Queues a decode, returning `false` when the worker is unavailable so the caller can
+    /// decode on its own thread instead of waiting forever.
     pub fn request(&self, path: &str) -> bool {
         self.requests
             .as_ref()
             .is_some_and(|requests| requests.send(path.into()).is_ok())
     }
 
+    /// Returns a finished decode without blocking.
     pub fn try_recv(&self) -> Option<Decoded> {
         self.replies.try_recv().ok()
     }

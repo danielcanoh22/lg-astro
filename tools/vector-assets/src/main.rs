@@ -1,4 +1,13 @@
-//! Host-only SVG compiler. No XML parser or tessellator is linked into the TV app.
+//! Compiles standalone SVG icons and logos into `.lvec` triangle meshes at build time.
+//!
+//! The compiler runs only on the host, from `tools/vector-assets.mjs` during `pnpm assets`, so no
+//! SVG parser runs on the TV. Usage: `vector-assets <manifest.json>`, where the manifest is a JSON
+//! array of [`Asset`] entries.
+//!
+//! Each `.lvec` file holds the [`MAGIC`] tag, the little-endian `f32` width and height of the
+//! artwork, a `u32` vertex count and that many vertices of nine little-endian `f32`: position
+//! (x, y) in artwork units, fringe offset (x, y) in physical pixels, straight RGBA colour and edge
+//! coverage. Every three vertices form a triangle. The TV app reads it with `vector::Mesh::load`.
 use astro_vector_geometry as geometry;
 use astro_vector_geometry::lyon_tessellation::{
     FillRule,
@@ -12,22 +21,33 @@ use usvg::{
     tiny_skia_path::{PathSegment, Transform},
 };
 
+/// The format tag at the start of every `.lvec` file.
 const MAGIC: &[u8; 8] = b"ASTRVEC1";
+/// The vertex budget of one asset; the TV app rejects larger meshes too.
 const MAX_VERTICES: usize = 1_000_000;
 
+/// One manifest entry.
 #[derive(Deserialize)]
 struct Asset {
+    /// The SVG to compile.
     source: PathBuf,
+    /// The `.lvec` file to write; parent directories are created.
     output: PathBuf,
+    /// Paints every colour white, keeping its opacity.
     #[serde(default)]
     monochrome: bool,
+    /// Paints only near-black colours (every channel below 80) white.
     #[serde(default)]
     light_ink: bool,
+    /// Crops the artwork to its geometry instead of the SVG canvas.
     #[serde(default)]
     trim: bool,
+    /// The largest on-screen size, in pixels, that the flattening tolerance and stroke outlines
+    /// are computed for.
     reference_size: f32,
 }
 
+/// A tessellated vertex before its colour is sampled; mirrors [`geometry::Vertex`].
 #[derive(Clone, Copy)]
 struct Vertex {
     position: Point,
@@ -48,6 +68,7 @@ impl Vertex {
     }
 }
 
+/// Samples one fill or stroke paint at canvas positions.
 struct Painter<'a> {
     paint: &'a Paint,
     inverse: Transform,
@@ -57,6 +78,12 @@ struct Painter<'a> {
 }
 
 impl Painter<'_> {
+    /// Returns the straight RGBA colour of the paint at a canvas position, evaluating gradients
+    /// in their own coordinate space.
+    ///
+    /// # Errors
+    ///
+    /// Fails for patterns, gradients without stops and singular transforms.
     fn color(&self, position: Point) -> Result<[f32; 4], String> {
         let mut p = usvg::tiny_skia_path::Point::from_xy(position.x, position.y);
         self.inverse.map_point(&mut p);
@@ -86,6 +113,8 @@ impl Painter<'_> {
                     .invert()
                     .ok_or("Singular SVG gradient transform")?
                     .map_point(&mut p);
+                // The ray from the focal point through p meets the outer circle at
+                // focal + lambda * (p - focal); p lies at t = 1 / lambda along that ray.
                 let dx = p.x - gradient.fx();
                 let dy = p.y - gradient.fy();
                 let fx = gradient.fx() - gradient.cx();
@@ -135,6 +164,7 @@ impl Painter<'_> {
         Ok(self.finish(last.color(), self.opacity * last.opacity().get()))
     }
 
+    /// Converts an SVG colour, applying the asset's monochrome or light-ink recolouring.
     fn finish(&self, color: usvg::Color, opacity: f32) -> [f32; 4] {
         if self.monochrome || (self.light_ink && color.red.max(color.green).max(color.blue) < 80) {
             [1., 1., 1., opacity]
@@ -149,6 +179,7 @@ impl Painter<'_> {
     }
 }
 
+/// Collects the coloured triangles of one asset in paint order.
 struct Compiler {
     vertices: Vec<[f32; 9]>,
     tolerance: f32,
@@ -158,6 +189,12 @@ struct Compiler {
 }
 
 impl Compiler {
+    /// Compiles a group's paths in document order.
+    ///
+    /// # Errors
+    ///
+    /// Fails for clips, masks, filters, group opacity, embedded images and text, which a flat
+    /// triangle mesh cannot reproduce.
     fn group(&mut self, group: &usvg::Group) -> Result<(), String> {
         if group.clip_path().is_some() || group.mask().is_some() || !group.filters().is_empty() {
             return Err("Clips, masks and filters are not supported by vector artwork".into());
@@ -209,6 +246,7 @@ impl Compiler {
         Ok(())
     }
 
+    /// Outlines a stroke as a fill, flattening joins, caps and dashes for [`Asset::reference_size`].
     fn stroke(&mut self, path: &usvg::Path) -> Result<(), String> {
         if let Some(stroke) = path.stroke() {
             let transform = path.abs_transform();
@@ -235,6 +273,7 @@ impl Compiler {
         Ok(())
     }
 
+    /// Tessellates one path in canvas space and colours its triangles.
     fn path(
         &mut self,
         data: &usvg::tiny_skia_path::Path,
@@ -300,6 +339,14 @@ impl Compiler {
         Ok(())
     }
 
+    /// Emits one triangle with per-vertex colours.
+    ///
+    /// Gradient-painted triangles are split into four, up to eight levels deep, until linear
+    /// colour interpolation stays within 1/512 of the gradient at the centre and edge midpoints.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the asset exceeds [`MAX_VERTICES`] or a colour cannot be sampled.
     fn triangle(
         &mut self,
         vertices: [Vertex; 3],
@@ -371,6 +418,11 @@ impl Compiler {
     }
 }
 
+/// Compiles every asset in the manifest named by the first argument.
+///
+/// # Errors
+///
+/// Fails on the first unreadable or unsupported SVG, empty or non-finite geometry, or write error.
 fn run() -> Result<(), String> {
     let manifest = std::env::args()
         .nth(1)

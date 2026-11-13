@@ -1,10 +1,14 @@
-//! Presentation pacing is measured only in forced-redraw profiling mode. Idle
-//! wakeups are not frames, and CPU submission time is not a GPU timestamp.
+//! Records frame pacing and per-frame timings for `--profile-frames` diagnostics.
+//!
+//! Presentation pacing is measured only in forced-redraw profiling mode. Idle wakeups are not
+//! frames, and CPU submission time is not a GPU timestamp.
 use serde::Serialize;
 use std::time::Instant;
 
+/// Presentations ignored at the start, while caches and the driver warm up.
 const WARMUP: usize = 10;
 
+/// Accumulates swap-to-swap intervals and frame timings after [`WARMUP`].
 #[derive(Default)]
 pub struct Profile {
     presented: usize,
@@ -16,16 +20,24 @@ pub struct Profile {
 /// One profiled frame: where its time went (milliseconds) and how much of it was redrawn.
 #[derive(Clone, Copy, Serialize)]
 pub struct Frame {
+    /// Time since the previous presentation; set by [`Profile::record`].
     pub interval_ms: f64,
+    /// Building the scene's draw commands.
     pub compose_ms: f64,
+    /// Issuing the GL commands, as CPU time.
     pub render_ms: f64,
+    /// The buffer swap.
     pub swap_ms: f64,
+    /// The redrawn share of the window, from 0 to 1.
     pub redrawn: f64,
-    /// First-use work inside render_ms: glyph outlines, logo meshes, images.
+    /// First-use work inside `render_ms`: tessellating new glyph outlines.
     pub glyph_ms: f64,
+    /// First-use work inside `render_ms`: loading new logo meshes.
     pub vector_ms: f64,
+    /// GPU uploads of images decoded since the previous frame.
     pub image_ms: f64,
 }
+/// Statistics over a series of millisecond samples.
 #[derive(Serialize)]
 pub struct Timing {
     pub samples: usize,
@@ -33,6 +45,7 @@ pub struct Timing {
     pub p95_ms: f64,
     pub max_ms: f64,
 }
+/// The `profile` section of the diagnostics JSON.
 #[derive(Serialize)]
 pub struct Summary {
     pub presented: usize,
@@ -42,6 +55,11 @@ pub struct Summary {
     pub timeline: Vec<Frame>,
 }
 impl Profile {
+    /// Records one presentation at `now`.
+    ///
+    /// The interval is kept only after [`WARMUP`] presentations and when `exclude` is false, as
+    /// for a frame stalled by a screenshot capture; either way `now` becomes the next interval's
+    /// start.
     pub fn record(&mut self, now: Instant, cpu_ms: f64, exclude: bool, mut frame: Frame) {
         self.presented += 1;
         if self.presented > WARMUP
@@ -55,6 +73,7 @@ impl Profile {
         }
         self.previous = Some(now);
     }
+    /// Drops the pending interval start, e.g. while the window is hidden.
     pub fn pause(&mut self) {
         self.previous = None;
     }
@@ -68,6 +87,7 @@ impl Profile {
         }
     }
 }
+/// Returns the mean, nearest-rank 95th percentile and maximum, or `None` without samples.
 fn summarize(samples: &[f64]) -> Option<Timing> {
     if samples.is_empty() {
         return None;

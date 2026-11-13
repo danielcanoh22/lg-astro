@@ -1,6 +1,10 @@
-//! Partial redraw: which part of the logical 1920×1080 scene changed since an earlier frame.
+//! Tracks which part of the logical 1920×1080 scene changed since an earlier frame, for partial
+//! redraw.
+//!
 //! Consecutive scenes are compared command by command; a back buffer that still holds the frame
-//! `age` presents ago needs the union of the last `age` changes redrawn.
+//! `age` presents ago needs the union of the last `age` changes redrawn. The renderer pairs this
+//! with [`crate::egl_damage::PartialUpdate`], which reports the buffer age and hands the region to
+//! the driver.
 use crate::{renderer::Draw, state::Rect};
 use std::{collections::VecDeque, sync::Arc};
 
@@ -12,6 +16,7 @@ const LOOKAHEAD: usize = 8;
 /// The redraw region of one frame: `None` is the whole scene, an empty rect is no change.
 pub type Damage = Option<Rect>;
 
+/// Remembers the previous scene and the damage of the last [`HISTORY`] frames.
 #[derive(Default)]
 pub struct Tracker {
     previous: Vec<Draw>,
@@ -19,7 +24,8 @@ pub struct Tracker {
 }
 
 impl Tracker {
-    /// Records the scene about to be drawn.
+    /// Records the scene about to be drawn and its damage against the previous one; the first
+    /// scene after a reset is whole-scene damage.
     pub fn push(&mut self, commands: &[Draw]) {
         let damage = if self.previous.is_empty() {
             None
@@ -31,7 +37,9 @@ impl Tracker {
         self.previous = commands.to_vec();
     }
 
-    /// What to redraw into a back buffer holding the frame `age` presents ago; 0 means unknown.
+    /// Returns what to redraw into a back buffer holding the frame `age` presents ago.
+    ///
+    /// An age of 0 (undefined contents) or older than the history is whole-scene damage.
     pub fn damage(&self, age: u32) -> Damage {
         let age = age as usize;
         if age == 0 || age > self.history.len() {
@@ -64,13 +72,16 @@ impl Tracker {
         }
     }
 
-    /// After anything drew into the window outside this tracker, e.g. a resized drawable.
+    /// Forgets all history so the next frame is drawn in full; call after anything drew into the
+    /// window outside this tracker, e.g. a resized drawable.
     pub fn reset(&mut self) {
         self.previous.clear();
         self.history.clear();
     }
 }
 
+/// Returns the union of the areas of commands that differ between two scenes, or `None` when a
+/// changed command (clip or fade state) affects the whole scene.
 fn diff(old: &[Draw], new: &[Draw]) -> Damage {
     let mut area = Rect::default();
     let mut j = 0;
@@ -96,7 +107,9 @@ fn diff(old: &[Draw], new: &[Draw]) -> Damage {
     Some(area)
 }
 
-/// The area a command can paint. `None` for state that affects everything drawn after it.
+/// Returns the logical area a command can paint, padded by one pixel for edge antialiasing.
+///
+/// Returns `None` for state that affects everything drawn after it.
 pub fn bounds(command: &Draw) -> Option<Rect> {
     match command {
         Draw::Shape(rect, ..)
@@ -116,6 +129,8 @@ pub fn bounds(command: &Draw) -> Option<Rect> {
     }
 }
 
+/// Returns whether two commands paint identical pixels. Rects compare exactly and app images by
+/// `Arc` identity rather than by pixel contents.
 fn same(a: &Draw, b: &Draw) -> bool {
     let rect = |a: &Rect, b: &Rect| a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
     match (a, b) {
@@ -160,10 +175,12 @@ fn same(a: &Draw, b: &Draw) -> bool {
     }
 }
 
+/// Returns whether two rects overlap with positive area; touching edges do not count.
 pub fn intersects(a: Rect, b: Rect) -> bool {
     a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }
 
+/// Returns the bounding box of two rects, ignoring an empty one.
 fn union(a: Rect, b: Rect) -> Rect {
     if a.w <= 0. || a.h <= 0. {
         return b;
