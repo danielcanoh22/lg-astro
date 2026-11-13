@@ -119,6 +119,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn exposes_real_page_size_and_libc_errno_contract() {
+        // SAFETY: `__errno_location` returns this thread's errno slot, valid for writes for the
+        // thread's lifetime, and `getauxval` has no preconditions.
         unsafe {
             *libc::__errno_location() = libc::EACCES;
             assert_eq!(

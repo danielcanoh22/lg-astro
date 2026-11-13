@@ -437,6 +437,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 #[cfg(all(test, feature = "webos", unix))]
+#[allow(
+    clippy::undocumented_unsafe_blocks,
+    reason = "test-only geteuid and mkfifo calls with no preconditions beyond valid C strings"
+)]
 mod tests {
     use super::*;
     use std::{

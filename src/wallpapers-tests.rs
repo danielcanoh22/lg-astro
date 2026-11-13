@@ -999,6 +999,8 @@ fn connect_from(source: Ipv4Addr, address: &str) -> TcpStream {
         fn connect(fd: i32, address: *const In, length: u32) -> i32;
     }
     let target: std::net::SocketAddrV4 = address.parse().unwrap();
+    // SAFETY: `In` matches Linux `sockaddr_in` and outlives each call that borrows it; the
+    // descriptor is checked before use and then owned by the returned TcpStream.
     unsafe {
         let fd = socket(2, 1, 0);
         assert!(fd >= 0);
