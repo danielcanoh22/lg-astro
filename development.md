@@ -852,6 +852,10 @@ The read-only checker never downloads an IPK. A separate installer worker rechec
 requires the exact offered version, and accepts only this project's ARM release assets with a bounded
 size and SHA-256. It downloads into a private random directory and verifies both before handing off
 to `tv/self-update.sh`, detached through Homebrew Channel's root service into a systemd unit.
+The checksum comes from the same GitHub release feed as the IPK, so it detects corruption, not a
+malicious release: updates trust whoever can publish releases on the repository. Releases are
+deliberately not signed: keep two-factor authentication on the account that publishes releases.
+Nothing installs until the **Install** button is pressed on the TV.
 The handoff escapes dollar signs for systemd as well as quoting for the
 exec service's shell, so systemd cannot expand the embedded script before `/bin/sh` runs it.
 The installer locks, stages and re-verifies a root-owned copy, waits for installation completion and
