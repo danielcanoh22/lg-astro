@@ -390,9 +390,8 @@ and isolated `--preferences` / `--test-extra-apps` runs do not update launch spl
 after installation or a package update can still show the packaged default until this sync completes;
 later launches use the saved selection. Already-root Home processes use the Rust file operation directly, avoiding a Homebrew/child-process round trip. With Home takeover enabled, the native Home helper
 copies the selected background's splash into the staged Home app on every apply, reading the saved
-preferences from the TV storage candidates in `storage.rs`. Production installations prefer internal
-storage; developer installations prefer developer storage, with existing files taking precedence over
-the legacy installation-local preferences. Reapplying an active Home mount also refreshes the splash.
+preferences from `/media/developer/<appid>/preferences.json`, the TV storage `storage.rs` uses.
+Reapplying an active Home mount also refreshes the splash.
 
 `sync-splash` and the Home stage also accept an uploaded background's ID (`custom-` and 32 lowercase
 hex digits). The helper finds Astro's storage itself, with the same precedence (never the
@@ -807,25 +806,20 @@ The placeholder cards are never a fallback for an inventory failure.
 ## Storage and languages
 
 TV preferences live in an app-owned persistent directory outside the installed executable's
-payload. Startup probes `/media/developer/<appid>/`, `/media/developer/temp/<appid>/` and
-`/media/internal/.<appid>/`, selecting a directory the jailed app can actually create and write.
-Production `/media/cryptofs` installations prefer internal storage. `/media/developer/temp` is
-on the persistent developer partition, not the reboot-cleared `/tmp`. No settings are placed
-in `/tmp` and no system/app-payload permissions are widened. webOS developer mode creates
-`/media/developer/<appid>/` world-writable (mode 0777, like the rest of `/media/developer`), so
-once a directory is selected Astro removes group and other permissions from it and from its
-`wallpapers/` gallery when each is a real directory owned like the selected one; symlinks are
+payload: `/media/developer/<appid>/`, on the persistent developer partition. Startup creates it
+if needed (only that leaf, never a missing parent) and checks that the jailed app owns it and can
+write to it; otherwise startup reports `No writable persistent TV storage found:` with the reason.
+No settings are placed in `/tmp` and no system/app-payload permissions are widened. webOS
+developer mode creates `/media/developer/<appid>/` world-writable (mode 0777, like the rest of
+`/media/developer`), so Astro removes group and other permissions from it and from its
+`wallpapers/` gallery when each is a real directory owned like the storage; symlinks are
 not followed, private directories are left untouched and entries inside keep their own modes.
 The shared `/media/developer` parent stays world-writable without a sticky bit; Astro cannot
-change that. Root Home takeover reuses these
-same app-owned directories, preferring existing app-owned preferences over root-owned fallback
-files left by an earlier takeover. It does not merge or delete duplicate preferences. Preference
+change that. Root Home takeover reuses the same app-owned directory. Preference
 saves retain the directory owner's UID/GID so the normal app can still read
-them after Home is disabled. Symlink storage directories remain rejected. The executable Home
-method uses its source installation for storage precedence and legacy migration, not LG's
-`/usr/bin` executable path. Existing JSON preferences from beside this installation's old
-executable are imported once, without overwriting the chosen destination. Invalid existing preferences still report an error.
-Startup prints `Astro persistent storage:` with the chosen path. Desktop preview retains the legacy
+them after Home is disabled. A symlink storage directory is rejected. Invalid existing preferences
+still report an error.
+Startup prints `Astro persistent storage:` with the storage path. Desktop preview retains the legacy
 `$XDG_CONFIG_HOME/astro-native/preferences.json` path, or `~/.config/astro-native/preferences.json`,
 so existing preview choices survive flattening. `--preferences PATH` isolates a manual run.
 Invalid preference files report an error rather than being overwritten. Writes use atomic

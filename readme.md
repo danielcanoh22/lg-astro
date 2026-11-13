@@ -127,7 +127,7 @@ Test on a spare button first. Disable the mapping in Input Hook to restore norma
 Turn on **Settings → System → Show as TV input** to list Astro in LG's input picker. Astro runs
 `astro-helper tv-input` through Homebrew Channel's root service; over SSH,
 `/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro/astro-helper tv-input enable` does the
-same (use `/media/cryptofs/apps/usr/palm/applications/com.danielcanoh22.astro` for Homebrew installs). The helper
+same. The helper
 verifies that LG actually lists Astro, and undoes registration if it does not. Use `status` to
 inspect it or `disable` to remove it. This is separate from takeover and never changes Home Auto
 Launch, HDMI selection, or the power-on preference automatically.

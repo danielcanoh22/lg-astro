@@ -817,12 +817,8 @@ fn symlink_storage_directories_are_not_used_as_root_preferences() {
     let f = Fixture::new();
     f.put_json("/other/preferences.json", json!({"background":"prism"}));
     system::link(&f, "/other", format!("/media/developer/{APP}")).unwrap();
-    f.put_json(
-        &format!("/media/developer/temp/{APP}/preferences.json"),
-        json!({"background":"forest"}),
-    );
     files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"dunes");
 }
 
 const UPLOAD: &str = "custom-0123456789abcdef0123456789abcdef";
@@ -999,32 +995,54 @@ fn the_package_directory_is_never_storage_for_uploaded_splashes() {
     );
     assert!(files::sync_splash(&f, Path::new(DIR), UPLOAD).is_err());
     assert_eq!(f.read(&format!("{DIR}/splash.png")), b"default");
+    // The package-local preferences are not read either: the default background is staged.
     files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"default");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"dunes");
+}
+
+#[test]
+fn only_developer_storage_provides_preferences_and_uploaded_splashes() {
+    let f = Fixture::new();
+    enabled_stage(&f);
+    let image = splash_png(1920, 1080, b"other");
+    for other in [
+        format!("/media/developer/temp/{APP}"),
+        format!("/media/internal/.{APP}"),
+    ] {
+        f.put_json(
+            &format!("{other}/preferences.json"),
+            json!({"background":"prism","splash_background":UPLOAD}),
+        );
+        f.put(&format!("{other}/wallpapers/{UPLOAD}/splash.png"), &image);
+    }
+    assert_eq!(
+        files::sync_splash(&f, Path::new(DIR), UPLOAD).unwrap_err(),
+        "Uploaded background unavailable"
+    );
+    assert_eq!(f.read(&format!("{DIR}/splash.png")), b"default");
+    files::stage_splash(&f, Path::new(DIR)).unwrap();
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"dunes");
+    f.put_json(
+        &format!("{}/preferences.json", storage()),
+        json!({"background":"forest"}),
+    );
+    files::stage_splash(&f, Path::new(DIR)).unwrap();
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
 }
 
 #[test]
 fn storage_under_a_symlinked_system_directory_still_provides_uploaded_splashes() {
     let f = Fixture::new();
-    let production = format!("/media/cryptofs/apps/usr/palm/applications/{APP}");
-    f.put_json(
-        &format!("{production}/appinfo.json"),
-        json!({"id":APP,"type":"native","main":"astro"}),
-    );
-    f.put(&format!("{production}/splash.png"), b"default");
-    let image = splash_png(1920, 1080, b"internal");
-    f.put_json(
-        &format!("/real-internal/.{APP}/preferences.json"),
-        json!({"splash_background":UPLOAD}),
-    );
+    fs::rename(f.p("/media/developer"), f.p("/real-developer")).unwrap();
+    system::link(&f, "/real-developer", "/media/developer").unwrap();
+    let image = splash_png(1920, 1080, b"developer");
+    upload_preferences(&f);
     f.put(
-        &format!("/real-internal/.{APP}/wallpapers/{UPLOAD}/splash.png"),
+        &format!("/real-developer/{APP}/wallpapers/{UPLOAD}/splash.png"),
         &image,
     );
-    fs::create_dir_all(f.p("/media")).unwrap();
-    system::link(&f, "/real-internal", "/media/internal").unwrap();
-    files::sync_splash(&f, Path::new(&production), UPLOAD).unwrap();
-    assert_eq!(f.read(&format!("{production}/splash.png")), image);
+    files::sync_splash(&f, Path::new(DIR), UPLOAD).unwrap();
+    assert_eq!(f.read(&format!("{DIR}/splash.png")), image);
 }
 
 #[cfg(target_os = "linux")]
@@ -1201,25 +1219,7 @@ fn accepted_close_waits_boundedly_and_a_close_race_can_succeed() {
     home::dispatch(&f, "enable", Some(DIR)).unwrap();
 }
 #[test]
-fn developer_and_production_splash_precedence_matches_native_storage() {
-    let f = Fixture::new();
-    f.put_json(
-        &format!("/media/developer/{APP}/preferences.json"),
-        json!({"background":"forest"}),
-    );
-    f.put_json(
-        &format!("/media/internal/.{APP}/preferences.json"),
-        json!({"background":"prism"}),
-    );
-    files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
-    let production = format!("/media/cryptofs/apps/usr/palm/applications/{APP}");
-    f.put(&format!("{production}/splash/prism.png"), b"prism");
-    files::stage_splash(&f, Path::new(&production)).unwrap();
-    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"prism");
-}
-#[test]
-fn persistent_preferences_win_over_package_local_migration_and_active_stages_refresh() {
+fn persistent_preferences_win_over_package_local_preferences_and_active_stages_refresh() {
     let f = Fixture::new();
     f.put_json(
         &format!("{DIR}/preferences.json"),

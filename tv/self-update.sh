@@ -15,7 +15,7 @@ case "$SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
 [ ${#SHA} = 64 ] || exit 1
 case "$VERSION" in ''|*[!0-9.]*) exit 1 ;; esac
 case "$APP_DIR" in
-  /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro|/media/cryptofs/apps/usr/palm/applications/com.danielcanoh22.astro|/usr/palm/applications/com.danielcanoh22.astro) ;;
+  /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro) ;;
   *) exit 1 ;;
 esac
 [ "$(id -u)" = 0 ] || exit 1
