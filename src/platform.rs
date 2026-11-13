@@ -1,6 +1,7 @@
 //! Blocking platform work runs on one worker, never in the SDL/UI thread.
-//! TV calls originate from this native executable's LS2 connection, not a CLI
-//! process trying to impersonate its application identity.
+//! TV calls originate from this native executable: its own LS2 connection, or
+//! root `luna-send` commands it runs through Homebrew Channel's `exec`. None of
+//! them impersonates an application identity.
 use crate::{
     app_artwork,
     model::{App, Input, Inventory, demo_inventory, valid_app_id},

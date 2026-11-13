@@ -55,7 +55,9 @@ packages use `Architecture: arm`, preserve executable mode and include licenses/
 ## Runtime constraints
 
 Keep input/rendering on the SDL thread and TV/HTTP work off it. Luna requests originate from the
-native process, not `luna-send-pub -a` impersonation. Inventory failure must never substitute demo
+native process, not `luna-send-pub -a` impersonation. The one exception is the root system-bus
+`luna-send -a` that holds a staged Home's lifecycle registration on webOS 10/11
+(`luna::subscribe_as_app`). Inventory failure must never substitute demo
 data on TV. Explicit `--test-extra-apps` is a labeled manual preview applied only after successful
 inventory reads, with separate preferences and no placeholder launch requests.
 
