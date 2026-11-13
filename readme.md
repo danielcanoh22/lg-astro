@@ -50,7 +50,7 @@ https://github.com/danielcanoh22/lg-astro/releases/latest/download/repo.json
 On your computer, replace `TV_IP`:
 
 ```sh
-scp -O dist/com.danielcanoh22.astro_4.2.0_arm.ipk root@TV_IP:/tmp/astro.ipk
+scp -O dist/com.danielcanoh22.astro_5.0.0_arm.ipk root@TV_IP:/tmp/astro.ipk
 ssh root@TV_IP
 ```
 
@@ -207,7 +207,7 @@ checksum-pinned SDL-webOS library; both downloads are cached under `.build/`.
 Output:
 
 ```text
-dist/com.danielcanoh22.astro_4.2.0_arm.ipk
+dist/com.danielcanoh22.astro_5.0.0_arm.ipk
 dist/sha256sums
 dist/repo.json
 dist/app-icon-large.png
