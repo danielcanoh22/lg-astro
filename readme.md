@@ -34,84 +34,8 @@ https://github.com/user-attachments/assets/2156d640-b8fa-4ea4-a02c-0db4c93bcc5a
 ## Compatibility
 
 > [!NOTE]
-> Astro should start on any TV running webOS 4 or newer. The following configurations have been
-> confirmed to work by the community. Home takeover support varies, as noted below:
-
-<details>
-<summary>webOS 4</summary>
-
-| TV        | Model identifier | Takeover Support |
-| --------- | ---------------- | ---------------- |
-| LG C8     | `OLED??C8*`      | ❌               |
-| LG C9     | `OLED65C97LA`    | Unknown          |
-| LG UM7450 | `UM74507LA`      | ❌               |
-
-</details>
-
-<details>
-<summary>webOS 5</summary>
-
-| TV        | Model identifier | Takeover Support |
-| --------- | ---------------- | ---------------- |
-| LG UN7100 | `49UN71006LB`    | ✅               |
-
-</details>
-
-<details>
-<summary>webOS 6</summary>
-
-| TV        | Model identifier | Takeover Support |
-| --------- | ---------------- | ---------------- |
-| LG C1     | `OLED48C1KNB`    | ✅               |
-| LG G1     | `OLED65G1RLA`    | ✅               |
-| LG UP8000 | `86UP80009LA`    | Unknown          |
-
-</details>
-
-<details>
-<summary>webOS 24</summary>
-
-| TV    | Model identifier | Takeover Support |
-| ----- | ---------------- | ---------------- |
-| LG G4 | `OLED65G46LA`    | ✅               |
-| LG B2 | `OLED65B29LA`    | ✅               |
-
-</details>
-
-<details>
-<summary>webOS 25</summary>
-
-| TV        | Model identifier | Takeover Support |
-| --------- | ---------------- | ---------------- |
-| LG B5     | `OLED77B5PUA`    | ✅               |
-| LG C2     | `OLED42C2PSA`    | ✅               |
-| LG C2     | `OLED65C2*`      | Unknown          |
-| LG C2     | `OLED77C2*`      | Unknown          |
-| LG C4     | `OLED42C4*`      | ✅               |
-| LG G3     | `OLED??G3*`      | Unknown          |
-| LG NANO77 | `55NANO776RA`    | ✅               |
-| LG QNED86 | `55QNED86T6A`    | Unknown          |
-| LG UT8050 | `50UT8050*`      | ✅               |
-
-</details>
-
-<details>
-<summary>webOS 26</summary>
-
-| TV    | Model identifier      | Takeover Support |
-| ----- | --------------------- | ---------------- |
-| LG C2 | `OLED65C2PSA`         | ✅               |
-| LG C3 | `OLED65C31LA`         | ✅               |
-| LG C3 | `OLED65C36LC`         | ✅               |
-| LG C4 | `OLED77C44LA`         | ✅               |
-| LG C5 | `OLED55C57LA`         | ✅               |
-| LG C5 | `OLED55C5PSA`         | Unknown          |
-| LG C6 | `OLED65C6*`           | Unknown          |
-| LG C6 | `OLED77C6*`           | ✅               |
-| LG G5 | `OLED83G5WUA.BUSYDJR` | ✅               |
-| LG G5 | `OLED77G5WUA.DUSQLJR` | ✅               |
-
-</details>
+> This is a personal build for one TV: an **LG 55NANO80ASA running webOS 25 (10.3.2-34)**. Code
+> for other webOS versions and models was removed, so other TVs are not supported.
 
 ## Installation
 
@@ -142,8 +66,7 @@ luna-send -i luna://com.webos.appInstallService/dev/install \
 ### Takeover Method
 
 > [!NOTE]
-> Takeover is supported on **webOS 5, 6, 24, 25 and 26**.\
-> On 5, 6 and 24 it replaces the Home executable; on 25 and 26 it mounts Astro's Home app.\
+> The takeover mounts Astro's Home app over LG's system Home app.\
 > The takeover does not delete LG Home: it remains underneath a temporary mount, which is cleared by
 > a reboot. If Astro is uninstalled first, LG Home returns on reboot, but the separate takeover boot
 > hook remains and logs an error because it can no longer find Astro. No TV reset is needed. For
@@ -184,22 +107,7 @@ Boot log: `/var/lib/astro-home/boot.log`. See the
 [development guide](development.md#optional-native-home-integration) for implementation details.
 
 <details>
-<summary>Method for webOS 5 / 6 / 24</summary>
-
-On **webOS 5, 6 and 24**, SAM cannot reread a mounted Home manifest, so `home.sh enable` instead
-bind-mounts Astro's executable over LG's `/usr/bin/com.webos.app.home`. LG's Home manifest stays
-in place and Astro registers with SAM itself, so the Home key brings the running Astro back instead
-of restarting it. The commands and the cold-boot hook are the same.
-
-webOS 24 belongs here rather than with 25/26 because its SAM has no `releaseBlockSystemApp`, so a
-mounted Home manifest is never reread and the manifest method fails on that missing method.
-Verified on an `OLED65G46LA` (2024 G4, `9.2.4-48`); other 9.x models should behave the same, but
-have not been tested yet.
-
-</details>
-
-<details>
-<summary>Method for webOS 25 / 26</summary>
+<summary>How the takeover works</summary>
 
 Mounts Astro over the system Home app and reapplies the mount at cold boot. The LG splash
 shown before Astro's window opens is the wallpaper you selected in **Settings → Background**, staged
@@ -248,12 +156,9 @@ inspect it or `disable` to remove it. This is separate from takeover and never c
 Launch, HDMI selection, or the power-on preference automatically.
 
 Select Astro from LG's input picker and use the TV's last-input startup option where available.
-On an LG 49UN71006LB (webOS 5.6.2), Astro returned after standby and a full software reboot, with
-takeover and Home Auto Launch disabled. On an LG OLED77C34LA (webOS 26), Astro came back at
-power-on only when it was the last active input before power-off. Other firmware remains untested;
-registration alone does not prove startup support. With takeover on, pressing Home before the
+Registration alone does not prove startup support. With takeover on, pressing Home before the
 takeover applies at cold boot still opens LG Home. Select HDMI or Live TV before removing the entry.
-On an LG NANO80ASA (webOS 25), LG's input picker does not show the registered input, but opening
+On the LG 55NANO80ASA (webOS 25), LG's input picker does not show the registered input, but opening
 `com.danielcanoh22.astro` makes it the last input. Once registered, Astro lists an **Astro** card in its own
 inputs row for that: select it before turning the TV off to power on into Astro.
 
@@ -333,7 +238,7 @@ dist/app-icon-large.png
 
 Open [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop), connect to the TV's
 IP on port **22** as **root**, and install the IPK. Open **Astro** from the TV menu. Homebrew
-Channel must be elevated; on webOS 26 use **0.8.0-rc1 or newer** for its `lunabus.query` mapping.
+Channel must be elevated.
 
 The native package uses **`com.danielcanoh22.astro`** and installs separately from the previous
 native app ID `com.ecklf.luma`, the old `com.luma.launcher` web app and the former
