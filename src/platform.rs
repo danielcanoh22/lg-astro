@@ -53,11 +53,6 @@ fn select_astro_input() -> Result<(), String> {
 /// The EIM input ID LG gives Astro once `astro-helper tv-input enable` registers it.
 const ASTRO_INPUT: &str = "MVPD_IP-com.danielcanoh22.astro";
 pub const HOME_ID: &str = "com.webos.app.home";
-pub const FULL_HOME_ID: &str = "com.webos.app.fullhome";
-
-pub fn is_home_id(id: &str) -> bool {
-    matches!(id, HOME_ID | FULL_HOME_ID)
-}
 
 /// While this file exists, the staged Home does not register with sam and is restarted per
 /// Home key as before. Astro creates it when a relaunch did not bring it to the
@@ -613,14 +608,7 @@ pub fn can_uninstall(id: &str) -> bool {
             .any(|prefix| id.starts_with(prefix))
         && !matches!(
             id,
-            APP_ID
-                | HOME_ID
-                | "com.ecklf.luma"
-                | "com.luma.native"
-                | "com.luma.launcher"
-                | "com.luma.launcher.native"
-                | "org.webosbrew.hbchannel"
-                | "org.webosbrew.hbchannel.service"
+            APP_ID | HOME_ID | "org.webosbrew.hbchannel" | "org.webosbrew.hbchannel.service"
         )
 }
 
@@ -896,11 +884,7 @@ pub fn normalize_apps(raw: &Value) -> Result<Vec<App>, String> {
         let live = id == "com.webos.app.livetv";
         let visible = entry.get("visible");
         if id == APP_ID
-            || id == "com.ecklf.luma"
-            || id == "com.luma.native"
-            || id == "com.luma.launcher"
-            || id == "com.luma.launcher.native"
-            || is_home_id(id)
+            || id == HOME_ID
             || id.starts_with("com.webos.app.hdmi")
             || id.starts_with("com.webos.app.externalinput.")
             || (!live && (visible == Some(&json!(false)) || visible == Some(&json!("false"))))
@@ -1030,8 +1014,8 @@ mod update_argument_tests {
 mod home_inventory_tests {
     use super::*;
     #[test]
-    fn both_home_variants_are_hidden_from_application_inventory() {
-        let raw = json!([{"id":HOME_ID,"title":"Home","visible":true}, {"id":FULL_HOME_ID,"title":"Home","visible":true}]);
+    fn lg_home_is_hidden_from_application_inventory() {
+        let raw = json!([{"id":HOME_ID,"title":"Home","visible":true}]);
         assert!(normalize_apps(&raw).unwrap().is_empty());
     }
 }

@@ -634,8 +634,6 @@ fn inventory_filters_system_apps_duplicates_and_unsafe_identifiers() {
         {"id":"netflix","title":" Netflix\n"}, {"id":"netflix","title":"Duplicate"},
         {"id":"bad;command","title":"Bad"}, {"id":"com.webos.app.hidden","title":"Internal"},
         {"id":"com.webos.app.livetv","visible":false,"title":"Live TV"},
-        {"id":"com.ecklf.luma","visible":true},
-        {"id":"com.luma.launcher.native","visible":true},
         {"id":"com.webos.app.hdmi1","visible":true},
         {"id":"hidden","visible":"false"}
     ]))
@@ -1722,10 +1720,6 @@ fn protected_apps_cannot_be_deleted_through_ui_or_worker() {
         "com.palm.app.input",
         "com.lge.app.store",
         "com.lge.service.example",
-        "com.ecklf.luma",
-        "com.luma.launcher",
-        "com.luma.native",
-        "com.luma.launcher.native",
         "org.webosbrew.hbchannel",
         "org.webosbrew.hbchannel.service",
         "invalid';command",

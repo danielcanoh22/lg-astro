@@ -15,7 +15,6 @@ fn system_history_preserves_order_and_inputs_and_rejects_invalid_entries() {
     let entries = recents::normalize(&json!({"ready": true, "recentsAppList": [
         {"appId":"youtube.leanback.v4", "title":" YouTube\n "},
         {"appId":"com.danielcanoh22.astro"}, {"appId":"com.webos.app.home"},
-        {"appId":"com.ecklf.luma"}, {"appId":"com.luma.launcher"},
         {"appId":"invalid; command"},
         {"appId":"com.webos.app.hdmi1", "title":"Console"},
         {"appId":"netflix", "title":"Netflix"},
@@ -56,7 +55,6 @@ fn actions_match_stock_home_without_synthetic_process_kills() {
     );
     for id in [
         "com.danielcanoh22.astro",
-        "com.ecklf.luma",
         "com.webos.app.home",
         "invalid'; command",
         "",
