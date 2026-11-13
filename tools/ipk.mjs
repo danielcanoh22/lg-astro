@@ -83,7 +83,6 @@ export function normalizeAndVerifyPackage(bytes, manifest) {
     manifest.main,
     manifest.icon,
     manifest.largeIcon,
-    'autostart.sh',
     'home.sh',
     'astro-helper',
     'splash.png',
@@ -167,7 +166,6 @@ export function normalizeAndVerifyPackage(bytes, manifest) {
       throw new Error(`Unexpected package entry type: ${file.name}`);
     const executable =
       file.type === '5' ||
-      file.name.endsWith('/autostart.sh') ||
       file.name.endsWith('/home.sh') ||
       file.name.endsWith('/astro-helper') ||
       file.name.endsWith(`/${manifest.main}`);

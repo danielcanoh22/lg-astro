@@ -16,21 +16,13 @@ pub const FAILURES: &str = "/var/run/astro-home-failures";
 /// Consecutive unhealthy starts after which the next start gives LG Home back until reboot.
 pub const FAILURE_LIMIT: u32 = 3;
 pub const HOME: &str = "com.webos.app.home";
-fn default_home() -> String {
-    HOME.into()
-}
-fn default_method() -> String {
-    "manifest".into()
-}
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     pub enabled: bool,
-    #[serde(default = "default_method")]
     pub method: String,
     pub app_dir: String,
     pub stock: Value,
-    #[serde(default = "default_home")]
     pub home_id: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -186,13 +178,7 @@ impl<'a, S: System> Home<'a, S> {
         Err(format!("Could not release Home: {last}"))
     }
     fn reread(&self, expected: &Value) -> Result<()> {
-        let mut payload = json!({"id":self.id});
-        if self
-            .read("/etc/palm/schemas/sam/applicationManager.blockSystemApp.schema")
-            .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).contains("\"forceBlockSystemApp\""))
-        {
-            payload["forceBlockSystemApp"] = json!(false);
-        }
+        let payload = json!({"id":self.id});
         // Release even if the request timed out after taking effect; preserve the original error.
         let blocked = self.luna("blockSystemApp", payload).and_then(|reply| {
             let text = reply["errorText"]
@@ -352,8 +338,6 @@ impl<'a, S: System> Home<'a, S> {
             let bytes = system::read(self.system, app.join(name), 16 * 1024 * 1024)?;
             system::write(self.system, format!("{STATE}/{name}"), &bytes, mode)?;
         }
-        // Retire the former interpreter script only after both replacement files are available.
-        system::remove(self.system, format!("{STATE}/home.cjs"))?;
         Ok(())
     }
     pub fn install(&self, app: &Path) -> Result<()> {
@@ -389,11 +373,6 @@ impl<'a, S: System> Home<'a, S> {
         }
         if self.exists(HOOK) && !hook_owned(self.system) {
             return Err("64-astro-home is already in use".into());
-        }
-        if self.exists("/var/lib/webosbrew/init.d/65-astro") {
-            return Err(
-                "Disable the standalone cold-boot hook with autostart.sh disable first".into(),
-            );
         }
         if stock["id"] != self.id || stock["main"] == "astro" {
             return Err("Could not identify the original LG Home manifest".into());
@@ -478,7 +457,6 @@ pub fn home_process(
     system: &impl System,
 ) -> bool {
     let main = args.first().map(String::as_str).unwrap_or("");
-    let native = main == format!("/usr/bin/{id}");
     let flutter = Path::new(main)
         .file_name()
         .is_some_and(|name| name == "flutter-client")
@@ -490,7 +468,7 @@ pub fn home_process(
     let metadata = args
         .get(1)
         .and_then(|arg| serde_json::from_str::<Value>(arg).ok());
-    native || flutter || (astro && metadata.is_some_and(|m| m["nid"] == id || m["appId"] == id))
+    flutter || (astro && metadata.is_some_and(|m| m["nid"] == id || m["appId"] == id))
 }
 /// The takeover stages a Home manifest that SAM rereads through releaseBlockSystemApp; it is
 /// only verified on starfish 10.x (webOS 25).

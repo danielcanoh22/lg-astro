@@ -76,13 +76,6 @@ Install Astro and verify that it opens normally. Disable any Home-button mapping
 [LG Input Hook](https://github.com/Simon34545/lginputhook) (remove its Home-key action) and any
 other Home replacement, then run in the TV's root SSH shell:
 
-If you enabled Astro's autostart method earlier, disable it first:
-
-```sh
-APP=/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro
-sh "$APP/autostart.sh" disable
-```
-
 To enable the takeover run:
 
 ```sh
@@ -118,22 +111,6 @@ LG Home's original files remain underneath, using the same approach as
 [Glasshouse Home](https://github.com/rorygallagher2024/glasshouse/blob/main/server/lib/home-takeover.js).
 
 </details>
-
-### Autostart Method
-
-Open Astro 25 seconds after a full cold boot. Run in the TV's root SSH shell:
-
-```sh
-sh /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro/autostart.sh enable
-```
-
-Use this when takeover is disabled. It launches Astro as a regular app and does not remap the Home button.
-
-Disable before enabling takeover or uninstalling Astro:
-
-```sh
-sh /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro/autostart.sh disable
-```
 
 ### LG Input Hook Method
 
@@ -240,11 +217,8 @@ Open [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop), conn
 IP on port **22** as **root**, and install the IPK. Open **Astro** from the TV menu. Homebrew
 Channel must be elevated.
 
-The native package uses **`com.danielcanoh22.astro`** and installs separately from the previous
-native app ID `com.ecklf.luma`, the old `com.luma.launcher` web app and the former
-`com.luma.launcher.native` / `com.luma.native` prototypes. Native preferences
-are local JSON files and are separate for each installation; browser preferences are not migrated.
-Homebrew Channel treats this ID as a separate app rather than an update to the old launcher.
+The native package uses **`com.danielcanoh22.astro`**. Native preferences are local JSON files
+and are separate for each installation.
 
 Wait for installation success; Ctrl+C closes an ongoing subscription. Fully close and reopen
 Astro after updating. The [development guide](development.md#tv-startup-diagnostics) has a jailed

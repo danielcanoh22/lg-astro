@@ -10,7 +10,8 @@ use std::{
     time::Duration,
 };
 const DIR: &str = "/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro";
-const EXE: &str = "/usr/bin/com.webos.app.home";
+/// LG Home on webOS 25 is a Flutter app started by `flutter-client -i com.webos.app.home`.
+const STOCK_MAIN: &str = "/usr/palm/applications/com.webos.app.home/";
 const TARGET: &str = "/usr/palm/applications/com.webos.app.home";
 struct Fixture {
     root: PathBuf,
@@ -253,14 +254,13 @@ fn ok(reply: Value) -> Output {
     }
 }
 fn stock(id: &str) -> Value {
-    json!({"id":id,"type":"native","main":format!("file:///usr/bin/{id}"),"nativeLifeCycleInterfaceVersion":2})
+    json!({"id":id,"type":"flutter","main":format!("/usr/palm/applications/{id}/"),"nativeLifeCycleInterfaceVersion":2})
 }
 
 /// The original LG Home manifest is in place: no takeover is mounted over it.
 fn stock_manifest_restored(f: &Fixture) -> bool {
     f.mounts.borrow().is_empty()
-        && system::json(f, format!("{TARGET}/appinfo.json")).unwrap()["main"]
-            == format!("file://{EXE}")
+        && system::json(f, format!("{TARGET}/appinfo.json")).unwrap()["main"] == STOCK_MAIN
 }
 #[test]
 fn home_takeover_accepts_only_lg_home_on_webos_25() {
@@ -412,18 +412,6 @@ fn a_foreign_hook_is_rejected() {
     );
 }
 #[test]
-fn old_configuration_without_method_or_target_is_readable() {
-    let f = Fixture::new();
-    f.put_json(
-        "/var/lib/astro-home/state.json",
-        json!({"enabled":false,"appDir":DIR,"stock":stock(home::HOME),"futureFlag":42}),
-    );
-    let c = home::load(&f).unwrap().unwrap();
-    assert_eq!(c.method, "manifest");
-    assert_eq!(c.home_id, home::HOME);
-    assert_eq!(c.extra["futureFlag"], 42);
-}
-#[test]
 fn manifest_takeover_rereads_staged_metadata_and_restores_the_stock_manifest() {
     let f = Fixture::new();
     home::dispatch(&f, "enable", Some(DIR)).unwrap();
@@ -434,7 +422,7 @@ fn manifest_takeover_rereads_staged_metadata_and_restores_the_stock_manifest() {
     home::dispatch(&f, "disable", None).unwrap();
     assert_eq!(
         system::json(&f, "/usr/palm/applications/com.webos.app.home/appinfo.json").unwrap()["main"],
-        format!("file://{EXE}")
+        STOCK_MAIN
     );
 }
 #[test]
@@ -478,8 +466,23 @@ fn process_matching_never_kills_a_normal_astro_or_unrelated_native_app() {
     let f = Fixture::new();
     let args = |main: &str, meta: Value| vec![main.into(), meta.to_string()];
     let exe = f.p(&format!("{DIR}/astro"));
+    let flutter = |id: &str| -> Vec<String> {
+        vec![
+            "/usr/bin/flutter-client".into(),
+            "-i".into(),
+            id.into(),
+            json!({}).to_string(),
+        ]
+    };
     assert!(home::home_process(
-        &args(EXE, json!({})),
+        &flutter(home::HOME),
+        None,
+        DIR,
+        home::HOME,
+        &f
+    ));
+    assert!(!home::home_process(
+        &flutter("com.webos.app.screensaver"),
         None,
         DIR,
         home::HOME,
@@ -1077,7 +1080,6 @@ fn uninstall_rejects_failures_wrong_identity_and_resource_exhaustion() {
 fn uninstall_protects_system_apps_and_does_not_spawn_when_denied() {
     for id in [
         APP,
-        "com.ecklf.luma",
         "com.webos.app.home",
         "org.webosbrew.hbchannel",
         "bad/id",
@@ -1165,7 +1167,10 @@ fn restoring_a_background_home_never_opens_over_another_app() {
 #[test]
 fn a_stuck_home_process_is_reported_after_unmount_recovery() {
     let f = Fixture::new();
-    f.put("/proc/777/cmdline", format!("{EXE}\0{{}}\0").as_bytes());
+    f.put(
+        "/proc/777/cmdline",
+        b"/usr/bin/flutter-client\0-i\0com.webos.app.home\0{}\0",
+    );
     f.stuck.set(true);
     let error = home::dispatch(&f, "enable", Some(DIR)).unwrap_err();
     assert!(error.contains("Restore also failed"));

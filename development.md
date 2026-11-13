@@ -10,7 +10,6 @@ vector-geometry/             Shared fill tessellation and vector boundary covera
 tools/vector-assets/         Host-only SVG compiler
 tools/                       Asset preparation, SDK/runtime setup, packaging and release feed
 tests/                       Desktop rendering and mocked HTTP smoke scripts
-tv/autostart.sh              Optional cold-boot launch hook
 tv/home.sh / astro-helper         Optional root-only native Home integration
 dist/                        Generated ARM IPK, checksum and Homebrew feed
 .build/                      Generated assets, SDK/runtime caches and rendering diagnostics
@@ -685,8 +684,7 @@ failures preserve the last valid inputs. No failed inventory read substitutes de
 for webOS 25 (10.x). `enable` stages a native manifest with ID `com.webos.app.home` and
 symlinks to the installed executable, libraries and assets under `/var/lib/astro-home/app`, then
 bind-mounts it over `/usr/palm/applications/com.webos.app.home`. SAM rereads that one app through
-`blockSystemApp` followed by `releaseBlockSystemApp`, including `forceBlockSystemApp: false` when
-the TV schema requires it. The script verifies the reported manifest before stopping the previous
+`blockSystemApp` followed by `releaseBlockSystemApp`. The script verifies the reported manifest before stopping the previous
 Home process. It attempts to restore LG Home if applying the mount or refreshing SAM fails.
 
 Before staging, `enable` closes the normal Astro instance with `closeByAppId` and waits up to five
@@ -720,8 +718,7 @@ and Quick Start+ settings determine whether power-on opens Home. Until the hook 
 can still appear. This integration does not change those settings or install a remote-key filter.
 `disable` (also `restore`) removes the mount, refreshes LG's manifest, stops the native Home
 instance and removes the boot hook. The copied restore scripts remain in `/var/lib/astro-home`
-even if the installed package is removed. Disable the standalone `65-astro` cold-boot hook before
-enabling this integration.
+even if the installed package is removed.
 
 A crash-loop guard keeps a failing Astro from leaving the TV without a Home. On each start as Home,
 before any window or GL work, Astro (as root) counts the start in `/var/run/astro-home-failures`.
@@ -1028,9 +1025,7 @@ which reads its two JSON fields with POSIX tools.
 
 `home.sh` retains its explicit confirmation and filesystem lock. Enabling Home copies both that
 script and the native helper into `/var/lib/astro-home`, so recovery remains available after the
-source package is removed. When upgrading an existing integration from the interpreter helper,
-run the packaged `home.sh enable` again to replace its copied recovery/boot files. Configurations
-from the former scripts keep their installation and original stock manifest. Home takeover uses
+source package is removed. Home takeover uses
 the staged manifest on `com.webos.app.home` and is limited to webOS 25 (10.x). The optional `tv-input` subcommand implements the #124 registration/verification contract;
 **Settings → System → Show as TV input** runs it through Homebrew Channel's root service, and the
 package declares the required `supportGIP`. With the input registered, the Home copy opens
