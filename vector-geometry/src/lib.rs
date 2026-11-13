@@ -1,4 +1,9 @@
-//! Shared polygon tessellation and drawable-aware boundary coverage.
+//! Tessellates filled paths into triangles with a one-physical-pixel antialiasing fringe.
+//!
+//! Shared by the host SVG compiler (`tools/vector-assets`) and the TV app's lazy glyph outlines,
+//! so icons, logos and text get the same edge treatment. Fringe vertices carry an offset in
+//! physical pixels that the shader adds after scaling, which keeps edges one pixel wide at any
+//! drawable density.
 pub use lyon_tessellation;
 use lyon_tessellation::{
     BuffersBuilder, FillOptions, FillRule, FillTessellator, FillVertex, VertexBuffers,
@@ -7,14 +12,20 @@ use lyon_tessellation::{
 };
 use std::collections::BTreeMap;
 
+/// One output vertex; every three consecutive vertices form a triangle.
 #[derive(Clone, Copy, Debug)]
 pub struct Vertex {
+    /// The position in the path's own units (SVG canvas units or font ems).
     pub position: Point,
+    /// The shift along the outward edge normal, in physical pixels, applied after scaling; zero
+    /// for interior vertices.
     pub offset: [f32; 2],
+    /// Edge coverage: 1 inside the shape, 0 on the outer side of the fringe.
     pub coverage: f32,
 }
 
 impl Vertex {
+    /// Returns the vertex halfway between two, interpolating every attribute.
     pub fn midpoint(self, other: Self) -> Self {
         Self {
             position: (self.position + other.position.to_vector()) * 0.5,
@@ -27,8 +38,17 @@ impl Vertex {
     }
 }
 
-/// Fill a path and add a one-physical-pixel boundary fringe. The caller scales
-/// positions in its shader; offsets remain in physical pixels at every density.
+/// Fills a path and adds a one-physical-pixel boundary fringe.
+///
+/// The caller scales positions in its shader; offsets remain in physical pixels at every density.
+/// Each boundary edge gets a quad straddling it, from half a fringe inside (coverage 1) to half a
+/// fringe outside (coverage 0), with mitred corners. `tolerance` is the curve flattening tolerance
+/// in path units.
+///
+/// # Errors
+///
+/// Fails when lyon cannot tessellate the path or the result exceeds the geometry budget
+/// (300,000 triangles before fringes, 1,000,000 vertices in total).
 pub fn tessellate(path: &Path, tolerance: f32, rule: FillRule) -> Result<Vec<Vertex>, String> {
     let outline: Vec<_> = path
         .iter()
@@ -43,6 +63,7 @@ pub fn tessellate(path: &Path, tolerance: f32, rule: FillRule) -> Result<Vec<Ver
             _ => None,
         })
         .collect();
+    // Winding test against the flattened outline, to tell real boundary edges from interior ones.
     let contains = |p: Point| {
         let mut winding = 0i32;
         for &(a, b) in &outline {
@@ -68,6 +89,7 @@ pub fn tessellate(path: &Path, tolerance: f32, rule: FillRule) -> Result<Vec<Ver
             &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| vertex.position()),
         )
         .map_err(|e| format!("Path tessellation failed: {e:?}"))?;
+    // Merge coincident vertices (treating -0 as 0) so shared edges can be paired below.
     let mut unique = BTreeMap::new();
     let mut points = Vec::new();
     let mapping: Vec<usize> = geometry
@@ -111,6 +133,7 @@ pub fn tessellate(path: &Path, tolerance: f32, rule: FillRule) -> Result<Vec<Ver
                 .or_insert((a, b, 1));
         }
     }
+    // Edges used by exactly one triangle are candidates for the outline fringe.
     let boundary: Vec<_> = edges
         .values()
         .filter(|edge| edge.2 == 1)
@@ -147,6 +170,8 @@ pub fn tessellate(path: &Path, tolerance: f32, rule: FillRule) -> Result<Vec<Ver
         let length = normal[0].hypot(normal[1]);
         if length > 1e-6 {
             let unit = [normal[0] / length, normal[1] / length];
+            // Mitre the corner so both edges' fringes stay a full width; the clamp limits spikes
+            // at sharp corners.
             let miter = 1.
                 / (unit[0] * first_normal[index][0] + unit[1] * first_normal[index][1]).max(0.25);
             *normal = [unit[0] * miter, unit[1] * miter];

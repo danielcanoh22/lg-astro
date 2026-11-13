@@ -15,11 +15,13 @@ use std::{
 #[path = "app-subscription-tests.rs"]
 mod tests;
 
+/// Longest reply line parsed, matching the native Luna reply limit; longer lines are skipped.
 const MAX_REPLY: usize = 2 * 1024 * 1024;
 
 /// Starts a named thread. Injectable so tests can make thread creation fail.
 pub type Spawner = fn(&str, Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
 
+/// The production [`Spawner`]: starts a detached, named [`std::thread`].
 pub fn spawn_thread(name: &str, body: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
     thread::Builder::new()
         .name(name.into())
@@ -27,7 +29,7 @@ pub fn spawn_thread(name: &str, body: Box<dyn FnOnce() + Send>) -> std::io::Resu
         .map(drop)
 }
 
-/// A subscription held by a child process; see `subscribe`.
+/// A subscription held by a child process; see [`subscribe`].
 #[derive(Clone)]
 pub struct AppSubscription {
     child: Arc<Mutex<Option<Child>>>,
@@ -56,6 +58,11 @@ fn end_child(child: &Mutex<Option<Child>>) {
 /// The child gets SIGKILL when the calling thread ends (call this from the main thread), so it
 /// never outlives Astro. A setup error after the child started kills and reaps it before
 /// returning; `on_end` does not run then.
+///
+/// # Errors
+///
+/// Returns a message prefixed `Luna app subscription:` when the child cannot be spawned, has
+/// no stdout, or either worker thread cannot be started.
 pub fn subscribe(
     mut command: Command,
     timeout: Duration,

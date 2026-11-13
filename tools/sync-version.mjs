@@ -1,9 +1,19 @@
+/**
+ * Copies the release version from `package.json` into `appinfo.json`, the root `Cargo.toml`, the
+ * `astro` entry of `Cargo.lock` and the IPK file names in `readme.md`.
+ *
+ * `pnpm version:sync` writes the files that differ (run by `pnpm version:release`);
+ * `pnpm version:check` (`--check`) only fails when one is out of sync. `syncVersions` does both
+ * and returns the version with the names of the files that differed. Supporting crates keep
+ * their own versions. Tested by `tests/release.test.mjs`.
+ */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(import.meta.dirname, '..');
 
+/** Replaces the single version `pattern` matches, failing unless there is exactly one. */
 function replaceVersion(source, pattern, version, filename) {
   if ([...source.matchAll(pattern)].length !== 1) {
     throw new Error(`Expected one release version in ${filename}.`);
@@ -11,6 +21,10 @@ function replaceVersion(source, pattern, version, filename) {
   return source.replace(pattern, (_match, prefix, suffix) => `${prefix}${version}${suffix}`);
 }
 
+/**
+ * Sets the version of the one `header` section (`[package]` or `[[package]]`) named `astro`,
+ * leaving every other package untouched.
+ */
 function updateTomlVersion(source, header, version, filename) {
   let packages = 0;
   const updated = source

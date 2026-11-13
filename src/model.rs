@@ -1,8 +1,14 @@
+//! Core data model: TV apps and inputs, the inventory read from webOS, and saved preferences.
+//!
+//! [`Preferences`] is the persisted JSON shape; [`Preferences::sanitize`] must run after
+//! loading so the rest of the UI can trust IDs, limits and background choices.
 use crate::i18n::Language;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
+/// App categories, in the order of the Apps page filters (after "All").
 pub const CATEGORIES: [&str; 4] = ["Streaming", "Music", "Gaming", "Utilities"];
+/// Bundled wallpapers as `(id, display name)`; the ID also names the asset files.
 pub const BACKGROUNDS: [(&str, &str); 9] = [
     ("slate", "Slate"),
     ("midnight", "Midnight"),
@@ -15,9 +21,11 @@ pub const BACKGROUNDS: [(&str, &str); 9] = [
     ("northern-lights", "Northern lights"),
 ];
 
-// Generic fallbacks use delimited words, so "game" does not match "endgame".
-// Non-ASCII bytes count as boundaries for localized titles. Curated vector
-// branding is selected separately by exact ID in branding.rs.
+/// Returns whether `needle` occurs in `haystack` as a whole ASCII-delimited word.
+///
+/// Generic fallbacks use delimited words, so "game" does not match "endgame". Non-ASCII bytes
+/// count as boundaries for localized titles. Curated vector branding is selected separately by
+/// exact ID in [`crate::branding`].
 fn contains_word(haystack: &str, needle: &str) -> bool {
     let bytes = haystack.as_bytes();
     haystack.match_indices(needle).any(|(start, matched)| {
@@ -28,17 +36,26 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
     })
 }
 
+/// A launchable TV app as shown on Home and Apps.
 #[derive(Clone, Debug, Serialize)]
 pub struct App {
+    /// webOS app ID used for launching and as the key in saved preferences.
     pub id: String,
     pub title: String,
+    /// Artwork key: a curated brand from [`crate::branding`] or a generic fallback.
     pub brand: String,
+    /// One of [`CATEGORIES`].
     pub category: String,
+    /// Installed artwork resolved at runtime; never serialized.
     #[serde(skip)]
     pub icon: Option<crate::app_artwork::Source>,
 }
 
 impl App {
+    /// Builds an app and classifies its brand and category.
+    ///
+    /// The exact-ID curated brand wins; otherwise a few whole-word keywords in the ID or title
+    /// pick a generic brand, falling back to `generic`/`Utilities`. Artwork starts unresolved.
     pub fn new(id: &str, title: &str) -> Self {
         let identity = format!("{id} {title}").to_lowercase();
         let generic = [
@@ -65,30 +82,39 @@ impl App {
     }
 }
 
+/// An HDMI input reported by the TV.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Input {
+    /// webOS input app ID (for example `com.webos.app.hdmi1`).
     pub id: String,
+    /// TV-provided label, falling back to the port name.
     pub title: String,
+    /// Port name such as "HDMI 1".
     pub port: String,
+    /// Cable state; `None` when the TV does not report it.
     pub connected: Option<bool>,
     /// Optional signal information; never overrides the cable state or Auto visibility.
     pub signal: Option<bool>,
 }
 
+/// Everything Astro can launch: installed apps and HDMI inputs.
 #[derive(Clone, Debug, Default)]
 pub struct Inventory {
     pub apps: Vec<App>,
     pub inputs: Vec<Input>,
 }
 
+/// Per-input visibility on Home.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub enum InputMode {
+    /// Shown only while a cable is reported as connected.
     #[default]
     Auto,
     On,
     Off,
 }
 
+/// Date style shown on Home, persisted in snake case.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DateFormat {
@@ -100,6 +126,7 @@ pub enum DateFormat {
 }
 
 impl DateFormat {
+    /// Every format in settings-picker order; [`DateFormat::index`] relies on it.
     pub const ALL: [Self; 4] = [
         Self::Localized,
         Self::DayMonthYear,
@@ -111,6 +138,7 @@ impl DateFormat {
         Self::ALL.iter().position(|format| *format == self).unwrap()
     }
 
+    /// Returns the picker label: translated for the localized style, a pattern otherwise.
     pub fn label(self, language: Language) -> &'static str {
         match self {
             Self::Localized => language.t("dateLocalized"),
@@ -120,6 +148,7 @@ impl DateFormat {
         }
     }
 
+    /// Formats the date part of `now` in this style.
     pub fn format(self, language: Language, now: time::OffsetDateTime) -> String {
         let (year, month, day) = (now.year(), now.month() as u8, now.day());
         match self {
@@ -131,14 +160,23 @@ impl DateFormat {
     }
 }
 
+/// User settings persisted as local JSON by [`crate::storage`].
+///
+/// Every field has a default (`#[serde(default)]`), so older or partial files still load; call
+/// [`Preferences::sanitize`] after deserializing.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Preferences {
+    /// Ordered Home favorites by app ID; `None` until the user edits them, which keeps the
+    /// suggested defaults from [`Preferences::favorites`].
     pub favorites: Option<Vec<String>>,
+    /// App IDs hidden from Home and the regular Apps filters (listed under the hidden filter).
     pub hidden: Vec<String>,
+    /// Bundled background ID from [`BACKGROUNDS`] or an uploaded wallpaper ID.
     pub background: String,
     /// Last manually chosen splash, independent of automatic rotation.
     pub splash_background: Option<String>,
+    /// Bundled backgrounds the user removed from the picker.
     pub deleted_backgrounds: Vec<String>,
     pub show_home_names: bool,
     pub show_app_names: bool,
@@ -150,6 +188,7 @@ pub struct Preferences {
     pub show_greeting: bool,
     pub show_date: bool,
     pub date_format: DateFormat,
+    /// Visibility overrides by input app ID; missing entries mean [`InputMode::Auto`].
     pub input_modes: BTreeMap<String, InputMode>,
     /// Custom names by input app ID; the TV's port and label stay visible as detail.
     pub input_names: BTreeMap<String, String>,
@@ -158,10 +197,13 @@ pub struct Preferences {
     /// Applied at launch because MSAA is selected when SDL creates the GL window.
     #[serde(deserialize_with = "crate::text_rendering::deserialize")]
     pub text_rendering: crate::text_rendering::TextRendering,
+    /// Automatic background cycling on the fixed [`crate::wallpaper_cycle::INTERVAL`].
     #[serde(deserialize_with = "crate::wallpaper_cycle::deserialize")]
     pub wallpaper_cycle: bool,
+    /// Uses the shaded background variant instead of the plain (`-plain`/unshaded) image.
     pub wallpaper_gradient: bool,
-    /// Unix seconds of the last automatic or chosen wallpaper change, for the timed modes.
+    /// Unix seconds of the last automatic or chosen wallpaper change; the cycle interval is
+    /// measured from it.
     pub wallpaper_changed: u64,
 }
 
@@ -194,12 +236,17 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    /// Returns the background for the launch splash: the last manual choice, else the current one.
     pub fn splash_background(&self) -> &str {
         self.splash_background
             .as_deref()
             .unwrap_or(&self.background)
     }
 
+    /// Returns the Home favorites as app IDs.
+    ///
+    /// Until the user saves a list, suggests installed popular streaming brands and Live TV,
+    /// then fills up to six cards in inventory order.
     pub fn favorites(&self, apps: &[App]) -> Vec<String> {
         self.favorites.clone().unwrap_or_else(|| {
             let mut ids = Vec::new();
@@ -227,6 +274,7 @@ impl Preferences {
         })
     }
 
+    /// Returns whether `input` is shown on Home under its [`InputMode`].
     pub fn input_visible(&self, input: &Input) -> bool {
         match self.input_modes.get(&input.id).copied().unwrap_or_default() {
             InputMode::On => true,
@@ -245,6 +293,8 @@ impl Preferences {
     }
 
     /// Saves a cleaned name; an empty name restores the port title.
+    ///
+    /// Returns whether the stored names changed (and so need saving); invalid IDs are ignored.
     pub fn set_input_name(&mut self, id: &str, name: &str) -> bool {
         if !valid_app_id(id) {
             return false;
@@ -257,6 +307,11 @@ impl Preferences {
         }
     }
 
+    /// Repairs loaded preferences so the UI can trust them.
+    ///
+    /// Unknown backgrounds fall back to the default, app and input IDs must be valid webOS IDs,
+    /// duplicates are dropped and lists are capped so a hand-edited or corrupt file cannot grow
+    /// unbounded.
     pub fn sanitize(&mut self) {
         if self.splash_background.as_ref().is_some_and(|id| {
             !BACKGROUNDS.iter().any(|(known, _)| *known == id) && !crate::wallpapers::valid_id(id)
@@ -294,8 +349,10 @@ impl Preferences {
     }
 }
 
+/// Maximum characters (not bytes) in a custom input name.
 pub const INPUT_NAME_LIMIT: usize = 40;
 
+/// Removes control characters, trims whitespace and truncates to [`INPUT_NAME_LIMIT`] characters.
 pub fn clean_input_name(name: &str) -> String {
     let clean: String = name.chars().filter(|c| !c.is_control()).collect();
     let clean: String = clean.trim().chars().take(INPUT_NAME_LIMIT).collect();
@@ -304,6 +361,10 @@ pub fn clean_input_name(name: &str) -> String {
 
 pub use astro_tv_helper::valid_app_id;
 
+/// Builds the desktop preview inventory: sample apps, three HDMI inputs and one demo app for
+/// every curated brand.
+///
+/// Desktop-only; on the TV a failed inventory read must never fall back to this data.
 pub fn demo_inventory() -> Inventory {
     let mut inventory = Inventory {
         apps: [
@@ -358,7 +419,7 @@ pub fn demo_inventory() -> Inventory {
             },
         ],
     };
-    // Desktop-only artwork gallery. TV inventory is always read from services.
+    // Every logo in assets/logos needs a demo app so the brands gallery can render it.
     for brand in crate::branding::BRANDS {
         if !inventory.apps.iter().any(|app| app.brand == brand.key) {
             inventory.apps.push(App::new(brand.ids[0], brand.title));

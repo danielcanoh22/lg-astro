@@ -103,9 +103,7 @@ fn back_distinguishes_taps_holds_delayed_releases_and_cancelled_presses() {
 
 fn native_key(scancode: u32, keycode: i32, down: bool) -> sdl2::event::Event {
     use sdl2::sys;
-    // SAFETY: a zeroed SDL event has initialized scalar keyboard fields. Write
-    // the native extension scancode through its integer ABI representation,
-    // without constructing an invalid host SDL_Scancode enum discriminant.
+    // SAFETY: SDL_Event is a C union of plain integer fields, so all-zero bytes are valid.
     let mut raw: sys::SDL_Event = unsafe { std::mem::zeroed() };
     raw.key.type_ = if down {
         sys::SDL_EventType::SDL_KEYDOWN
@@ -113,6 +111,8 @@ fn native_key(scancode: u32, keycode: i32, down: bool) -> sdl2::event::Event {
         sys::SDL_EventType::SDL_KEYUP
     } as u32;
     raw.key.keysym.sym = keycode;
+    // SAFETY: `scancode` is a C enum with a 32-bit integer ABI; writing it as u32 stores the
+    // native extension scancode without constructing an invalid host SDL_Scancode value.
     unsafe {
         std::ptr::addr_of_mut!(raw.key.keysym.scancode)
             .cast::<u32>()

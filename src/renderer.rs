@@ -1,5 +1,14 @@
-//! A small GLES2-compatible GPU painter. Rust owns vector glyphs and the draw list;
-//! SDL only supplies the context. No browser, LVGL or Qt runtime.
+//! Draws scenes of [`Draw`] commands with a small GLES2-compatible GPU painter.
+//!
+//! Rust owns the vector glyphs and the draw list; SDL only supplies the GL context, and no
+//! browser, LVGL or Qt runtime is involved. Scenes are laid out in logical 1920×1080 units and
+//! scaled to the drawable through its [`Viewport`]. Three programs draw everything: the paint
+//! shader (rounded rectangles, shadows, raster images and the folded wallpaper background), and
+//! the vector and text shaders for `.lvec` meshes and cached text runs. Images decode on the
+//! [`image_loader`] worker; only their GPU uploads happen here.
+//!
+//! The renderer is created, used and dropped on the SDL thread while its GL context is current.
+//! Every `unsafe` GL call in this module relies on that invariant.
 use crate::{
     font::Font,
     image_loader::{self, Decoded},
@@ -17,26 +26,38 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Straight (not premultiplied) RGBA, each channel from 0 to 1.
 pub type Color = [f32; 4];
+/// The interface's off-white foreground colour.
 pub const WHITE: Color = [0.96, 0.96, 0.96, 1.];
+/// CPU bytes of cached glyph outlines (and at most 4096 glyphs) before the least recently drawn
+/// are evicted.
 const GLYPH_GEOMETRY_BUDGET: usize = 8 * 1024 * 1024;
+/// GPU bytes of cached text-run meshes (and at most 512 runs) before the least recently drawn
+/// are evicted.
 const TEXT_GEOMETRY_BUDGET: usize = 32 * 1024 * 1024;
+/// GPU bytes of image textures before those not drawn this frame are evicted, oldest first.
 const TEXTURE_BUDGET: usize = 48 * 1024 * 1024;
 /// GPU uploads per event-loop turn stop after about one 1080p RGBA wallpaper.
 const UPLOAD_BUDGET: usize = 1920 * 1080 * 4;
 /// Failed image paths are remembered so they are not decoded every frame, up to this many.
 const FAILED_IMAGE_LIMIT: usize = 256;
 
+/// The font and line layout of a text command.
 #[derive(Clone, Copy, Debug)]
 pub struct TextStyle {
+    /// Font size in logical pixels per em.
     pub size: f32,
+    /// Font weight, which selects the font file (see `load_font`).
     pub weight: u16,
     /// CSS letter-spacing in em, not pixels.
     pub tracking: f32,
+    /// Line height as a multiple of `size`.
     pub line_height: f32,
     pub align_right: bool,
 }
 impl TextStyle {
+    /// Returns a regular-weight, left-aligned style with a 1.2 line height.
     pub const fn new(size: f32) -> Self {
         Self {
             size,
@@ -54,6 +75,7 @@ impl TextStyle {
         self.tracking = tracking;
         self
     }
+    /// Sets the line height as a multiple of the size.
     pub const fn leading(mut self, height: f32) -> Self {
         self.line_height = height;
         self
@@ -64,53 +86,76 @@ impl TextStyle {
     }
 }
 
+/// One scene command, in logical 1920×1080 coordinates; a scene draws its commands in order.
+///
+/// [`crate::damage`] compares consecutive scenes command by command, so a command's fields must
+/// describe everything it paints.
 #[derive(Clone)]
 pub enum Draw {
+    /// A rounded rectangle: rect, corner radius, border width (0 fills it) and colour.
     Shape(Rect, f32, f32, Color),
+    /// A rounded rectangle with a vertical gradient: rect, corner radius, top and bottom colours.
     RoundedGradient(Rect, f32, Color, Color),
+    /// A soft rounded-rectangle shadow: rect, corner radius, blur distance and colour.
     Shadow(Rect, f32, f32, Color),
+    /// Wrapped text: content, layout box, style, colour and whether lines are centred.
     Text(String, Rect, TextStyle, Color, bool),
+    /// A raster image or `.lvec` mesh file: path, rect, corner radius and whether it is fitted
+    /// inside the rect (`true`) instead of stretched to it.
     Image(String, Rect, f32, bool),
+    /// A [`Draw::Image`] multiplied by a tint colour.
     TintedImage(String, Rect, f32, bool, Color),
     /// Installed icon and its backdrop, composited before opacity and edge fading.
     AppImage(Arc<crate::app_artwork::Artwork>, Rect, f32, Color),
+    /// Restricts later commands to a rect, or lifts the restriction.
     Clip(Option<Rect>),
+    /// Fades later commands vertically: [top fade-in start, end, bottom fade-out start, end] in
+    /// logical y; `None` turns it off.
     EdgeFade(Option<[f32; 4]>),
     /// Horizontal counterpart: [left fade-in start, end, right fade-out start, end].
     EdgeFadeX(Option<[f32; 4]>),
 }
 
+/// An uploaded image and its cache bookkeeping.
 struct Texture {
     id: GLuint,
     width: u32,
     height: u32,
     bytes: usize,
+    /// The last frame that drew it, for eviction.
     frame: u64,
     /// Uploaded without an alpha channel.
     opaque: bool,
 }
 impl Drop for Texture {
     fn drop(&mut self) {
+        // SAFETY: textures are dropped on the SDL thread with the context current, and the
+        // pointer names this texture's one name.
         unsafe {
             gl::DeleteTextures(1, &self.id);
         }
     }
 }
 
+/// A glyph outline tessellated in ems, shared by every text run that uses it.
 struct Glyph {
     geometry: Vec<astro_vector_geometry::Vertex>,
     frame: u64,
 }
 
+/// Identifies a laid-out text run; equal keys share one cached mesh.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct TextKey {
     text: String,
     weight: u16,
     // Logical size, tracking, line height, available width and height.
     layout: [u32; 5],
+    /// Bits: right-aligned, centred, multisampled (which drops the edge fringe).
     flags: u8,
 }
 
+/// A laid-out text run's mesh, relative to its layout box origin, with the glyph counts reported
+/// each time it is drawn.
 struct TextRun {
     mesh: Option<vector::Mesh>,
     missing_glyphs: usize,
@@ -118,6 +163,7 @@ struct TextRun {
     frame: u64,
 }
 
+/// GL driver details reported in diagnostics.
 #[derive(Clone, Serialize)]
 pub struct GraphicsInfo {
     pub vendor: String,
@@ -125,9 +171,11 @@ pub struct GraphicsInfo {
     pub version: String,
     pub max_texture_size: u32,
     pub max_viewport: [i32; 2],
+    /// Whether fragment shaders get `highp` floats; GLES2 only guarantees `mediump`.
     pub fragment_highp: bool,
 }
 
+/// Statistics of the last rendered frame and the cache sizes, reported in diagnostics.
 #[derive(Clone, Serialize)]
 pub struct RenderStats {
     pub target: Size,
@@ -138,8 +186,9 @@ pub struct RenderStats {
     pub max_physical_font_px: f32,
     pub cached_glyphs: usize,
     pub glyph_tessellations: usize,
-    /// Milliseconds this frame spent on first-use work: glyph outlines, logo meshes, images.
+    /// Milliseconds this frame spent tessellating new glyph outlines (first-use work).
     pub glyph_ms: f64,
+    /// Milliseconds this frame spent loading new logo meshes (first-use work).
     pub vector_load_ms: f64,
     /// GPU uploads of decoded images since the previous frame, plus any image decoded on
     /// the SDL thread (synchronous mode only).
@@ -197,20 +246,25 @@ impl RenderStats {
     }
 }
 
+/// What one draw call draws.
 enum BatchKind {
+    /// Paint-shader vertices `start..start + count`, all sampling one texture.
     Paint {
         texture: GLuint,
         start: usize,
         count: usize,
+        /// An app icon's backdrop gradient, top and bottom RGB.
         backdrop: Option<[[u8; 3]; 2]>,
         /// The outgoing wallpaper of a cross-fade, sampled from texture unit 1.
         outgoing: Option<GLuint>,
     },
+    /// A cached `.lvec` mesh stretched to `rect`.
     Vector {
         path: String,
         rect: Rect,
         tint: Color,
     },
+    /// A cached text run placed at `origin`.
     Text {
         key: TextKey,
         origin: [f32; 2],
@@ -218,6 +272,7 @@ enum BatchKind {
     },
 }
 
+/// A draw call with the clip and edge fade in effect when it was recorded.
 struct Batch {
     kind: BatchKind,
     clip: Option<Rect>,
@@ -225,6 +280,7 @@ struct Batch {
     fade: Option<[f32; 8]>,
 }
 
+/// Returns whether `rect` covers the whole logical screen.
 fn full_screen(rect: &Rect) -> bool {
     rect.x <= 0. && rect.y <= 0. && rect.x + rect.w >= 1920. && rect.y + rect.h >= 1080.
 }
@@ -301,6 +357,7 @@ pub(crate) enum Scrim {
     Gradient(Color, Color),
 }
 impl Scrim {
+    /// Recognises a full-screen fill that can fold into the wallpaper.
     fn of(command: &Draw) -> Option<Self> {
         match command {
             Draw::Shape(rect, radius, border, color)
@@ -316,6 +373,7 @@ impl Scrim {
             _ => None,
         }
     }
+    /// Returns the colour at relative height `t`, 0 at the top and 1 at the bottom.
     fn at(&self, t: f32) -> Color {
         match self {
             Self::Flat(color) => *color,
@@ -326,6 +384,7 @@ impl Scrim {
     }
 }
 
+/// Intersects two `[x, y, width, height]` pixel rects; disjoint rects give a zero size.
 fn intersect(a: [i32; 4], b: [i32; 4]) -> [i32; 4] {
     let x = a[0].max(b[0]);
     let y = a[1].max(b[1]);
@@ -371,12 +430,15 @@ fn profile_skip(command: &Draw) -> bool {
 }
 
 /// Stem emboldening for small text, in physical pixels per edge: thin stems get an opaque
-/// core instead of only grey edge pixels, which a TV's 2x scale-up would soften further.
+/// core instead of only grey edge pixels, which a TV's scale-up of the graphics plane would
+/// soften further.
 /// Full strength up to 16 physical pixels, none from 28. Zero in the default MSAA mode.
 fn embolden(physical_size: f32, strength: f32) -> f32 {
     strength * ((28. - physical_size) / 12.).clamp(0., 1.)
 }
 
+/// Snaps a logical rect's edges to whole drawable pixels at `scale` drawable pixels per logical
+/// pixel, unless `ASTRO_SNAP=0`.
 fn snap_rect(rect: Rect, scale: f32) -> Rect {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if !*ENABLED.get_or_init(|| std::env::var("ASTRO_SNAP").as_deref() != Ok("0")) {
@@ -391,6 +453,7 @@ fn snap_rect(rect: Rect, scale: f32) -> Rect {
     Rect::new(x0, y0, x1 - x0, y1 - y0)
 }
 
+/// The GL painter and its caches of fonts, glyphs, text runs, textures and vector meshes.
 pub struct Renderer {
     program: GLuint,
     vector_program: GLuint,
@@ -400,6 +463,7 @@ pub struct Renderer {
     vao: GLuint,
     white: Texture,
     font_directory: PathBuf,
+    /// Loaded faces by font ID (see [`load_font`]).
     fonts: HashMap<u16, Font>,
     failed_fonts: HashSet<u16>,
     glyphs: HashMap<(char, u16), Glyph>,
@@ -412,9 +476,13 @@ pub struct Renderer {
     synchronous_images: bool,
     /// The last full-screen wallpaper drawn, shown while its replacement decodes.
     last_wallpaper: Option<String>,
+    /// Upload time not yet reported, counted in the next frame's `image_load_ms`.
     upload_ms: f64,
+    /// Loaded meshes by path; `None` remembers a file that failed to load.
     vectors: HashMap<String, Option<vector::Mesh>>,
+    /// The file drawn for each wallpaper path (see [`Self::resolve`]).
     artwork_variants: HashMap<String, String>,
+    /// This frame's paint vertices, 14 `f32` each: position, uv, colour, shape and parameters.
     vertices: Vec<f32>,
     batches: Vec<Batch>,
     clip: Option<Rect>,
@@ -426,12 +494,22 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Sets the vertical (`offset` 0) or horizontal (`offset` 4) half of the edge fade.
     fn set_fade(&mut self, offset: usize, fade: Option<[f32; 4]>) {
         let mut next = self.fade.unwrap_or([0.; 8]);
         next[offset..offset + 4].copy_from_slice(&fade.unwrap_or([0.; 4]));
         self.fade = (next != [0.; 8]).then_some(next);
     }
 
+    /// Compiles the shaders and opens the regular font from the directory containing `font`.
+    ///
+    /// `gles` selects GLSL ES 1.00 shaders; otherwise GLSL 1.50 for a desktop core profile, which
+    /// also needs a vertex array object. `text_embolden` is the small-text emboldening strength in
+    /// physical pixels per edge.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the regular font cannot be loaded or a shader does not compile or link.
     pub fn new(font: &Path, gles: bool, text_embolden: f32) -> Result<Self, String> {
         let directory = font.parent().ok_or("Invalid font path")?;
         let mut fonts = HashMap::new();
@@ -441,6 +519,8 @@ impl Renderer {
         let mut max_texture_size = 0;
         let mut max_viewport = [0; 2];
         let mut precision = 0;
+        // SAFETY: the renderer's GL context is current on the SDL thread (see the module docs); the out pointers
+        // name live locals of the sizes these queries write.
         unsafe {
             gl::GetIntegerv(gl::MAX_TEXTURE_SIZE, &mut max_texture_size);
             gl::GetIntegerv(gl::MAX_VIEWPORT_DIMS, max_viewport.as_mut_ptr());
@@ -481,6 +561,7 @@ impl Renderer {
         ) {
             Ok(program) => program,
             Err(error) => {
+                // SAFETY: the context is current and `program` was linked above.
                 unsafe { gl::DeleteProgram(program) };
                 return Err(error);
             }
@@ -492,6 +573,7 @@ impl Renderer {
         ) {
             Ok(program) => program,
             Err(error) => {
+                // SAFETY: the context is current and both programs were linked above.
                 unsafe {
                     gl::DeleteProgram(program);
                     gl::DeleteProgram(vector_program);
@@ -501,6 +583,8 @@ impl Renderer {
         };
         let mut buffer = 0;
         let mut vao = 0;
+        // SAFETY: the renderer's GL context is current on the SDL thread (see the module docs); `buffer` and
+        // `vao` are live out pointers.
         unsafe {
             if !gles {
                 gl::GenVertexArrays(1, &mut vao);
@@ -559,6 +643,7 @@ impl Renderer {
         })
     }
 
+    /// Loads font `id` on first use; a failure is logged once and remembered.
     fn ensure_font(&mut self, id: u16) -> bool {
         if self.fonts.contains_key(&id) {
             return true;
@@ -579,6 +664,8 @@ impl Renderer {
         }
     }
 
+    /// Returns the outline of `c` in font `font`, which must be loaded, tessellating it on first
+    /// use.
     fn glyph(&mut self, c: char, font: u16) -> Result<&[astro_vector_geometry::Vertex], String> {
         let key = (c, font);
         if !self.glyphs.contains_key(&key) {
@@ -599,6 +686,8 @@ impl Renderer {
         Ok(&glyph.geometry)
     }
 
+    /// Evicts the least recently drawn glyphs and text runs beyond their budgets, keeping those
+    /// drawn this frame, and updates the cache statistics.
     fn trim_text_geometry(&mut self) {
         let glyph_bytes =
             |glyph: &Glyph| glyph.geometry.len() * size_of::<astro_vector_geometry::Vertex>();
@@ -645,6 +734,7 @@ impl Renderer {
         self.stats.text_geometry_bytes = self.text_runs.values().map(run_bytes).sum();
     }
 
+    /// Adds a single-colour [`Self::gradient_quad`].
     fn quad(
         &mut self,
         rect: Rect,
@@ -657,6 +747,12 @@ impl Renderer {
         self.gradient_quad(rect, uv, radius, border, [color, color], texture, None);
     }
 
+    /// Adds a pixel-snapped quad for the paint shader.
+    ///
+    /// `uv` maps the texture, `colors` are the top and bottom vertex colours, a positive `border`
+    /// draws only an outline that wide, and a negative one blurs the edge by that distance. A
+    /// negative `radius` skips the rounded shape (see [`plain_radius`]); `backdrop` draws app
+    /// artwork over its gradient.
     #[allow(clippy::too_many_arguments)]
     fn gradient_quad(
         &mut self,
@@ -806,6 +902,12 @@ impl Renderer {
         );
     }
 
+    /// Lays out and queues a text run, reusing the cached mesh when the same text and layout were
+    /// drawn before.
+    ///
+    /// Lines wrap at spaces, or between characters for a word wider than the box, and stop at the
+    /// box height. Characters missing from the main font fall back to the CJK or Korean font.
+    /// Text entirely outside the screen or clip is skipped.
     fn text(&mut self, text: &str, rect: Rect, style: TextStyle, color: Color, centered: bool) {
         // Layout remains logical. Reuse the same run geometry at every density;
         // its shader snaps insertion origins and computes pixel-sized coverage.
@@ -850,6 +952,8 @@ impl Renderer {
             return;
         }
         let rect = Rect::new(0., 0., rect.w, rect.h);
+        // Font IDs name files (see `load_font`): the weight, +1000 for the display cut from 32 px,
+        // and 2400/2500 (CJK) or 3400/3500 (Korean) for the fallbacks.
         let font_id = style.weight + if style.size >= 32. { 1000 } else { 0 };
         let cjk_id = if style.weight >= 500 { 2500 } else { 2400 };
         let hangul_id = cjk_id + 1000;
@@ -1033,6 +1137,7 @@ impl Renderer {
         self.submit_text(key, origin, color);
     }
 
+    /// Queues a cached text run at `origin` and adds its glyph counts to this frame's statistics.
     fn submit_text(&mut self, key: TextKey, origin: [f32; 2], tint: Color) {
         let run = self.text_runs.get_mut(&key).unwrap();
         run.frame = self.frame;
@@ -1048,11 +1153,13 @@ impl Renderer {
         }
     }
 
+    /// Draws an image command without folded fills.
     fn image(&mut self, path: &str, rect: Rect, radius: f32, contain: bool, tint: Color) {
         self.folded_image(path, rect, radius, contain, tint, &[]);
     }
 
-    /// The file actually drawn for `path`: a 4K drawable uses a wallpaper's `@2x` variant.
+    /// Returns the file actually drawn for `path`: a 4K drawable uses a wallpaper's `@2x`
+    /// variant when the file exists.
     fn resolve(&mut self, path: &str) -> String {
         if self.stats.viewport.scale > 1.
             && self.info.max_texture_size >= 3840
@@ -1092,6 +1199,8 @@ impl Renderer {
         self.request_resolved(&path);
     }
 
+    /// Requests an already resolved path, decoding it on this thread in synchronous mode or
+    /// when the worker is unavailable.
     fn request_resolved(&mut self, path: &str) {
         if self.textures.contains_key(path)
             || self.failed_images.contains(path)
@@ -1212,6 +1321,8 @@ impl Renderer {
         }
     }
 
+    /// Draws a raster image or `.lvec` mesh into `rect`, folding `scrims` into a full-screen
+    /// wallpaper.
     fn folded_image(
         &mut self,
         path: &str,
@@ -1308,13 +1419,14 @@ impl Renderer {
         Some((texture.id, texture.width, texture.height))
     }
 
-    /// Edges on whole drawable pixels. The TV scales its 1080p graphics plane up 2x, which
-    /// turns a half-covered edge pixel into a soft 2-pixel band; whole pixels stay crisp.
-    /// ASTRO_SNAP=0 keeps logical positions (for comparison).
+    /// Moves edges onto whole drawable pixels. A TV that scales a 1080p graphics plane up to the
+    /// panel turns a half-covered edge pixel into a soft band; whole pixels stay crisp.
+    /// `ASTRO_SNAP=0` keeps logical positions (for comparison).
     fn snap(&self, rect: Rect) -> Rect {
         snap_rect(rect, self.stats.viewport.scale)
     }
 
+    /// Loads a `.lvec` mesh on first use and queues it, clipped to the current clip.
     fn vector_image(&mut self, path: &str, mut rect: Rect, contain: bool, tint: Color) {
         if rect.w <= 0. || rect.h <= 0. {
             return;
@@ -1379,6 +1491,8 @@ impl Renderer {
         });
     }
 
+    /// Draws installed app artwork, fitted to 68% of the card, over its sampled backdrop
+    /// gradient; the texture is uploaded on first use.
     fn app_image(
         &mut self,
         image: &crate::app_artwork::Artwork,
@@ -1471,6 +1585,8 @@ impl Renderer {
         // Captures can bind a single-sample FBO even when the actual TV window
         // is multisampled, so query the active target rather than assume.
         let mut samples = 0;
+        // SAFETY: the renderer's GL context is current on the SDL thread (see the module docs); `samples` is
+        // a live out pointer.
         unsafe { gl::GetIntegerv(gl::SAMPLES, &mut samples) };
         self.stats.multisample_samples = samples.max(0) as u32;
         if samples > 1 {
@@ -1586,6 +1702,7 @@ impl Renderer {
         if let Some([_, _, w, h]) = damage {
             self.stats.redrawn_fraction = f64::from(w * h) / f64::from((width * height).max(1));
         }
+        // SAFETY: the renderer's GL context is current on the SDL thread (see the module docs).
         let scissor = |area: Option<[i32; 4]>| unsafe {
             match area {
                 Some([x, y, w, h]) => {
@@ -1595,6 +1712,10 @@ impl Renderer {
                 None => gl::Disable(gl::SCISSOR_TEST),
             }
         };
+        // SAFETY: the renderer's GL context is current on the SDL thread (see the module docs). The upload covers
+        // exactly `self.vertices`, the attribute offsets and strides match the 14-float paint and
+        // 9-float mesh layouts, and every batch's buffer, texture and vertex range was created by
+        // this renderer for this frame.
         unsafe {
             gl::Viewport(0, 0, width as i32, height as i32);
             scissor(damage);
@@ -1774,6 +1895,8 @@ impl Renderer {
         self.stats.cpu_submission_ms = started.elapsed().as_secs_f64() * 1000.;
     }
 
+    /// Draws a mesh with the vector or text program; `transform` is [x scale, y scale, x offset,
+    /// y offset] from mesh units to logical pixels.
     fn draw_mesh(
         &self,
         program: GLuint,
@@ -1783,6 +1906,8 @@ impl Renderer {
         embolden: f32,
     ) {
         let viewport = self.stats.viewport;
+        // SAFETY: the renderer's GL context is current on the SDL thread (see the module docs); `mesh.buffer`
+        // holds `mesh.vertices` vertices in the 9-float layout the attribute pointers describe.
         unsafe {
             gl::UseProgram(program);
             if program == self.text_program {
@@ -1841,8 +1966,16 @@ impl Renderer {
         &self.stats
     }
 
+    /// Saves the bound framebuffer's `width` × `height` pixels as an image, flipping GL's
+    /// bottom-up rows.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the image cannot be encoded or written.
     pub fn screenshot(&self, path: &Path, width: u32, height: u32) -> Result<(), String> {
         let mut pixels = vec![0; width as usize * height as usize * 4];
+        // SAFETY: the renderer's GL context is current on the SDL thread (see the module docs); `pixels` holds
+        // exactly `width` × `height` RGBA pixels, so ReadPixels stays in bounds.
         unsafe {
             gl::ReadPixels(
                 0,
@@ -1860,7 +1993,13 @@ impl Renderer {
         image.save(path).map_err(|e| e.to_string())
     }
 
-    /// Capture the authored TV surface, independent of desktop HiDPI/window limits.
+    /// Renders the scene into an offscreen texture of `size` and saves it, independent of desktop
+    /// HiDPI and window limits.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `size` exceeds the GPU's texture or viewport limits, the framebuffer is
+    /// incomplete or the image cannot be saved.
     pub fn capture(
         &mut self,
         commands: &[Draw],
@@ -1879,6 +2018,8 @@ impl Renderer {
         }
         let image = texture(size.width, size.height, &[]);
         let mut framebuffer = 0;
+        // SAFETY: the renderer's GL context is current on the SDL thread (see the module docs); `framebuffer` is a
+        // live out pointer and `image` stays alive until this function returns.
         unsafe {
             gl::GenFramebuffers(1, &mut framebuffer);
             gl::BindFramebuffer(gl::FRAMEBUFFER, framebuffer);
@@ -1898,6 +2039,8 @@ impl Renderer {
         self.render(commands, size.width, size.height, None);
         let stats = self.stats.clone();
         let result = self.screenshot(path, size.width, size.height);
+        // SAFETY: the context is current; this restores the window framebuffer and deletes the one
+        // created above.
         unsafe {
             gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
             gl::DeleteFramebuffers(1, &framebuffer);
@@ -1923,6 +2066,8 @@ impl Renderer {
         let stats = self.stats.clone();
         let mut framebuffers = [0; 2];
         let mut renderbuffers = [0; 2];
+        // SAFETY: the renderer's GL context is current on the SDL thread (see the module docs); `window` holds
+        // `width` × `height` RGBA pixels and the name arrays hold two entries each.
         unsafe {
             gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
             gl::ReadPixels(
@@ -1956,7 +2101,10 @@ impl Renderer {
             gl::BindFramebuffer(gl::FRAMEBUFFER, framebuffers[0]);
         }
         self.render(commands, width, height, None);
+        // SAFETY: the context is current; `full` holds `width` × `height` RGBA pixels, and the
+        // framebuffers and renderbuffers created above are deleted after use.
         unsafe {
+            // Resolve a multisampled render into the single-sample buffer ReadPixels can read.
             gl::BindFramebuffer(gl::READ_FRAMEBUFFER, framebuffers[0]);
             gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, framebuffers[1]);
             gl::BlitFramebuffer(0, 0, w, h, 0, 0, w, h, gl::COLOR_BUFFER_BIT, gl::NEAREST);
@@ -1994,8 +2142,10 @@ impl Renderer {
     }
 }
 
-// Noto Sans SC (font-cjk) has no Hangul syllables; these go to font-kr instead.
-// Keep in sync with is_hangul() in tools/font-weights.py, which builds font-kr.
+/// Returns whether `c` is Hangul, which the Korean font covers.
+///
+/// Noto Sans SC (font-cjk) has no Hangul syllables; these go to font-kr instead.
+/// Keep in sync with `is_hangul()` in `tools/font-weights.py`, which builds font-kr.
 fn is_hangul(c: char) -> bool {
     matches!(
         c,
@@ -2007,6 +2157,12 @@ fn is_hangul(c: char) -> bool {
     )
 }
 
+/// Loads a font by ID: `font-<weight>`, `font-display-<weight>` (+1000), `font-cjk-<weight>`
+/// (+2000) or `font-kr-<weight>` (+3000), all `.ttf`.
+///
+/// # Errors
+///
+/// Fails when the file is missing or not a valid font.
 fn load_font(directory: &Path, id: u16) -> Result<Font, String> {
     let name = if id >= 3000 {
         format!("font-kr-{}.ttf", id - 3000)
@@ -2033,6 +2189,8 @@ fn load_font(directory: &Path, id: u16) -> Result<Font, String> {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
+        // SAFETY: the renderer is dropped on the SDL thread with its context current, and these
+        // names were created in `Renderer::new`.
         unsafe {
             gl::DeleteBuffers(1, &self.buffer);
             gl::DeleteProgram(self.program);
@@ -2045,6 +2203,7 @@ impl Drop for Renderer {
     }
 }
 
+/// Creates an RGBA texture; empty `pixels` leaves its contents undefined, for a render target.
 fn texture(width: u32, height: u32, pixels: &[u8]) -> Texture {
     texture_with(width, height, gl::RGBA, pixels)
 }
@@ -2053,6 +2212,8 @@ fn texture(width: u32, height: u32, pixels: &[u8]) -> Texture {
 fn texture_with(width: u32, height: u32, format: GLenum, pixels: &[u8]) -> Texture {
     let channels = if format == gl::RGB { 3 } else { 4 };
     let mut id = 0;
+    // SAFETY: called on the SDL thread with the context current; `pixels` is empty (no upload) or
+    // holds `width` × `height` tightly packed pixels of `format`.
     unsafe {
         gl::GenTextures(1, &mut id);
         gl::BindTexture(gl::TEXTURE_2D, id);
@@ -2097,7 +2258,10 @@ fn visible(rect: &Rect, clip: Option<Rect>) -> bool {
         && clip.is_none_or(|clip| overlaps(rect, &clip))
 }
 
+/// Returns a GL string such as the vendor, or `unknown`.
 fn gl_string(name: GLenum) -> String {
+    // SAFETY: called on the SDL thread with the context current; a non-null GetString result is
+    // a static NUL-terminated string.
     unsafe {
         let value = gl::GetString(name);
         if value.is_null() {
@@ -2108,8 +2272,15 @@ fn gl_string(name: GLenum) -> String {
     }
 }
 
+/// Compiles one shader stage.
+///
+/// # Errors
+///
+/// Fails with the driver's log when compilation fails, or when the source contains a NUL byte.
 fn compile(kind: GLenum, source: &str) -> Result<GLuint, String> {
     let source = CString::new(source).map_err(|e| e.to_string())?;
+    // SAFETY: called on the SDL thread with the context current; `source` is NUL-terminated and
+    // outlives ShaderSource, and the log buffer's length is passed with it.
     unsafe {
         let shader = gl::CreateShader(kind);
         gl::ShaderSource(shader, 1, &source.as_ptr(), std::ptr::null());
@@ -2130,17 +2301,26 @@ fn compile(kind: GLenum, source: &str) -> Result<GLuint, String> {
     }
 }
 
+/// Compiles and links a program, binding `attributes` to locations 0, 1, … in order.
+///
+/// # Errors
+///
+/// Fails with the driver's log when a stage does not compile or the program does not link.
 fn link(vertex: &str, fragment: &str, attributes: &[&CStr]) -> Result<GLuint, String> {
     let vertex = compile(gl::VERTEX_SHADER, vertex)?;
     let fragment = match compile(gl::FRAGMENT_SHADER, fragment) {
         Ok(fragment) => fragment,
         Err(error) => {
+            // SAFETY: the context is current and `vertex` was compiled above.
             unsafe {
                 gl::DeleteShader(vertex);
             }
             return Err(error);
         }
     };
+    // SAFETY: called on the SDL thread with the context current; the shaders were compiled
+    // above, the attribute names are NUL-terminated, and the log buffer's length is passed with
+    // it.
     unsafe {
         let program = gl::CreateProgram();
         gl::AttachShader(program, vertex);

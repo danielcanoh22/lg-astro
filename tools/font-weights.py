@@ -1,4 +1,18 @@
-"""Freeze the bundled variable Inter font at the web UI's weights/optical sizes."""
+"""Freezes the bundled variable fonts into the static instances Astro renders, and measures them.
+
+Run by tools/assets.mjs (pnpm assets) inside nix develop, which supplies Python and fontTools:
+
+    python3 tools/font-weights.py OUT_DIR NOTO_SANS_SC NOTO_SANS_KR
+
+Reads OUT_DIR/font.ttf (Inter, decoded from the bundled WOFF2) and writes into OUT_DIR:
+
+- font-WEIGHT.ttf and font-display-WEIGHT.ttf: Inter at each UI weight, at the text (14) and
+  display (32) optical sizes when the font has those axes;
+- font-cjk-400/500.ttf and font-kr-400/500.ttf: renamed subsets of Noto Sans SC (CJK without
+  Hangul) and Noto Sans KR (Hangul only), which keep their copyright and license names;
+- font-metrics.json: each instance's advance widths per character in em units, with the CJK and
+  Hangul subsets merged as fallback-400 and fallback-500.
+"""
 import sys
 import json
 from pathlib import Path
@@ -31,6 +45,11 @@ def is_hangul(codepoint):
 
 
 def fallback(path, keep, family, prefix):
+    """Writes Regular (400) and Medium (500) instances of the variable font at `path`, subset to
+    the codepoints `keep` accepts and renamed to `family`, as PREFIX-400.ttf and PREFIX-500.ttf.
+
+    Returns each weight's advance widths per character in em units.
+    """
     font = TTFont(path)
     options = subset.Options()
     options.layout_features = []

@@ -1,17 +1,25 @@
-//! Persisted text rendering and startup-only GL configuration. MSAA needs a new SDL window.
+//! Holds the saved text rendering preference and the startup GL configuration derived from it.
+//!
+//! The mode only takes effect on the next start, because SDL picks the window's sample count
+//! when it creates the window.
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// The `text_rendering` preference: how text and logo edges are antialiased.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextRendering {
+    /// A multisampled window with intact outlines and no emboldening.
     #[default]
     Msaa,
+    /// A single-sample window with analytic edge filters and small-text emboldening.
     Analytic,
 }
 
 impl TextRendering {
+    /// Every mode in settings picker order.
     pub const ALL: [Self; 2] = [Self::Msaa, Self::Analytic];
 
+    /// Returns the position in [`Self::ALL`].
     pub fn index(self) -> usize {
         match self {
             Self::Msaa => 0,
@@ -19,6 +27,7 @@ impl TextRendering {
         }
     }
 
+    /// Returns the translation key of the settings label.
     pub fn label_key(self) -> &'static str {
         match self {
             Self::Msaa => "textRenderingMsaa",
@@ -27,6 +36,11 @@ impl TextRendering {
     }
 }
 
+/// Reads the saved preference, treating a missing, unknown or malformed value as MSAA.
+///
+/// # Errors
+///
+/// Fails only when the deserializer itself fails to produce a JSON value.
 pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<TextRendering, D::Error> {
     Ok(
         match serde_json::Value::deserialize(deserializer)?.as_str() {
@@ -36,16 +50,22 @@ pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<TextRen
     )
 }
 
+/// The text configuration chosen at startup and reported in diagnostics.
 #[derive(Debug, Serialize)]
 pub struct Configuration {
+    /// The effective mode after environment overrides.
     pub mode: TextRendering,
+    /// MSAA sample counts to try in order when creating the window; 0 is single-sample.
     #[serde(skip)]
     pub sample_counts: &'static [u8],
+    /// Small-text emboldening strength in physical pixels per edge.
     pub embolden: f32,
 }
 
 impl Configuration {
-    /// Environment overrides retain their diagnostic role, ahead of the saved preference.
+    /// Resolves the mode and emboldening from the saved preference and the `ASTRO_MSAA` and
+    /// `ASTRO_EMBOLDEN` environment values, which take precedence for diagnostics. Unrecognised
+    /// values are ignored.
     pub fn new(preference: TextRendering, msaa: Option<&str>, embolden: Option<&str>) -> Self {
         let mode = match msaa {
             Some("4") => TextRendering::Msaa,

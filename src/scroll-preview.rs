@@ -1,12 +1,22 @@
-//! Explicit manual scroll preview. Never used as a TV inventory fallback.
+//! Placeholder apps for the explicit `--test-extra-apps` scroll preview.
+//!
+//! The preview clones real inventory entries as artwork templates and is applied only after a
+//! successful inventory read; it is never a substitute for a failed TV inventory. Placeholder
+//! IDs are recognisable so they are never launched or removed on the TV.
 use crate::{i18n::Language, model::Inventory};
 
+/// App-ID prefix that marks a placeholder card; no installed app uses it.
 const PREFIX: &str = "com.astro.scroll-preview.";
 
+/// Returns whether `id` belongs to a scroll-preview placeholder rather than an installed app.
 pub fn is_placeholder(id: &str) -> bool {
     id.starts_with(PREFIX)
 }
 
+/// Appends up to `count` labelled placeholder apps that reuse the artwork of the real apps.
+///
+/// IDs are deterministic (`000`, `001`, …), so calling it again after a refresh skips
+/// placeholders that already exist. Does nothing when there are no real apps to copy.
 pub fn append(inventory: &mut Inventory, count: usize, language: Language) {
     if count == 0 {
         return;

@@ -1,5 +1,10 @@
-//! Installed-app artwork is discovered and decoded on its own worker. The UI
-//! requests visible cards only; it uploads finished pixels on the SDL thread.
+//! Installed-app artwork, discovered and decoded on its own worker thread.
+//!
+//! Icons are resolved from inventory metadata and each app's `appinfo.json` inside the known
+//! application roots. When the jailed app cannot read another app's files, the native
+//! `astro-helper` reads them through [`crate::platform::read_app_icons`]. The UI requests visible
+//! cards first and may prefetch the rest; finished pixels are uploaded to the GPU on the SDL
+//! thread. Decoded artwork is kept in a bounded LRU cache keyed by [`Source`].
 use crate::model::valid_app_id;
 use image::{ImageReader, Limits, RgbaImage};
 use serde::Serialize;
@@ -13,6 +18,7 @@ use std::{
     thread,
 };
 
+/// Application install roots on webOS. Icon paths outside these are never read.
 const ROOTS: [&str; 5] = [
     "/media/developer/apps/usr/palm/applications",
     "/media/cryptofs/apps/usr/palm/applications",
@@ -20,13 +26,20 @@ const ROOTS: [&str; 5] = [
     "/media/system/apps/usr/palm/applications",
     "/mnt/otncabi/usr/palm/applications",
 ];
+/// Largest icon file read, in bytes, locally or through the elevated helper.
 pub const MAX_FILE: usize = 512 * 1024;
+/// Decoded pixel bytes kept in the cache before least-recently-used entries are evicted.
 const CACHE_BYTES: usize = 16 * 1024 * 1024;
+/// Cache entries kept before least-recently-used entries are evicted.
 const CACHE_ENTRIES: usize = 256;
+/// Requests queued for the worker at once; further requests are refused until replies drain.
 const REQUEST_SLOTS: usize = 16;
 // Prefetched icons in flight at once: the rest of the request queue stays free for visible cards.
 const PREFETCH_SLOTS: usize = 8;
 
+/// Where to find one app's icon, taken from inventory metadata.
+///
+/// It is also the cache key and is serialized as the request to the elevated icon reader.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct Source {
     pub id: String,
@@ -39,6 +52,10 @@ pub struct Source {
 }
 
 impl Source {
+    /// Builds a source from an app's inventory metadata.
+    ///
+    /// Empty, overlong or control-character values are ignored, and `folderPath` is kept only
+    /// when it names a direct child of one of the application roots.
     pub fn new(id: &str, metadata: &Value) -> Self {
         let text = |key| {
             metadata
@@ -58,6 +75,7 @@ impl Source {
         }
     }
 
+    /// Returns the reported folder first, then the app ID under every application root.
     fn directories(&self) -> Vec<PathBuf> {
         let mut directories: Vec<_> = self.directory.iter().cloned().collect();
         for root in ROOTS {
@@ -70,15 +88,21 @@ impl Source {
     }
 }
 
+/// A decoded icon ready for upload, with the card colours chosen for it.
 pub struct Artwork {
+    /// Texture cache key, unique per request so a re-read icon never reuses a stale texture.
     pub key: String,
+    /// At most 256 × 256 pixels, with transparent pixels bled for clean GPU filtering.
     pub pixels: RgbaImage,
     /// The card behind the icon: top and bottom of a vertical gradient (equal when flat).
     pub backdrop: [[u8; 3]; 2],
 }
 
 impl Artwork {
-    /// The badge sits outside the inset icon, directly over this card gradient.
+    /// Returns whether a dark badge contrasts better than a light one at height `y` of the card.
+    ///
+    /// `y` is a fraction of the card height (clamped to 0..=1). The badge sits outside the inset
+    /// icon, directly over the card gradient, so only the backdrop decides.
     pub fn dark_badge(&self, y: f32) -> bool {
         let y = y.clamp(0., 1.);
         let rgb = std::array::from_fn(|i| {
@@ -89,10 +113,13 @@ impl Artwork {
     }
 }
 
+/// Reads at most `limit` bytes of a file inside the application roots.
 fn read_bounded(path: &Path, limit: usize) -> Option<Vec<u8>> {
     read_within(path, limit, &ROOTS.map(PathBuf::from))
 }
 
+/// Reads a regular file of at most `limit` bytes that resolves inside one of `roots`.
+///
 /// As Home this runs as root, so a link planted in an application's directory must not
 /// select a file outside the application roots.
 fn read_within(path: &Path, limit: usize, roots: &[PathBuf]) -> Option<Vec<u8>> {
@@ -106,6 +133,10 @@ fn read_within(path: &Path, limit: usize, roots: &[PathBuf]) -> Option<Vec<u8>> 
     (bytes.len() <= limit).then_some(bytes)
 }
 
+/// Resolves a manifest icon value against the app directory.
+///
+/// Accepts relative paths, absolute paths and `file://` URLs; rejects other URL schemes, `..`
+/// components and anything that ends up outside the application roots.
 fn icon_path(directory: &Path, value: &str) -> Option<PathBuf> {
     if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
         return None;
@@ -132,6 +163,9 @@ fn icon_path(directory: &Path, value: &str) -> Option<PathBuf> {
         .then_some(path)
 }
 
+/// Decodes an icon of at most 2048 × 2048 pixels and picks its card backdrop.
+///
+/// The returned [`Artwork::key`] is empty; the worker fills it in per request.
 fn decode(bytes: &[u8]) -> Option<Artwork> {
     let mut reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -212,6 +246,8 @@ fn bleed(pixels: &mut RgbaImage, passes: usize) {
     }
 }
 
+/// Chooses the card colours behind an icon: its dominant opaque edge colour, or a generated
+/// gradient for transparent artwork.
 fn backdrop(image: &RgbaImage) -> [[u8; 3]; 2] {
     // Match the icon's opaque edges rather than letting its central logo choose
     // the card colour. Transparent artwork gets a gradient of its own instead, even
@@ -315,6 +351,7 @@ fn logo_backdrop(image: &RgbaImage) -> [[u8; 3]; 2] {
     if light.0 > dark.0 { light.1 } else { dark.1 }
 }
 
+/// Returns the WCAG relative luminance of an sRGB colour.
 fn luminance(rgb: [u8; 3]) -> f32 {
     let linear = |c: u8| {
         let c = c as f32 / 255.;
@@ -327,6 +364,7 @@ fn luminance(rgb: [u8; 3]) -> f32 {
     0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2])
 }
 
+/// Returns the WCAG contrast ratio between two relative luminances.
 fn contrast(a: f32, b: f32) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
@@ -348,6 +386,7 @@ fn hsv(rgb: [u8; 3]) -> (f32, f32, f32) {
     (hue, if max == 0. { 0. } else { range / max }, max)
 }
 
+/// Converts hue in degrees and saturation and lightness in 0..1 to sRGB.
 fn hsl(hue: f32, saturation: f32, lightness: f32) -> [u8; 3] {
     let chroma = (1. - (2. * lightness - 1.).abs()) * saturation;
     let x = chroma * (1. - ((hue / 60.).rem_euclid(2.) - 1.).abs());
@@ -363,6 +402,7 @@ fn hsl(hue: f32, saturation: f32, lightness: f32) -> [u8; 3] {
     [r, g, b].map(|c| ((c + m).clamp(0., 1.) * 255.).round() as u8)
 }
 
+/// Loads one app's icon from its installed files, falling back to the elevated helper.
 fn load(source: &Source) -> Option<Artwork> {
     if !valid_app_id(&source.id) {
         return None;
@@ -381,6 +421,11 @@ fn load(source: &Source) -> Option<Artwork> {
     }
 }
 
+/// Tries each candidate directory and icon in preference order and returns the first that
+/// decodes.
+///
+/// Inventory icons come before the manifest's, large icons before small, and `icon.png` is the
+/// last resort. A manifest whose `id` differs from the app's is ignored.
 fn load_local(
     source: &Source,
     mut read: impl FnMut(&Path, usize) -> Option<Vec<u8>>,
@@ -416,11 +461,13 @@ fn load_local(
     None
 }
 
+/// A queued icon read; `token` matches the reply to the cache entry that asked for it.
 struct Request {
     token: u64,
     source: Source,
 }
 
+/// The worker's two-level queue: cards on screen are served before prefetches.
 #[derive(Default)]
 struct Requests {
     visible: VecDeque<Request>,
@@ -428,6 +475,7 @@ struct Requests {
     closed: bool,
 }
 
+/// The UI side of the request queue. Dropping it closes the queue and stops the worker.
 struct RequestSender {
     queue: Arc<(Mutex<Requests>, Condvar)>,
 }
@@ -448,6 +496,7 @@ impl RequestSender {
         Ok(())
     }
 
+    /// Moves a queued prefetch to the visible queue because its card is now on screen.
     fn promote(&self, token: u64) {
         let mut queue = self.queue.0.lock().unwrap();
         if let Some(index) = queue.background.iter().position(|r| r.token == token) {
@@ -487,6 +536,7 @@ struct Cache {
     entries: HashMap<Source, Entry>,
 }
 
+/// The UI's handle to the artwork worker and its cache. Use it only from the SDL thread.
 pub struct Service {
     sender: Option<RequestSender>,
     receiver: mpsc::Receiver<Reply>,
@@ -495,6 +545,7 @@ pub struct Service {
 }
 
 impl Service {
+    /// Starts the artwork worker, or returns an inert service when `enabled` is false.
     pub fn new(enabled: bool) -> Self {
         Self::with_loader(enabled, load)
     }
@@ -547,13 +598,19 @@ impl Service {
         }
     }
 
+    /// Returns the cached artwork for a visible card, queueing a read when it is not cached.
+    ///
+    /// `None` means not loaded yet, unavailable, or the queue is full; the card shows its
+    /// fallback meanwhile.
     pub fn get(&self, source: &Source) -> Option<Arc<Artwork>> {
         self.request(source, false).ok().flatten()
     }
 
-    /// The cached artwork, or a queued request for it. `Err` when the request queue is full:
-    /// a visible card is retried when the next completed request redraws the scene, so
-    /// neither scrolling nor a slow Homebrew service can block input.
+    /// Returns the cached artwork, or queues a request for it and returns `Ok(None)`.
+    ///
+    /// `Err` when the request queue is full: a visible card is retried when the next completed
+    /// request redraws the scene, so neither scrolling nor a slow Homebrew service can block
+    /// input.
     fn request(&self, source: &Source, background: bool) -> Result<Option<Arc<Artwork>>, ()> {
         let sender = self.sender.as_ref().ok_or(())?;
         let mut cache = self.cache.borrow_mut();
@@ -582,8 +639,9 @@ impl Service {
         Ok(None)
     }
 
-    /// Decodes these icons in the background, e.g. every installed app, so pages open with
-    /// their artwork ready. They are fed to the worker a few at a time as replies come in.
+    /// Decodes these icons in the background, such as every installed app, so pages open with
+    /// their artwork ready. Replaces any earlier prefetch list; icons are fed to the worker a
+    /// few at a time as replies come in.
     pub fn prefetch(&self, sources: impl IntoIterator<Item = Source>) {
         if self.sender.is_none() {
             return;
@@ -592,6 +650,7 @@ impl Service {
         self.feed();
     }
 
+    /// Queues prefetches until [`PREFETCH_SLOTS`] requests are in flight.
     fn feed(&self) {
         let mut queue = self.prefetch.borrow_mut();
         let mut in_flight = self.in_flight();
@@ -618,14 +677,15 @@ impl Service {
             .count()
     }
 
-    /// Whether a requested icon has not come back yet, so the event loop
-    /// should wake soon to poll for it.
+    /// Returns whether a requested icon has not come back yet, so the event loop should wake
+    /// soon to poll for it.
     pub fn pending(&self) -> bool {
         self.in_flight() > 0 || !self.prefetch.borrow().is_empty()
     }
 
-    /// Refresh apps: every icon is read again. Replies to earlier requests
-    /// no longer match an entry's token and are dropped.
+    /// Forgets every icon so it is read again, for the manual app refresh.
+    ///
+    /// Replies to earlier requests no longer match an entry's token and are dropped.
     pub fn reset(&self) {
         self.cache.borrow_mut().entries.clear();
         self.prefetch.borrow_mut().clear();
@@ -634,9 +694,10 @@ impl Service {
         }
     }
 
-    /// After an automatic inventory refresh: icons that were unavailable are
-    /// tried again. Decoded and pending icons stay, because a `Source` names
-    /// the app's version and icon paths, so an updated app has a new one.
+    /// Retries icons that were unavailable, after an automatic inventory refresh.
+    ///
+    /// Decoded and pending icons stay, because a [`Source`] names the app's version and icon
+    /// paths, so an updated app gets a new cache entry.
     pub fn refresh(&self) {
         self.cache
             .borrow_mut()
@@ -644,6 +705,8 @@ impl Service {
             .retain(|_, entry| !matches!(entry.image, Some(None)));
     }
 
+    /// Collects finished replies, evicts least-recently-used artwork over the cache limits and
+    /// queues more prefetches. Returns whether any reply arrived, so the scene needs a redraw.
     pub fn poll(&self) -> bool {
         let mut changed = false;
         let mut cache = self.cache.borrow_mut();

@@ -1,9 +1,20 @@
+//! Checks this fork's GitHub release feed for a newer Astro and installs it on request.
+//!
+//! [`discovery::Service`] is the read-only checker behind the update notice; [`Worker`]
+//! downloads and verifies an offered IPK and hands it to the root installer through
+//! [`crate::platform`]. Both run on their own threads and wake the SDL thread through
+//! [`crate::wake`]. Both share [`offered`], so the notice never announces a release the
+//! installer would refuse. The SHA-256 comes from the same feed as the IPK: it detects
+//! corruption, not a malicious release.
+
+/// The update notice: a background feed check and the version rules it uses.
 pub mod discovery {
     use serde::Serialize;
     use std::{sync::mpsc, thread, time::Duration};
 
     use super::{CURRENT, FEED};
 
+    /// Progress of the update check, as shown on the Settings system card.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
     #[serde(rename_all = "snake_case")]
     pub enum Status {
@@ -14,17 +25,24 @@ pub mod discovery {
         Failed,
     }
 
+    /// Reports whether this run may contact the public feed: never for scripted captures or
+    /// simulated update previews.
     pub fn public_checks_enabled(scripted: bool, simulated: bool) -> bool {
         !scripted && !simulated
     }
 
+    /// The update-check worker. Each check sends one result: the newer version, `None` when
+    /// up to date, or an error message.
     pub struct Service {
         pub receiver: mpsc::Receiver<Result<Option<String>, String>>,
         sender: mpsc::Sender<()>,
     }
 
     impl Service {
-        /// Interactive desktop and TV runs share the feed; scripted/simulated previews stay offline.
+        /// Starts the worker and, when `enabled`, its first check.
+        ///
+        /// Interactive desktop and TV runs share the feed; scripted/simulated previews stay
+        /// offline, and their checks answer with an error instead.
         pub fn new(enabled: bool) -> Self {
             let (sender, receiver) = mpsc::channel();
             let (command_tx, command_rx) = mpsc::channel();
@@ -56,11 +74,14 @@ pub mod discovery {
             service
         }
 
+        /// Queues another check; results arrive on `receiver` in order.
         pub fn check(&self) {
             let _ = self.sender.send(());
         }
     }
 
+    /// Parses a strict `major.minor.patch` version without leading zeros or suffixes.
+    ///
     /// Shipping releases use strict three-part numeric versions, never lexical comparison.
     pub(super) fn version(value: &str) -> Option<[u64; 3]> {
         if value.len() > 32 {
@@ -83,6 +104,12 @@ pub mod discovery {
         Some(result)
     }
 
+    /// Checks a simulated update version (`--test-update-version`) against `current`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when either version is not strict numeric or `latest` is older than
+    /// `current`.
     pub fn validate_preview(latest: &str, current: &str) -> Result<(), String> {
         let current = version(current).ok_or("Invalid installed version")?;
         let latest = version(latest).ok_or("Update preview requires a version such as 99.0.0")?;
@@ -250,9 +277,12 @@ use std::{
 /// Updates come from this fork's own releases, never from the upstream project.
 pub const FEED: &str =
     "https://github.com/danielcanoh22/lg-astro/releases/latest/download/repo.json";
+/// The version of this build, compared against the feed.
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 /// Only IPKs from this project's own release assets are installed.
 const RELEASES: &str = "https://github.com/danielcanoh22/lg-astro/releases/download/";
+/// Creates a private (0700) download directory with a random attempt ID and returns both.
+///
 /// A fresh directory per attempt; never truncate a predictable path in shared /tmp.
 fn download_directory() -> Result<(String, PathBuf), String> {
     use ring::rand::SecureRandom;
@@ -270,6 +300,7 @@ fn download_directory() -> Result<(String, PathBuf), String> {
     Ok((attempt, directory))
 }
 
+/// The root installer's persisted result for one attempt (see `tv/self-update.sh`).
 #[derive(serde::Deserialize, Debug)]
 pub struct InstallResult {
     pub attempt: String,
@@ -277,6 +308,7 @@ pub struct InstallResult {
     pub message: String,
 }
 
+/// Returns the outcome of a finished attempt, or `None` while it is still running.
 fn terminal(result: &InstallResult) -> Option<Result<(), String>> {
     match result.state.as_str() {
         "success" => Some(Ok(())),
@@ -285,6 +317,12 @@ fn terminal(result: &InstallResult) -> Option<Result<(), String>> {
     }
 }
 
+/// Polls the persisted result of `attempt` every 2 s until it finishes, for at most 330 s.
+///
+/// # Errors
+///
+/// Returns the installer's failure message, or a timeout message pointing at
+/// `/var/lib/astro-update`.
 fn wait_for_install(attempt: &str) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(330);
     loop {
@@ -303,9 +341,12 @@ fn wait_for_install(attempt: &str) -> Result<(), String> {
         thread::sleep(Duration::from_secs(2));
     }
 }
+/// Largest release feed accepted.
 const FEED_LIMIT: u64 = 256 * 1024;
+/// Largest IPK size a feed may declare.
 const MAX_IPK: u64 = 96 * 1024 * 1024;
 
+/// An Astro release from the feed, validated by [`parse_feed`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Release {
     pub version: String,
@@ -314,20 +355,30 @@ pub struct Release {
     pub size: u64,
 }
 
+/// Installation progress shown on the update card.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum InstallStatus {
     #[default]
     Idle,
+    /// Download progress in percent.
     Downloading(u8),
+    /// Handed to the root installer; the version being installed.
     Installing(String),
     Failed(String),
 }
 
+/// Reports whether `candidate` is a strictly newer valid version than `current`.
 pub fn newer(current: &str, candidate: &str) -> bool {
     matches!((discovery::version(current), discovery::version(candidate)), (Some(a), Some(b)) if b > a)
 }
 
-/// The Astro package of a Homebrew Channel feed, checked before anything is downloaded.
+/// Returns the Astro package of a Homebrew Channel feed, checked before anything is
+/// downloaded.
+///
+/// # Errors
+///
+/// Fails unless the feed has exactly one Astro package with a strict version, an `_arm.ipk`
+/// URL under this project's releases, a 64-digit SHA-256 and a size up to `MAX_IPK`.
 pub fn parse_feed(feed: &Value) -> Result<Release, String> {
     let mut packages = feed["packages"]
         .as_array()
@@ -367,12 +418,18 @@ pub fn parse_feed(feed: &Value) -> Result<Release, String> {
     Ok(release)
 }
 
+/// A request to the installer [`Worker`].
 pub enum Request {
+    /// Reports a persisted failure from a previous launch, or keeps watching an unfinished
+    /// attempt; sent once when the worker starts.
     Recover,
+    /// Installs this exact offered version.
     Download(String),
 }
 
+/// A message from the installer [`Worker`] to the SDL thread.
 pub enum Response {
+    /// Download progress in percent, sent in steps of at least 5.
     Progress(u8),
     Finished(Result<(), String>),
     /// Downloaded, verified and handed to the installer: the version being installed.
@@ -416,6 +473,7 @@ fn offered(agent: &ureq::Agent, url: &str, current: &str) -> Result<Option<Relea
     newer_release(&bytes, current)
 }
 
+/// Parses a downloaded feed and returns its release when newer than `current`.
 fn newer_release(bytes: &[u8], current: &str) -> Result<Option<Release>, String> {
     let feed: Value =
         serde_json::from_slice(bytes).map_err(|_| "The release feed could not be read")?;
@@ -423,6 +481,11 @@ fn newer_release(bytes: &[u8], current: &str) -> Result<Option<Release>, String>
     Ok(newer(current, &release.version).then_some(release))
 }
 
+/// Streams the release IPK into `destination` (which must not exist), reporting progress.
+///
+/// # Errors
+///
+/// Fails on a request or I/O error, or when the size or SHA-256 differs from the feed.
 fn download(
     agent: &ureq::Agent,
     release: &Release,
@@ -472,12 +535,21 @@ fn download(
     Ok(())
 }
 
+/// The installer thread: downloads, verifies and hands off an offered release on request.
 pub struct Worker {
     requests: Sender<Request>,
     pub receiver: Receiver<Response>,
 }
 
 impl Worker {
+    /// Starts the `astro-update` thread and sends it [`Request::Recover`].
+    ///
+    /// When not `enabled` (desktop, scripted or simulated runs), downloads are refused
+    /// locally without network or platform calls.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the thread cannot be spawned.
     pub fn new(enabled: bool) -> Self {
         let (requests, incoming) = mpsc::channel::<Request>();
         let (responses, receiver) = mpsc::channel();
@@ -507,7 +579,7 @@ impl Worker {
                         }
                         Request::Download(version) if enabled => {
                             let result = (|| {
-                                // Re-read authenticated release metadata at install time, but
+                                // Re-read the release metadata over HTTPS at install time, but
                                 // never silently install a version the user was not offered.
                                 let release = offered(&agent, FEED, CURRENT)?
                                     .ok_or("No newer release is available")?;
@@ -557,6 +629,7 @@ impl Worker {
         Self { requests, receiver }
     }
 
+    /// Queues a request; the outcome arrives on `receiver`.
     pub fn request(&self, request: Request) {
         let _ = self.requests.send(request);
     }

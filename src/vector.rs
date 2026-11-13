@@ -1,16 +1,32 @@
-//! Precompiled SVG triangle geometry, uploaded once without image textures.
+//! Loads precompiled `.lvec` SVG geometry and uploads it once, without image textures.
+//!
+//! The file format is written by `tools/vector-assets`: an `ASTRVEC1` tag, `f32` width and height,
+//! a `u32` vertex count and nine `f32` per vertex (position, fringe offset, RGBA, coverage), all
+//! little-endian. Meshes own GL buffers, so they are created and dropped on the SDL thread.
 use gl::types::GLuint;
 use std::{fs, path::Path};
 
+/// One artwork's triangles in a GL vertex buffer.
 pub struct Mesh {
+    /// The `ARRAY_BUFFER` holding nine `f32` per vertex.
     pub buffer: GLuint,
+    /// The artwork width in its own units.
     pub width: f32,
+    /// The artwork height in its own units.
     pub height: f32,
+    /// The vertex count, a multiple of three.
     pub vertices: i32,
+    /// The GPU memory used, for the cache budget.
     pub bytes: usize,
 }
 
 impl Mesh {
+    /// Reads, validates and uploads a `.lvec` file; the GL context must be current.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file is unreadable, has the wrong tag or size, more than 1,000,000 vertices,
+    /// or non-finite values.
     pub fn load(path: &Path) -> Result<Self, String> {
         let bytes =
             fs::read(path).map_err(|e| format!("Vector artwork {}: {e}", path.display()))?;
@@ -48,6 +64,12 @@ impl Mesh {
         Self::upload(width, height, &vertices)
     }
 
+    /// Uploads interleaved vertices (nine `f32` each) as a static buffer; the GL context must be
+    /// current.
+    ///
+    /// # Errors
+    ///
+    /// Fails unless the slice holds whole triangles of finite values.
     pub fn upload(width: f32, height: f32, vertices: &[f32]) -> Result<Self, String> {
         let count = vertices.len() / 9;
         if count == 0 || !count.is_multiple_of(3) || vertices.len() != count * 9 {
@@ -57,6 +79,8 @@ impl Mesh {
             return Err("Invalid vector buffer coordinates".into());
         }
         let mut buffer = 0;
+        // SAFETY: called on the SDL thread with its GL context current; the size and pointer
+        // describe the whole `vertices` slice, which outlives the copying BufferData call.
         unsafe {
             gl::GenBuffers(1, &mut buffer);
             gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
@@ -79,6 +103,8 @@ impl Mesh {
 
 impl Drop for Mesh {
     fn drop(&mut self) {
+        // SAFETY: meshes are dropped on the SDL thread with its GL context current, and the
+        // pointer names this mesh's one buffer.
         unsafe { gl::DeleteBuffers(1, &self.buffer) };
     }
 }

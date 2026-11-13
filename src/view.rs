@@ -1,4 +1,10 @@
-//! Screen geometry and styling mirror the web UI's 1920×1080 / 16px-rem layout.
+//! Builds each frame's [`Scene`]: draw commands plus the hit-test controls of every page and
+//! overlay.
+//!
+//! The view is a pure function of [`State`] and [`Assets`]; it never mutates state. Geometry is
+//! in logical 1920×1080 pixels on a 16 px grid (many sizes are multiples of 1.6 or 16), and the
+//! renderer scales it to the physical output. Text is measured with the bundled font metrics so
+//! layout matches what the renderer draws.
 use crate::{
     i18n::Language,
     model::{App, BACKGROUNDS, CATEGORIES, Input, InputMode},
@@ -15,21 +21,36 @@ use std::{
 };
 use time::OffsetDateTime;
 
+/// Top of the page content, below the navigation bar.
 const MAIN_TOP: f32 = 108.8;
+/// Height of an app card's artwork face, excluding its caption.
 const FACE_HEIGHT: f32 = 154.4;
+/// Horizontal distance between Apps grid columns (also spaces Home's loading placeholders).
 const GRID_PITCH: f32 = 296.4;
+/// Opacity of the dark backdrop behind the fully open recents overlay.
 const RECENTS_BACKDROP_OPACITY: f32 = 0.86;
 
 #[path = "recents-view.rs"]
 mod recents_view;
 
+/// Bundled assets the view needs: file locations, font metrics and installed app artwork.
 pub struct Assets {
+    /// Directory of the generated native assets.
     pub root: PathBuf,
+    /// Running Astro version shown in Settings.
     pub version: String,
+    /// Per-font character advances in em units, keyed by `[display-]<weight>` or
+    /// `fallback-<weight>`.
     pub metrics: BTreeMap<String, BTreeMap<char, f32>>,
     pub artwork: crate::app_artwork::Service,
 }
 impl Assets {
+    /// Loads font metrics from `root` and starts the app artwork service.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the generated assets are missing (run `pnpm assets`) or the
+    /// metrics file cannot be parsed.
     pub fn load(root: PathBuf, webos: bool) -> Result<Self, String> {
         let load = |file: &str| {
             std::fs::read(root.join(file))
@@ -50,6 +71,9 @@ impl Assets {
         self.root.join(path).to_string_lossy().into_owned()
     }
 
+    /// Returns the image path for a background ID, honouring the gradient preference.
+    ///
+    /// Uploaded wallpapers win; unknown IDs fall back to the default bundled background.
     pub(crate) fn background(&self, state: &State, id: &str) -> String {
         if let Some(item) = state.wallpapers.iter().find(|item| item.id == id) {
             return if state.preferences.wallpaper_gradient {
@@ -71,6 +95,10 @@ impl Assets {
         self.path(format!("wallpapers/{id}{suffix}.jpg"))
     }
 
+    /// Measures a single line of text in logical pixels.
+    ///
+    /// Sizes from 32 px use the display font's metrics; characters missing from both the font
+    /// and the fallback metrics use an average advance.
     fn width(&self, value: &str, style: TextStyle) -> f32 {
         let key = format!(
             "{}{}",
@@ -97,6 +125,7 @@ impl Assets {
             .sum()
     }
 
+    /// Shrinks the font size so the text fits on one line of `width`; never grows it.
     fn fit_text(&self, value: &str, mut style: TextStyle, width: f32) -> TextStyle {
         // Leave a pixel for floating-point differences from the renderer's
         // font advances. Re-measure if shrinking crosses the display-font
@@ -112,6 +141,8 @@ impl Assets {
         style
     }
 
+    /// Counts the lines the text wraps to at `width`, breaking at whitespace and, for words
+    /// longer than a line, between characters.
     fn lines(&self, value: &str, style: TextStyle, width: f32) -> usize {
         let key = format!(
             "{}{}",
@@ -159,9 +190,12 @@ impl Assets {
     }
 }
 
+/// One frame's output: draw commands in painting order and the controls for hit testing.
 pub struct Scene {
     pub draw: Vec<Draw>,
+    /// Controls in painting order; later entries sit on top.
     pub controls: Vec<Control>,
+    /// Panel of the open modal; a click that lands outside it acts as Back.
     pub modal: Option<Rect>,
 }
 impl Scene {
@@ -192,6 +226,7 @@ impl Scene {
     fn image(&mut self, path: String, rect: Rect, radius: f32, contain: bool) {
         self.draw.push(Draw::Image(path, rect, radius, contain));
     }
+    /// Draws a tinted vector icon from `ui-icons/<name>.lvec`.
     fn icon(&mut self, assets: &Assets, name: &str, rect: Rect, color: Color) {
         self.draw.push(Draw::TintedImage(
             assets.path(format!("ui-icons/{name}.lvec")),
@@ -208,10 +243,12 @@ impl Scene {
             scrollable,
         });
     }
+    /// Draws the remote focus ring: a bright outline with a faint outer halo.
     fn ring(&mut self, rect: Rect, radius: f32) {
         self.border(rect.inset(-6.9), radius + 6.9, 3.7, c(0xffffff, 0.10));
         self.border(rect.inset(-3.2), radius + 3.2, 3.2, c(0xf0f0f0, 1.));
     }
+    /// Draws a soft drop shadow offset `y` pixels downwards.
     fn shadow(&mut self, rect: Rect, radius: f32, blur: f32, y: f32, alpha: f32) {
         self.draw.push(Draw::Shadow(
             Rect::new(rect.x, rect.y + y, rect.w, rect.h),
@@ -220,6 +257,7 @@ impl Scene {
             c(0, alpha),
         ));
     }
+    /// Draws a capsule background: light when focused, lighter grey when selected.
     fn pill(&mut self, rect: Rect, focused: bool, selected: bool) {
         self.shadow(rect, rect.h / 2., 18., 4., 0.06);
         if focused {
@@ -242,6 +280,9 @@ impl Scene {
             self.border(rect, rect.h / 2., 1., c(0xffffff, 0.07));
         }
     }
+    /// Multiplies the opacity and brightness of every draw command from index `from` onwards.
+    ///
+    /// Plain images become tinted images so they can be faded too.
     fn fade(&mut self, from: usize, alpha: f32, brightness: f32) {
         for draw in &mut self.draw[from..] {
             let apply = |color: &mut Color| {
@@ -284,6 +325,7 @@ struct Companion {
     starting: &'static str,
 }
 
+/// Draws the wallpaper upload dialog: the QR code, or the received image awaiting a decision.
 fn wallpaper_upload(out: &mut Scene, state: &State, assets: &Assets) {
     if let Some(item) = &state.wallpaper_pending {
         upload_preview(out, state, item);
@@ -367,6 +409,8 @@ fn upload_preview(out: &mut Scene, state: &State, item: &crate::wallpapers::Wall
 }
 
 /// A QR code and address for a page on the owner's phone or computer, with a Close button.
+///
+/// `session` is `None` while the companion server starts and `Some(Err(_))` if it failed.
 fn companion(
     out: &mut Scene,
     state: &State,
@@ -406,7 +450,9 @@ fn companion(
             let modules = c(0x1b2023, 1.);
             out.shape(Rect::new(x, y, size, size), 0., background);
             for row in 0..session.qr_size {
-                // Merge contiguous modules so QR rendering stays a few hundred quads.
+                // Merge contiguous modules so QR rendering stays a few hundred quads. The
+                // centre 11×11 modules are left blank for the Astro mark; the code's error
+                // correction covers them.
                 let mut column = 0;
                 while column < session.qr_size {
                     let mark_start = (session.qr_size - 11) / 2;
@@ -513,6 +559,7 @@ fn companion(
     out.control(Target::CloseDialog, close, false);
 }
 
+/// Builds a colour from `0xRRGGBB` and an alpha in 0–1.
 fn c(rgb: u32, alpha: f32) -> Color {
     [
         ((rgb >> 16) & 255) as f32 / 255.,
@@ -521,14 +568,19 @@ fn c(rgb: u32, alpha: f32) -> Color {
         alpha,
     ]
 }
+/// Builds a text style from size in pixels, font weight and tracking in em.
 fn text(size: f32, weight: u16, tracking: f32) -> TextStyle {
     TextStyle::new(size).weight(weight).tracking(tracking)
 }
 
+/// Layout of the centred navigation bar.
 pub struct Navigation {
+    /// Background capsule of the whole bar.
     pub surface: Rect,
+    /// Home, Apps and Settings tab rectangles, sized to their translated labels.
     pub items: [Rect; 3],
 }
+/// Lays out the navigation tabs; the main loop also uses it to animate the selection pill.
 pub fn navigation(assets: &Assets, language: Language) -> Navigation {
     let widths = ["home", "apps", "settings"]
         .map(|key| (assets.width(language.t(key), text(20.8, 550, -0.02)) + 46.4).max(99.2));
@@ -550,6 +602,11 @@ pub fn recents_replaces_page(state: &State) -> bool {
     state.recents_open() && state.recents.visibility == 1.
 }
 
+/// Builds the complete scene for the current state.
+///
+/// `pill_x` and `pill_width` place the animated navigation selection pill. Layers are, in
+/// order: background (cross-fading after a change), page content, header, overlay, the recents
+/// overlay and the toast. While an overlay is open only its controls are hit-testable.
 pub fn scene_with_pill(
     state: &State,
     assets: &Assets,
@@ -745,6 +802,7 @@ pub fn scene_with_pill(
     out
 }
 
+/// Draws the clock, the navigation bar with its selection pill and the TV settings button.
 fn header(
     out: &mut Scene,
     state: &State,
@@ -825,6 +883,11 @@ fn header(
     out.control(Target::TvSettings, rect, false);
 }
 
+/// Draws an app card with its optional caption and registers its hit region.
+///
+/// `rect` is the artwork face; the control also covers the caption when `names` is set.
+/// `pinned` adds the favorite badge. The control is registered even when the card is culled
+/// offscreen, so remote navigation can still reach it.
 fn tile(
     out: &mut Scene,
     state: &State,
@@ -936,6 +999,7 @@ fn tile(
     }
 }
 
+/// Draws the heart badge in a favorite card's top-right corner.
 fn favorite_badge(out: &mut Scene, assets: &Assets, card: Rect, color: Color) {
     let icon = Rect::new(card.x + card.w - 27.2, card.y + 11.2, 16., 16.);
     out.icon(assets, "heart-filled", icon, color);
@@ -943,6 +1007,8 @@ fn favorite_badge(out: &mut Scene, assets: &Assets, card: Rect, color: Color) {
 
 /// Shared card artwork for Home, Apps and Recents. Curated vectors always take
 /// precedence over installed artwork, with the same relative logo proportions.
+///
+/// Returns the colour a favorite badge needs to stay visible on this artwork.
 fn app_face(
     out: &mut Scene,
     assets: &Assets,
@@ -1002,6 +1068,7 @@ fn app_face(
     favorite_color
 }
 
+/// Returns the caption height under a card, at least two lines so rows stay aligned.
 fn caption_height(state: &State, assets: &Assets, app: &App, width: f32) -> f32 {
     let title = format!(
         "{}{}",
@@ -1025,6 +1092,10 @@ fn caption_height(state: &State, assets: &Assets, app: &App, width: f32) -> f32 
     (assets.lines(&title, style, width - 8.) as f32 * style.size * style.line_height).max(58.24)
 }
 
+/// Draws the fallback mark for apps without curated or installed artwork.
+///
+/// Laid out at the reference [`FACE_HEIGHT`] and then scaled, so marks keep their proportions
+/// on the larger recents cards.
 fn brand_mark(out: &mut Scene, assets: &Assets, app: &App, rect: Rect, language: Language) {
     let scale = rect.h / FACE_HEIGHT;
     let rect = Rect::new(
@@ -1136,6 +1207,7 @@ fn brand_mark(out: &mut Scene, assets: &Assets, app: &App, rect: Rect, language:
     }
 }
 
+/// Draws Home: date, greeting, the favorites strip and the visible HDMI inputs.
 fn home(out: &mut Scene, state: &State, assets: &Assets, now: OffsetDateTime) {
     let language = state.preferences.language;
     let s = state.scroll;
@@ -1361,11 +1433,13 @@ fn home(out: &mut Scene, state: &State, assets: &Assets, now: OffsetDateTime) {
     }
 }
 
+/// Draws the Apps page; the toolbar is drawn last so it stays above scrolled cards.
 fn library(out: &mut Scene, state: &State, assets: &Assets) {
     library_grid(out, state, assets);
     library_toolbar(out, state, assets);
 }
 
+/// Draws the fixed Apps toolbar: category filters, the hidden-apps filter, Clear and search.
 fn library_toolbar(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     let mut x = 84.;
@@ -1471,6 +1545,8 @@ fn library_toolbar(out: &mut Scene, state: &State, assets: &Assets) {
     }
 }
 
+/// Draws the Apps grid in rows of [`APPS_COLUMNS`], each row as tall as its longest caption,
+/// or an empty state explaining why nothing is listed.
 fn library_grid(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     let s = state.scroll;
@@ -1535,6 +1611,7 @@ fn library_grid(out: &mut Scene, state: &State, assets: &Assets) {
     }
 }
 
+/// Draws one Apps filter chip.
 fn filter(out: &mut Scene, state: &State, target: Target, rect: Rect, label: &str, selected: bool) {
     let focused = state.focus == target;
     out.pill(rect, focused, selected);
@@ -1555,7 +1632,7 @@ fn filter(out: &mut Scene, state: &State, target: Target, rect: Rect, label: &st
     out.control(target, rect, false);
 }
 
-/// The existing System status card owns the only update action.
+/// Returns the text of the System section's update row, which is the only update action.
 fn update_value(state: &State) -> String {
     use crate::update::{InstallStatus, Status};
     let language = state.preferences.language;
@@ -1581,6 +1658,8 @@ fn update_value(state: &State) -> String {
     }
 }
 
+/// A Settings row: title with optional icon, right-aligned value, description and trailing
+/// check mark (`selected`) or chevron (opens a subpage).
 struct Row<'a> {
     target: Target,
     rect: Rect,
@@ -1591,6 +1670,8 @@ struct Row<'a> {
     selected: bool,
     chevron: bool,
 }
+/// Returns the width of the widest On/Off label, so the background toggles reserve the same
+/// value column and their titles do not shift when toggled.
 fn rotation_value_width(assets: &Assets, language: Language) -> f32 {
     ["stateOn", "stateOff"]
         .into_iter()
@@ -1599,6 +1680,9 @@ fn rotation_value_width(assets: &Assets, language: Language) -> f32 {
         .ceil()
 }
 
+/// Draws a Settings row and registers its control.
+///
+/// The fixed background actions above the gallery are not scrollable controls.
 fn row(out: &mut Scene, state: &State, assets: &Assets, row: Row<'_>) {
     let focused = state.focus == row.target;
     let bright = focused;
@@ -1726,11 +1810,14 @@ fn row(out: &mut Scene, state: &State, assets: &Assets, row: Row<'_>) {
     out.control(row.target, row.rect, scrollable);
 }
 
+/// Draws Settings; the sidebar is drawn after the content so it stays on top.
 fn settings(out: &mut Scene, state: &State, assets: &Assets) {
     settings_content(out, state, assets);
     settings_sidebar(out, state, assets);
 }
 
+/// Draws the Settings sections; the open section shows a breadcrumb of its subpages, shrunk to
+/// fit the pill.
 fn settings_sidebar(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     for (index, key) in ["interface", "background", "widgets", "system"]
@@ -1845,6 +1932,10 @@ fn settings_sidebar(out: &mut Scene, state: &State, assets: &Assets) {
     }
 }
 
+/// Draws the open subpage, or the rows of the selected Settings section.
+///
+/// Choice subpages (formats, language, text rendering, input mode) share one option list; the
+/// Background section draws its fixed actions above the scrolling gallery.
 fn settings_content(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     let s = state.scroll;
@@ -2268,6 +2359,7 @@ fn settings_content(out: &mut Scene, state: &State, assets: &Assets) {
     }
 }
 
+/// Draws the Inputs subpage: one row per HDMI input and a Refresh row.
 fn inputs_settings(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     let s = state.scroll;
@@ -2337,6 +2429,7 @@ fn inputs_settings(out: &mut Scene, state: &State, assets: &Assets) {
     );
 }
 
+/// Draws the Greeting subpage; the name row shows the live draft with a cursor while typing.
 fn greeting_settings(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     let description = if state.text_input_active() && state.keyboard_field == TextField::Name {
@@ -2398,6 +2491,7 @@ fn greeting_settings(out: &mut Scene, state: &State, assets: &Assets) {
     );
 }
 
+/// Draws the Date subpage: visibility toggle and format.
 fn date_settings(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     for (index, (target, title, value, chevron)) in [
@@ -2439,6 +2533,7 @@ fn date_settings(out: &mut Scene, state: &State, assets: &Assets) {
     }
 }
 
+/// Draws the Clock subpage: 12/24-hour format and seconds.
 fn clock_settings(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     for (index, (target, key, value)) in [
@@ -2482,6 +2577,7 @@ fn clock_settings(out: &mut Scene, state: &State, assets: &Assets) {
     }
 }
 
+/// Draws the App names subpage: caption toggles for Home and Apps.
 fn app_name_settings(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     for (index, (target, title, enabled)) in [
@@ -2517,6 +2613,7 @@ fn app_name_settings(out: &mut Scene, state: &State, assets: &Assets) {
     }
 }
 
+/// Draws the Rename row of an input subpage at `y`, plus Clear name once a custom name exists.
 fn input_name_rows(out: &mut Scene, state: &State, assets: &Assets, id: &str, y: f32) {
     let language = state.preferences.language;
     let custom = state.preferences.input_names.get(id);
@@ -2575,6 +2672,8 @@ fn input_icon(input: &Input, custom: Option<&str>) -> &'static str {
         .unwrap_or_else(|| device_icon(&input.title))
 }
 
+/// Maps a device or input name to an `input-*` icon by keyword, ignoring case and spaces;
+/// returns `hdmi` when nothing matches.
 fn device_icon(name: &str) -> &'static str {
     let name = name.to_lowercase().replace(' ', "");
     if name.contains("playstation") || ["ps1", "ps2", "ps3", "ps4", "ps5"].contains(&name.as_str())
@@ -2627,6 +2726,7 @@ pub fn input_status(input: &Input, renamed: bool, language: Language) -> String 
     parts.join(" · ")
 }
 
+/// Content of an empty-state panel; `action` adds a Retry or Browse button.
 struct EmptyState<'a> {
     rect: Rect,
     icon: &'a str,
@@ -2634,6 +2734,7 @@ struct EmptyState<'a> {
     hint: &'a str,
     action: Option<Target>,
 }
+/// Draws an empty-state panel with icon, title, hint and optional action button.
 fn empty(out: &mut Scene, state: &State, assets: &Assets, content: EmptyState<'_>) {
     let EmptyState {
         rect,
@@ -2700,6 +2801,10 @@ fn empty(out: &mut Scene, state: &State, assets: &Assets, content: EmptyState<'_
     }
 }
 
+/// Draws the options popup for an app or background next to its card.
+///
+/// `anchor` is the card's artwork rectangle; the card is redrawn above the dimmed page and the
+/// panel opens to its right, or to its left when there is no room.
 fn options(out: &mut Scene, state: &State, assets: &Assets, id: &str, anchor: Option<Rect>) {
     let language = state.preferences.language;
     let background = matches!(state.overlay, Some(Overlay::BackgroundOptions { .. }));
@@ -2856,6 +2961,8 @@ fn options(out: &mut Scene, state: &State, assets: &Assets, id: &str, anchor: Op
     }
 }
 
+/// Draws the uninstall or background delete confirmation; Delete has no control while the
+/// request is running.
 fn delete_confirmation(out: &mut Scene, state: &State, assets: &Assets, id: &str) {
     let language = state.preferences.language;
     let background = matches!(state.overlay, Some(Overlay::BackgroundDelete { .. }));
@@ -2972,6 +3079,7 @@ fn delete_confirmation(out: &mut Scene, state: &State, assets: &Assets, id: &str
     }
 }
 
+/// Draws Astro's on-screen keyboard: ten-column grid of [`KEYS`] under the edited text.
 fn keyboard(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     let panel = Rect::new(350., 290., 1220., 530.);
@@ -3047,6 +3155,9 @@ fn keyboard(out: &mut Scene, state: &State, assets: &Assets) {
     }
 }
 
+/// Draws the toast centred above the bottom edge, without its trailing full stop.
+///
+/// It is only clickable (to dismiss) when no overlay is open.
 fn toast(out: &mut Scene, state: &State, assets: &Assets, notice: &str) {
     let start = out.draw.len();
     let notice = notice.trim_end_matches(['.', '。']);
@@ -3079,7 +3190,7 @@ fn toast(out: &mut Scene, state: &State, assets: &Assets, notice: &str) {
     }
 }
 
-/// A corner-less, borderless fill of the whole logical screen.
+/// Returns whether a draw is a corner-less, borderless fill of the whole logical screen.
 fn full_screen_fill(draw: &Draw) -> bool {
     let whole = |r: &Rect| r.x <= 0. && r.y <= 0. && r.x + r.w >= 1920. && r.y + r.h >= 1080.;
     match draw {

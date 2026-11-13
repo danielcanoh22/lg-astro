@@ -1,18 +1,23 @@
-//! Logical layout is independent of drawable density. Vector coverage and
-//! glyph-origin snapping use the drawable's physical pixel scale in shaders.
+//! Maps the logical 1920×1080 layout onto the actual drawable size.
+//!
+//! Logical layout is independent of drawable density. Vector coverage and glyph-origin snapping
+//! use the drawable's physical pixel scale in shaders.
 use serde::Serialize;
 use std::str::FromStr;
 
+/// A window or drawable size in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Size {
     pub width: u32,
     pub height: u32,
 }
 impl Size {
+    /// The shipping default and the logical layout size.
     pub const HD: Self = Self {
         width: 1920,
         height: 1080,
     };
+    /// The experimental `--resolution 4k` request.
     pub const UHD: Self = Self {
         width: 3840,
         height: 2160,
@@ -20,6 +25,7 @@ impl Size {
     pub const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
     }
+    /// Returns the physical pixels per logical pixel that fit 1920×1080 inside this size.
     pub fn scale(self) -> f32 {
         (self.width as f32 / 1920.).min(self.height as f32 / 1080.)
     }
@@ -27,6 +33,7 @@ impl Size {
         self.width >= 3840 && self.height >= 2160
     }
 }
+/// Parses a `--resolution` value: `1080p`, `4k` or `WIDTHxHEIGHT` within 640×360..=7680×4320.
 impl FromStr for Size {
     type Err = String;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
@@ -47,6 +54,8 @@ impl FromStr for Size {
     }
 }
 
+/// The centred, aspect-preserving rectangle of the drawable that the logical layout fills, in
+/// physical pixels, with its physical-per-logical `scale`.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Viewport {
     pub x: i32,
@@ -68,6 +77,8 @@ impl Viewport {
             scale,
         }
     }
+    /// Returns the physical pixels per logical pixel for text, derived from the rounded viewport
+    /// height.
     pub fn text_scale(self) -> f32 {
         self.height as f32 / 1080.
     }

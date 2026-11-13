@@ -1,4 +1,11 @@
-// Pinned host toolchains. SDL-webOS is prepared separately by webos-runtime.mjs.
+/**
+ * Downloads, verifies and relocates the webOS native SDK for this host (`pnpm sdk`).
+ *
+ * Extracts the archive pinned for the current platform and architecture into
+ * `.build/toolchain` unless its compiler is already there, then runs the SDK's relocation script
+ * and prints the `WEBOS_NDK` value that `tools/build-webos.sh` needs. Needs `curl` and `tar`.
+ * SDL-webOS is prepared separately by `webos-runtime.mjs`.
+ */
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';

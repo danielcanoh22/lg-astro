@@ -1,6 +1,12 @@
-//! The short-lived, capability-protected LAN server that companion pages on the owner's phone or
-//! computer talk to, such as the wallpaper upload page. Each session binds one private local
-//! interface, is addressed by a random token and is shown on the TV as a QR code.
+//! Building blocks of the short-lived LAN server that companion pages, such as the wallpaper
+//! upload page, use from the owner's phone or computer.
+//!
+//! Each session binds one private local interface and is addressed by a random token in its URL,
+//! shown on the TV as a QR code. The token is the capability: requests outside `/{token}/` are
+//! refused, peers must be on the TV's own network, and cross-site requests are rejected. The
+//! HTTP handling is deliberately minimal (HTTP/1.1, `Content-Length` bodies, one request per
+//! connection) and every read is bounded in size and time. The session loop itself lives in
+//! [`crate::wallpapers`].
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
@@ -13,19 +19,30 @@ pub const HEADER_TIME: Duration = Duration::from_secs(5);
 /// Connections still sending headers, across the session and from one peer address, so a slow
 /// or abusive peer cannot take every slot. A browser opens up to six connections at once.
 pub const PENDING_LIMIT: usize = 32;
+/// Connections still sending headers from one peer address; see [`PENDING_LIMIT`].
 pub const PENDING_PEER_LIMIT: usize = 8;
+/// Largest request head, in bytes, including the blank line that ends it.
 const HEADER_LIMIT: usize = 8192;
 
-// Base58 excludes easily confused 0/O and I/l while staying URL-safe.
+/// Characters of a session token. Base58 excludes easily confused 0/O and I/l while staying
+/// URL-safe.
 pub const TOKEN_ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+/// What the TV shows for an open session: its address and the matching QR code.
 #[derive(Clone, Debug)]
 pub struct Session {
     pub url: String,
+    /// Modules per side of the QR code.
     pub qr_size: i32,
+    /// Dark modules, row by row, `qr_size` × `qr_size` long.
     pub qr: Vec<bool>,
 }
 
+/// Generates an 8-character session token from [`TOKEN_ALPHABET`] using the OS random source.
+///
+/// # Errors
+///
+/// Returns an error when the secure random source is unavailable.
 pub fn random_token() -> Result<String, String> {
     let mut token = String::with_capacity(8);
     while token.len() < 8 {
@@ -43,11 +60,19 @@ pub fn random_token() -> Result<String, String> {
     Ok(token)
 }
 
-/// Loopback, or a private or link-local IPv4 peer on the TV's own network.
+/// Returns whether a peer may connect: loopback, or a private or link-local IPv4 peer on the
+/// TV's own network.
 pub fn local_peer(ip: IpAddr) -> bool {
     ip.is_loopback() || matches!(ip, IpAddr::V4(ip) if ip.is_private() || ip.is_link_local())
 }
 
+/// Opens a non-blocking listener on an ephemeral port of the first private or link-local IPv4
+/// interface, or on loopback when `loopback_only` is set (scripted desktop runs).
+///
+/// # Errors
+///
+/// Returns an error when the TV has no private network address or the port cannot be bound;
+/// the first message is shown to the owner.
 pub fn listen(loopback_only: bool) -> Result<TcpListener, String> {
     let address = if loopback_only {
         Ipv4Addr::LOCALHOST
@@ -69,6 +94,11 @@ pub fn listen(loopback_only: bool) -> Result<TcpListener, String> {
     Ok(listener)
 }
 
+/// Builds the session URL `http://{address}/{token}/` and its QR code.
+///
+/// # Errors
+///
+/// Returns an error when the URL does not fit in a QR code.
 pub fn session(address: SocketAddr, token: &str) -> Result<Session, String> {
     let url = format!("http://{address}/{token}/");
     // Highest correction reserves capacity for the small branded center mark.
@@ -85,6 +115,7 @@ pub fn session(address: SocketAddr, token: &str) -> Result<Session, String> {
     })
 }
 
+/// An accepted connection whose request head is still arriving.
 struct Connection {
     stream: TcpStream,
     peer: IpAddr,
@@ -141,6 +172,7 @@ impl Pending {
     }
 }
 
+/// The result of one non-blocking read of a request head.
 enum Progress {
     Waiting,
     Arrived,
@@ -148,6 +180,7 @@ enum Progress {
     Closed,
 }
 
+/// Reads whatever has arrived on a pending connection without blocking.
 fn receive(connection: &mut Connection) -> Progress {
     let mut buffer = [0; 1024];
     let chunk = buffer.len();
@@ -181,7 +214,10 @@ fn receive(connection: &mut Connection) -> Progress {
     }
 }
 
-/// Whether a request's target is inside the session addressed by `token`.
+/// Returns whether a request's target is inside the session addressed by `token`.
+///
+/// The worker counts only such requests against the session's request limit, so other LAN
+/// peers cannot use it up.
 pub fn carries_token(received: &[u8], token: &str) -> bool {
     let line = received
         .split(|byte| *byte == b'\r')
@@ -192,6 +228,15 @@ pub fn carries_token(received: &[u8], token: &str) -> bool {
     target == session.as_bytes() || target.starts_with(format!("{session}/").as_bytes())
 }
 
+/// Fills `bytes` from `reader`, retrying timeouts until `deadline`.
+///
+/// `valid` is checked before every read, so a session closed on the TV stops a slow upload
+/// promptly.
+///
+/// # Errors
+///
+/// Returns an error when the session ends, the deadline passes, the peer closes early or the
+/// read fails.
 pub fn read_exact(
     reader: &mut impl Read,
     mut bytes: &mut [u8],
@@ -218,15 +263,22 @@ pub fn read_exact(
     Ok(())
 }
 
+/// A parsed request head. The body, if any, is still unread.
 pub struct Request {
     pub method: String,
     pub target: String,
+    /// Header values by lowercase name.
     pub headers: BTreeMap<String, String>,
+    /// The declared `Content-Length`, or 0 without one.
     pub length: usize,
 }
 
 impl Request {
-    /// Whether the request came from another site rather than the page this session served.
+    /// Returns whether the request came from another site rather than the page this session
+    /// served.
+    ///
+    /// Checking `Host` blocks DNS rebinding; `Origin` and `Sec-Fetch-Site` block requests
+    /// forged by other pages in the owner's browser.
     pub fn foreign(&self, host: &str) -> bool {
         self.headers.get("host").map(String::as_str) != Some(host)
             || self
@@ -240,7 +292,15 @@ impl Request {
     }
 }
 
+/// Reads and validates an HTTP/1.1 request head from `reader`.
+///
 /// `too_large` is the error for a body over `max_body`, worded for what the page sends.
+///
+/// # Errors
+///
+/// Returns an error for a head over 8 KiB, a malformed request line or header, a duplicate
+/// header, chunked transfer encoding, an invalid `Content-Length` or a body over `max_body`, and
+/// any error from [`read_exact`].
 pub fn request(
     reader: &mut impl Read,
     valid: &impl Fn() -> bool,
@@ -300,6 +360,11 @@ pub fn request(
     })
 }
 
+/// Writes a complete response with no-store, no-referrer and nosniff headers, then the body.
+///
+/// # Errors
+///
+/// Returns the write error.
 pub fn response(
     stream: &mut TcpStream,
     status: &str,
@@ -310,6 +375,11 @@ pub fn response(
         .and_then(|_| stream.write_all(body)).map_err(|e| e.to_string())
 }
 
+/// Writes a JSON `{"error": ...}` response that the companion page shows to the owner.
+///
+/// # Errors
+///
+/// Returns the write error.
 pub fn error_response(stream: &mut TcpStream, status: &str, error: &str) -> Result<(), String> {
     response(
         stream,
@@ -319,7 +389,13 @@ pub fn error_response(stream: &mut TcpStream, status: &str, error: &str) -> Resu
     )
 }
 
+/// Redirects `/{token}` to the session page at `/{token}/`.
+///
 /// The QR code points at `/{token}/`; a typed address without the slash lands there too.
+///
+/// # Errors
+///
+/// Returns the write error.
 pub fn redirect_to_page(stream: &mut TcpStream, token: &str) -> Result<(), String> {
     write!(stream, "HTTP/1.1 303 See Other\r\nLocation: /{token}/\r\nContent-Length: 0\r\nConnection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n\r\n")
         .map_err(|error| error.to_string())

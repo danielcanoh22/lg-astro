@@ -1,6 +1,20 @@
 #!/bin/sh
-# Runs in its own systemd unit so installation can close/restart Astro safely.
+# Installs a downloaded Astro update as root and reopens Astro, or Astro Home when enabled.
+#
 # Usage: self-update.sh IPK SHA256 VERSION APP_DIR ATTEMPT
+#   IPK      the downloaded package; a root-owned copy is checked against SHA256 and installed
+#   VERSION  the version the installed appinfo.json must report afterwards
+#   APP_DIR  the developer-mode install directory of Astro, the only accepted value
+#   ATTEMPT  32 hex digits naming this attempt and its result file
+#
+# Not installed as a file: Astro embeds this script and, through the Homebrew Channel root exec
+# service, runs it with sh -c in a transient systemd unit (astro-update-ATTEMPT): exec ends its
+# children when its call returns, and the installer closes Astro.
+#
+# Side effects, all under /var/lib/astro-update (root-only): result.ATTEMPT.json reports the
+# state Astro polls, mirrored to result.json while this run holds the lock; update.log keeps the
+# installer output. With the Home integration enabled, the new home.sh enables it again so the
+# copied scripts and staged manifest match the new package; if that fails, LG Home is restored.
 set -u
 IPK=$1
 SHA=$2

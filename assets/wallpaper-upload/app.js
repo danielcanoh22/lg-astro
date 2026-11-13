@@ -1,3 +1,12 @@
+/**
+ * Wallpaper upload page, served by Astro's temporary upload server to a phone or computer on the
+ * same network (Settings → Background → Add a background).
+ *
+ * The user picks a JPEG, PNG or WebP (at most 16 MiB and 32 megapixels), drags and zooms a 16:9
+ * crop, and the page posts only that crop as a 1920×1080 JPEG to `upload`, authenticated by the
+ * session token in the URL path. The TV verifies the image again and asks its owner to save or
+ * discard it.
+ */
 import { cropRect, panPosition } from './crop.js';
 
 const element = (id) => document.getElementById(id);
@@ -8,6 +17,7 @@ const canvas = element('preview');
 const zoom = element('zoom');
 const status = element('status');
 let image;
+// Incremented per selected file, so a slower decode of an earlier file cannot replace a newer one.
 let loading = 0;
 let drag;
 let busy = false;
@@ -23,6 +33,7 @@ function crop() {
   return cropRect(image.width, image.height, Number(zoom.value), horizontal, vertical);
 }
 
+/** Draws the current crop scaled to `target`: the preview, or the 1920×1080 output canvas. */
 function draw(target = canvas) {
   if (!image) return;
   const { x, y, w, h } = crop();

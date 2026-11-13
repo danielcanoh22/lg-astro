@@ -1,4 +1,8 @@
 //! System recent history, deliberately independent of favorites and running apps.
+//!
+//! The overlay reads and edits the TV's own recent list through `com.webos.service.recent`, so it
+//! matches what stock Home shows. Requests are numbered with a generation and only the reply to
+//! the latest pending [`Command`] is applied; cards keep presentation slots so removals animate.
 use crate::{
     app_artwork::Source,
     model::{App, demo_inventory, valid_app_id},
@@ -12,6 +16,7 @@ use std::{
     time::Instant,
 };
 
+/// A Luna request issued by the recent apps overlay.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum Command {
     List,
@@ -20,7 +25,15 @@ pub enum Command {
 }
 
 impl Command {
-    /// Exact operations observed from stock Home. Never synthesize a kill-all.
+    /// Returns the Luna URI and payload for this command.
+    ///
+    /// The payloads mirror the exact operations observed from stock Home. Never synthesize a
+    /// kill-all: closing is always one explicit app at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a launch or close targets an invalid app ID, Astro itself, the
+    /// system Home app, or a manual-preview placeholder that does not exist on the TV.
     pub fn request(&self) -> Result<(&'static str, Value), String> {
         if let Self::Launch(id) | Self::Close(id) = self
             && (!valid_app_id(id) || excluded(id) || crate::scroll_preview::is_placeholder(id))
@@ -42,15 +55,26 @@ impl Command {
     }
 }
 
+/// Returns whether `id` is Astro or the system Home app, which never appear as recent cards.
 fn excluded(id: &str) -> bool {
     matches!(id, APP_ID | HOME_ID)
 }
 
+/// One card in the recent apps overlay.
 #[derive(Clone, Debug, Serialize)]
 pub struct Entry {
     pub app: App,
 }
 
+/// Converts a `listRecents` reply into overlay entries in system order.
+///
+/// Invalid, duplicate and excluded IDs are skipped, titles are stripped of control characters
+/// and capped at 120 characters, and an empty title falls back to the app ID.
+///
+/// # Errors
+///
+/// Returns an error when the service reports `ready: false`, or when `recentsAppList` is missing
+/// or holds more than 1000 entries.
 pub fn normalize(reply: &Value) -> Result<Vec<Entry>, String> {
     if reply.get("ready") == Some(&json!(false)) {
         return Err("Recent apps are not ready".into());
@@ -103,13 +127,18 @@ pub fn demo() -> Vec<Entry> {
         .collect()
 }
 
+/// The state of a card that is animating out of the overlay.
 #[derive(PartialEq, Eq)]
 pub enum DismissalOutcome {
+    /// The close request is in flight; the card keeps sliding away.
     Pending,
+    /// The system removed the app; the card finishes leaving and is dropped.
     Closed,
+    /// The close failed or was interrupted; the card slides back into place.
     Returning,
 }
 
+/// A card being swiped away, drawn from a snapshot so it survives the list refresh.
 pub struct Dismissal {
     pub entry: Entry,
     pub offset: f32,
@@ -117,11 +146,14 @@ pub struct Dismissal {
     pub outcome: DismissalOutcome,
 }
 
+/// Data and animation state of the recent apps overlay.
 pub struct Recents {
     pub entries: Vec<Entry>,
     /// Distinguish the initial history read from quiet background refreshes.
     pub loaded: bool,
+    /// Incremented per request; replies carrying an older generation are ignored.
     pub generation: u64,
+    /// The single request in flight. New requests are refused until it resolves.
     pub pending: Option<Command>,
     pub error: Option<String>,
     pub selected: usize,
@@ -129,8 +161,11 @@ pub struct Recents {
     /// Presentation slots survive removal so neighbors can fill the gap smoothly.
     pub slots: BTreeMap<String, f32>,
     pub dismissals: Vec<Dismissal>,
+    /// Overlay opacity from 0 (hidden) to 1 (shown).
     pub visibility: f32,
+    /// Focus to restore if the overlay is reopened while still fading out.
     pub closing_focus: Option<Target>,
+    /// Time of the last [`Recents::animate`] step.
     pub updated: Instant,
 }
 
@@ -154,6 +189,10 @@ impl Default for Recents {
 }
 
 impl Recents {
+    /// Returns whether the carousel, a card slot or a dismissal still needs frames.
+    ///
+    /// Carousel scrolling is ignored while the pointer is active, since pointer input leaves the
+    /// carousel where it is.
     pub fn cards_animating(&self, pointer: bool) -> bool {
         (!pointer && self.position != self.selected as f32)
             || self.entries.iter().enumerate().any(|(index, entry)| {
@@ -166,6 +205,7 @@ impl Recents {
             })
     }
 
+    /// Returns the card's offset from the carousel position, in card slots.
     pub fn offset(&self, index: usize, entry: &Entry) -> f32 {
         self.slots
             .get(&entry.app.id)
@@ -174,6 +214,7 @@ impl Recents {
             - self.position
     }
 
+    /// Drops slots of removed entries and gives new entries a slot at their index.
     fn sync_slots(&mut self) {
         self.slots
             .retain(|id, _| self.entries.iter().any(|entry| &entry.app.id == id));
@@ -184,6 +225,10 @@ impl Recents {
         }
     }
 
+    /// Advances the overlay animations to `now` and returns whether anything was still moving.
+    ///
+    /// Steps are capped at 100 ms so a stalled frame does not jump, and `reduced` (reduced
+    /// motion) snaps every value to its target.
     pub fn animate(&mut self, open: bool, reduced: bool, pointer: bool, now: Instant) -> bool {
         let dt = now
             .saturating_duration_since(self.updated)
@@ -241,6 +286,10 @@ impl State {
         matches!(self.overlay, Some(Overlay::Recents { .. }))
     }
 
+    /// Opens the recent apps overlay and requests a fresh history read.
+    ///
+    /// Does nothing while another overlay is open or a favorite is being moved. Reopening during
+    /// the fade-out keeps the existing cards instead of starting empty.
     pub fn open_recents(&mut self) -> Vec<Effect> {
         if self.overlay.is_some() || self.moving.is_some() {
             return vec![];
@@ -283,6 +332,9 @@ impl State {
         self.recent_request(Command::List)
     }
 
+    /// Sends `command` unless the overlay is closed or another request is still pending.
+    ///
+    /// A close also starts its dismissal animation right away, before the system confirms it.
     pub fn recent_request(&mut self, command: Command) -> Vec<Effect> {
         if !self.recents_open() || self.recents.pending.is_some() {
             return vec![];
@@ -322,6 +374,11 @@ impl State {
         }]
     }
 
+    /// Applies the reply to a request sent by [`State::recent_request`].
+    ///
+    /// Stale replies (overlay closed, older generation or a different command) are dropped. A
+    /// successful launch closes the overlay, and a successful close re-reads the history so the
+    /// list stays authoritative.
     pub fn recent_response(
         &mut self,
         generation: u64,
@@ -419,6 +476,7 @@ impl State {
         vec![]
     }
 
+    /// Handles remote navigation inside the overlay; Up on a card closes that app.
     pub fn recent_direction(&mut self, direction: Direction) -> Vec<Effect> {
         if matches!(direction, Direction::Up)
             && let Target::Recent(id) = &self.focus

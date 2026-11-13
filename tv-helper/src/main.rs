@@ -1,3 +1,26 @@
+//! `astro-helper`, the command-line entry point of the root TV helper (see [`astro_tv_helper`]).
+//!
+//! Each command prints one JSON reply on stdout and exits 0, or prints
+//! `Astro TV helper: <error>` on stderr and exits 1. `uninstall-app` instead reports a failed
+//! removal in its JSON reply (see [`uninstall::remove`]). Every command requires an effective
+//! user of root.
+//!
+//! - `home COMMAND [APP_DIR]`: the optional Home integration (`status`, `enable`, `apply`,
+//!   `disable`, `restore`, `fallback`), normally run through `tv/home.sh`; see
+//!   [`home::dispatch`].
+//! - `read-app-icon JSON`: an [`files::IconSource`] in, the hex-encoded icon files of that
+//!   installed app out, for Astro's artwork worker in its jail.
+//! - `sync-splash JSON`: `{"directory", "background"}`; copies the selected background over the
+//!   package's `splash.png` (see [`files::sync_splash`]).
+//! - `uninstall-app ID`: removes an app and waits for the installer to confirm it (see
+//!   [`uninstall::remove`]).
+//! - `tv-input COMMAND [APP_DIR]`: `status`, `enable` or `disable` Astro as a TV input (see
+//!   [`input::configure`]). `APP_DIR` defaults to the executable's directory.
+//!
+//! Host builds compile every command for the tests but refuse to run them: only an ARM webOS
+//! build with the `webos` feature touches the system.
+
+// The webOS SDK's libc lacks `getauxval`; Astro's shim provides it in ARM builds.
 #[cfg(all(feature = "webos", target_os = "linux", target_arch = "arm"))]
 #[path = "../../src/webos-compat.rs"]
 mod webos_compat;

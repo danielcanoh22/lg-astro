@@ -1,6 +1,10 @@
-//! The webOS SDK's libc lacks getauxval, used by Rust's startup and ring.
-//! Read real kernel auxiliary values rather than inventing CPU capabilities.
+//! Provides the `getauxval` symbol that the webOS SDK's libc lacks.
+//!
+//! Rust's startup and `ring` call `getauxval`. This implementation reads the real kernel
+//! auxiliary vector from `/proc/self/auxv` rather than inventing CPU capabilities.
 
+/// Reads `(key, value)` records from an auxv file descriptor until `kind` or the
+/// terminating zero key; returns `None` on a read error, end of file or a truncated record.
 fn read_auxv(fd: libc::c_int, kind: libc::c_ulong) -> Option<libc::c_ulong> {
     loop {
         let mut entry = [0 as libc::c_ulong; 2];
@@ -41,6 +45,10 @@ fn read_auxv(fd: libc::c_int, kind: libc::c_ulong) -> Option<libc::c_ulong> {
     }
 }
 
+/// Returns the kernel auxiliary value for `kind`, following glibc's contract.
+///
+/// A missing entry returns 0 and sets `errno` to `ENOENT`; a found entry leaves `errno`
+/// unchanged, so callers can tell a real zero from a missing key.
 #[cfg(target_os = "linux")]
 #[unsafe(no_mangle)]
 extern "C" fn getauxval(kind: libc::c_ulong) -> libc::c_ulong {
@@ -111,6 +119,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn exposes_real_page_size_and_libc_errno_contract() {
+        // SAFETY: `__errno_location` returns this thread's errno slot, valid for writes for the
+        // thread's lifetime, and `getauxval` has no preconditions.
         unsafe {
             *libc::__errno_location() = libc::EACCES;
             assert_eq!(

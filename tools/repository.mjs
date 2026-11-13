@@ -1,3 +1,13 @@
+/**
+ * Writes the Homebrew Channel repository feed for the packaged IPK (last step of
+ * `pnpm run package`; also run by CI).
+ *
+ * Reads `appinfo.json`, `package.json` and `dist/<id>_<version>_arm.ipk`, and writes
+ * `dist/repo.json` (with the IPK's size and SHA-256), `dist/description.html` and the large icon.
+ * Download URLs point at the GitHub release `v<version>` of `GITHUB_REPOSITORY`. When
+ * `RELEASE_TAG` or a tag ref is given it must match that version; the tag is also written to
+ * `GITHUB_OUTPUT` for the workflow.
+ */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';

@@ -1,7 +1,11 @@
-//! Blocking platform work runs on one worker, never in the SDL/UI thread.
-//! TV calls originate from this native executable: its own LS2 connection, or
-//! root `luna-send` commands it runs through Homebrew Channel's `exec`. None of
-//! them impersonates an application identity.
+//! Runs TV platform work (Luna calls, inventory, the root helper) on one worker thread.
+//!
+//! Blocking platform work never runs on the SDL/UI thread: [`Platform`] queues a [`Request`]
+//! and the worker answers with a [`Response`]. TV calls originate from this native executable:
+//! its own LS2 connection, or root `luna-send` and `astro-helper` commands it runs through
+//! Homebrew Channel's `exec`. None of them impersonates an application identity. Desktop
+//! builds answer from an in-memory demo inventory and never call a TV. This module also holds
+//! the Home integration's launch, lifecycle, crash-loop and self-update helpers.
 use crate::{
     app_artwork,
     model::{App, Input, Inventory, demo_inventory, valid_app_id},
@@ -12,18 +16,19 @@ use std::{collections::HashSet, sync::mpsc, thread};
 #[path = "platform-install.rs"]
 mod installation;
 
+/// Astro's webOS app ID.
 pub const APP_ID: &str = "com.danielcanoh22.astro";
 /// Launch parameter Home adds when it opens `com.danielcanoh22.astro` for its TV input: that copy
 /// then runs itself instead of redirecting to Home.
 pub const LAUNCHED_BY_HOME: &str = "astroFromHome";
 
-/// Whether webOS launch metadata (argv[1]) carries `LAUNCHED_BY_HOME`, at its top level or
+/// Whether webOS launch metadata (`argv[1]`) carries `LAUNCHED_BY_HOME`, at its top level or
 /// under `params`.
 pub fn launched_by_home(metadata: &Value) -> bool {
     metadata[LAUNCHED_BY_HOME] == true || metadata["params"][LAUNCHED_BY_HOME] == true
 }
 
-/// Whether webOS preloaded this process (argv[1] `"preload": "full"` or `"partial"`): sam starts
+/// Whether webOS preloaded this process (`argv[1]` `"preload": "full"` or `"partial"`): sam starts
 /// Home in the background so the Home key answers at once, and only a relaunch brings it forward.
 pub fn preloaded(metadata: &Value) -> bool {
     match &metadata["preload"] {
@@ -33,6 +38,8 @@ pub fn preloaded(metadata: &Value) -> bool {
     }
 }
 
+/// Returns the `applicationManager/launch` payload for `id`; launching Astro itself adds
+/// [`LAUNCHED_BY_HOME`] so the new copy runs instead of redirecting to Home.
 pub(crate) fn launch_payload(id: &str) -> Value {
     if id == APP_ID {
         json!({"id": id, "params": {LAUNCHED_BY_HOME: true}})
@@ -53,10 +60,11 @@ fn select_astro_input() -> Result<(), String> {
 
 /// The EIM input ID LG gives Astro once `astro-helper tv-input enable` registers it.
 const ASTRO_INPUT: &str = "MVPD_IP-com.danielcanoh22.astro";
+/// LG Home's app ID, which the staged Home integration runs Astro as.
 pub const HOME_ID: &str = "com.webos.app.home";
 
 /// While this file exists, the staged Home does not register with sam and is restarted per
-/// Home key as before. Astro creates it when a relaunch did not bring it to the
+/// Home key instead. Astro creates it when a relaunch did not bring it to the
 /// front; delete it to try registering again.
 #[cfg_attr(
     not(all(feature = "webos", target_os = "linux", target_arch = "arm")),
@@ -73,6 +81,7 @@ pub struct ForegroundCheck {
 }
 
 impl ForegroundCheck {
+    /// How long a relaunch may take to gain focus or receive remote input.
     pub const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
     /// A relaunch arrived. `in_front`: Astro was already focused and visible, so nothing to check.
@@ -111,8 +120,9 @@ pub enum Lifecycle {
 }
 
 impl Lifecycle {
-    /// Lifecycle v1 (`registerNativeApp`) names the event in `message`. Other replies need no
-    /// action.
+    /// Reads the event of one lifecycle reply, or `None` when it needs no action.
+    ///
+    /// Lifecycle v1 (`registerNativeApp`) names the event in `message`.
     #[cfg_attr(
         not(all(feature = "webos", target_os = "linux", target_arch = "arm")),
         allow(dead_code)
@@ -127,6 +137,12 @@ impl Lifecycle {
 }
 
 /// Directory holding assets/, lib/ and splash/: the installed package next to the executable.
+///
+/// The result is computed once per process.
+///
+/// # Errors
+///
+/// Returns why the executable's directory is not Astro's installed package.
 pub fn install_dir() -> Result<std::path::PathBuf, String> {
     static DIRECTORY: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
         std::sync::OnceLock::new();
@@ -138,6 +154,13 @@ pub fn install_dir() -> Result<std::path::PathBuf, String> {
         .clone()
 }
 
+/// Opens the staged Home instead of this copy when the Home integration is active.
+///
+/// Returns `true` when Home was launched and this process should exit.
+///
+/// # Errors
+///
+/// Returns the Luna error when the Home launch fails.
 pub fn redirect_to_home() -> Result<bool, String> {
     // The root-only integration mounts this marker with its native Home
     // manifest. A normal tile launch then opens that same instance instead of
@@ -157,22 +180,31 @@ pub fn redirect_to_home() -> Result<bool, String> {
     Ok(false)
 }
 
+/// Work for the platform worker.
 pub enum Request {
+    /// Reads the app and input inventory.
     Refresh,
+    /// Reads only the inputs, for periodic status refreshes.
     RefreshInputs,
+    /// Launches an app by ID.
     Launch(String),
+    /// Removes an app through the root helper, sent once and confirmed against the inventory.
     Uninstall(String),
+    /// Points LG's launch splash at this background; answers nothing.
     SyncSplash(String),
     /// Read (`None`) or change Astro's TV input registration.
     TvInput(Option<bool>),
     /// Open `com.danielcanoh22.astro` for its TV input, without the launch notice.
     SelectAstroInput,
+    /// Lists, launches or closes a recent app; `generation` lets the UI drop stale replies.
     Recent {
         generation: u64,
         command: crate::recents::Command,
     },
 }
+/// A finished [`Request`], sent back to the SDL thread.
 pub enum Response {
+    /// The inventory, with a notice when only the inputs failed to refresh.
     Inventory(Result<(Inventory, Option<String>), String>),
     Inputs(Result<Vec<Input>, String>),
     Launched(Result<(), String>),
@@ -192,6 +224,7 @@ pub enum Response {
     },
 }
 
+/// Handle to the platform worker.
 pub struct Platform {
     sender: mpsc::Sender<Request>,
     pub receiver: mpsc::Receiver<Response>,
@@ -200,6 +233,8 @@ pub struct Platform {
 }
 
 impl Platform {
+    /// Starts the worker; `webos` selects TV services over the desktop demo, and
+    /// `splash_enabled` allows updating LG's launch splash.
     pub fn new(webos: bool, splash_enabled: bool) -> Self {
         let (sender, requests) = mpsc::channel();
         let (responses, receiver) = mpsc::channel();
@@ -381,6 +416,7 @@ impl Platform {
         }
     }
 
+    /// Queues a request; its response arrives on `receiver`.
     pub fn send(&self, request: Request) {
         let _ = self.sender.send(request);
     }
@@ -390,6 +426,8 @@ impl Platform {
         self.webos && self.splash_enabled
     }
 
+    /// Queues a launch splash update when this run updates the splash.
+    ///
     /// An upload's splash image must already be prepared by the wallpaper worker.
     pub fn sync_splash(&self, background: &str) {
         if self.updates_splash() {
@@ -398,6 +436,8 @@ impl Platform {
     }
 }
 
+/// Builds the shell command that runs the packaged `astro-helper` with `operation`.
+///
 /// Homebrew remains the privilege boundary for normal app jails. Each argument is shell-quoted
 /// independently; there is no interpreter source and no untrusted command name.
 fn helper_command(operation: &str, arguments: &[String]) -> Result<String, String> {
@@ -410,7 +450,7 @@ fn helper_command(operation: &str, arguments: &[String]) -> Result<String, Strin
 
 /// Quote for the exec service's shell and systemd's ExecStart environment expansion. Shell
 /// quoting alone does not protect `$` variables inside the embedded installer script.
-/// Doubling dollars works on older TV systemd versions without --expand-environment=no.
+/// Doubling dollars does not need `--expand-environment=no`, which older systemd lacks.
 /// Leave `%` untouched: systemd-run passes ExecStart over D-Bus, not through unit-file parsing.
 fn update_argument(value: &str) -> String {
     let escaped = value.replace('$', "$$");
@@ -420,6 +460,11 @@ fn update_argument(value: &str) -> String {
 /// Hands a downloaded, verified update to `tv/self-update.sh`, run as root through Homebrew
 /// Channel's exec in its own systemd unit: exec ends its children when the call returns, and the
 /// install closes Astro.
+///
+/// # Errors
+///
+/// Returns an error when the package directory is unknown, the exec call fails, or
+/// `systemd-run` exits non-zero. A transport error may still have started the unit.
 pub fn start_update(
     release: &crate::update::Release,
     attempt: &str,
@@ -457,7 +502,14 @@ pub fn start_update(
     Ok(())
 }
 
-/// Read only the root-owned result; the caller matches its unguessable attempt ID.
+/// Reads the installer's result for `attempt`, or the latest result for `None`.
+///
+/// Read only the root-owned result; the caller matches its unguessable attempt ID. Returns
+/// `Ok(None)` while no result exists.
+///
+/// # Errors
+///
+/// Returns an error for a malformed attempt ID, a failed exec call or an unparsable result.
 pub fn update_result_for(
     attempt: Option<&str>,
 ) -> Result<Option<crate::update::InstallResult>, String> {
@@ -543,11 +595,17 @@ pub fn record_home_healthy() {
     });
 }
 
+/// Points LG's launch splash at `background` through the root helper.
+///
+/// # Errors
+///
+/// Returns the helper's error, or an error when the splash it reports differs.
 fn sync_splash(background: &str) -> Result<(), String> {
     let directory = install_dir()?;
     // The executable/manifest Home already runs privileged. Avoid starting another process or
     // queuing a Homebrew call behind its startup; file work still stays on the platform worker.
     #[cfg(all(feature = "webos", unix))]
+    // SAFETY: geteuid has no preconditions.
     if unsafe { libc::geteuid() } == 0 {
         return astro_tv_helper::files::sync_splash(
             &astro_tv_helper::system::Tv,
@@ -598,13 +656,20 @@ fn tv_input(request: Option<bool>) -> Result<bool, String> {
         .ok_or_else(|| "Invalid TV input status".into())
 }
 
+/// Reports whether Astro offers to uninstall `id`.
+///
 /// Protect launcher identities and vendor system namespaces, never titles.
-/// Conservatively includes removable vendor apps until firmware provides a
-/// reliable cross-version removability flag.
+/// Conservatively protects vendor apps even when removable, since the firmware
+/// reports no reliable removability flag.
 pub fn can_uninstall(id: &str) -> bool {
     astro_tv_helper::removable(id) && !crate::scroll_preview::is_placeholder(id)
 }
 
+/// Returns the Luna removal call the root helper makes for `id`.
+///
+/// # Errors
+///
+/// Fails when `id` is protected (see [`can_uninstall`]).
 pub fn uninstall_request(id: &str) -> Result<(&'static str, Value), String> {
     if !can_uninstall(id) {
         return Err("This application is protected from deletion".into());
@@ -618,8 +683,14 @@ pub fn uninstall_request(id: &str) -> Result<(&'static str, Value), String> {
     ))
 }
 
+/// Reports whether an unfiltered `listApps` reply no longer contains `id`.
+///
 /// Use the unfiltered inventory: a hidden/system app must not look uninstalled
 /// merely because it would be excluded from Astro's visible catalogue.
+///
+/// # Errors
+///
+/// Fails for an oversized list or any entry without a valid ID, which proves nothing.
 pub fn inventory_confirms_removal(apps: &Value, id: &str) -> Result<bool, String> {
     let apps = apps
         .as_array()
@@ -637,6 +708,7 @@ pub fn inventory_confirms_removal(apps: &Value, id: &str) -> Result<bool, String
     Ok(!present)
 }
 
+/// Makes one native Luna call; desktop builds always fail.
 fn raw_call(uri: &str, payload: &Value) -> Result<Value, String> {
     #[cfg(all(feature = "webos", target_os = "linux", target_arch = "arm"))]
     let response = crate::luna::call(uri, payload);
@@ -648,6 +720,7 @@ fn raw_call(uri: &str, payload: &Value) -> Result<Value, String> {
     response
 }
 
+/// Makes a Luna call that must answer `returnValue: true`, logging failures with the URI.
 fn call(uri: &str, payload: Value) -> Result<Value, String> {
     raw_call(uri, &payload)
         .and_then(checked_response)
@@ -658,6 +731,7 @@ fn call(uri: &str, payload: Value) -> Result<Value, String> {
         })
 }
 
+/// Passes a Luna reply with `returnValue: true`; otherwise returns its `errorText`.
 fn checked_response(value: Value) -> Result<Value, String> {
     if value.get("returnValue").and_then(Value::as_bool) != Some(true) {
         return Err(value
@@ -671,10 +745,10 @@ fn checked_response(value: Value) -> Result<Value, String> {
     Ok(value)
 }
 
+/// Reads `field` from a root `luna-send -n 1` call of `uri`, run through Homebrew's exec.
 fn inventory_read(uri: &str, field: &str) -> Result<Value, String> {
-    // Fixed inventory commands use Homebrew's elevated service.
-    // Use the same one-reply invocation as the web launcher, without guessing
-    // CLI behavior from a firmware-version string.
+    // Fixed inventory commands use Homebrew's elevated service. A non-root exec answers
+    // with a Luna-shaped refusal instead of a misleading empty reply.
     let command = format!(
         "if [ \"$(id -u)\" = 0 ]; then /usr/bin/luna-send -n 1 -w 4000 {uri} '{{}}'; else printf '%s\\n' '{{\"returnValue\":false,\"errorText\":\"Homebrew Channel needs root access\"}}'; fi"
     );
@@ -689,6 +763,12 @@ fn inventory_read(uri: &str, field: &str) -> Result<Value, String> {
     })
 }
 
+/// Reads an app's installed icon files through the root helper, decoding its hex reply.
+///
+/// # Errors
+///
+/// Fails on desktop builds, on a helper error, or when the reply is malformed or exceeds
+/// [`app_artwork::MAX_FILE`] in total.
 pub fn read_app_icons(source: &app_artwork::Source) -> Result<Vec<Vec<u8>>, String> {
     if !cfg!(feature = "webos") {
         return Err("Installed artwork is only read on TV builds".into());
@@ -728,6 +808,7 @@ pub fn read_app_icons(source: &app_artwork::Source) -> Result<Vec<Vec<u8>>, Stri
         .collect()
 }
 
+/// Flattens command output to one line of at most 320 characters for error messages.
 fn output_excerpt(output: &str) -> String {
     output
         .chars()
@@ -737,6 +818,7 @@ fn output_excerpt(output: &str) -> String {
         .collect()
 }
 
+/// Returns `field` from the Luna reply inside an exec envelope (see [`command_reply`]).
 fn inventory_payload(envelope: &Value, field: &str) -> Result<Value, String> {
     let response = command_reply(envelope)?;
     response
@@ -745,6 +827,12 @@ fn inventory_payload(envelope: &Value, field: &str) -> Result<Value, String> {
         .ok_or_else(|| format!("Missing TV inventory field: {field}"))
 }
 
+/// Extracts and checks the Luna reply a command printed inside a Homebrew exec envelope.
+///
+/// # Errors
+///
+/// Fails for a non-zero exit, empty or oversized output, output without a Luna reply
+/// object, or a reply without `returnValue: true`; the message includes output excerpts.
 fn command_reply(envelope: &Value) -> Result<Value, String> {
     let stdout = envelope
         .get("stdoutString")
@@ -798,6 +886,7 @@ fn command_reply(envelope: &Value) -> Result<Value, String> {
     checked_response(response)
 }
 
+/// Runs a recent-apps command as a root `luna-send -n 1` through Homebrew's exec.
 fn recent_call(command: &crate::recents::Command) -> Result<Value, String> {
     let (uri, payload) = command.request()?;
     // The native process uses its own authenticated Homebrew connection, as
@@ -815,6 +904,7 @@ fn recent_call(command: &crate::recents::Command) -> Result<Value, String> {
     command_reply(&envelope)
 }
 
+/// Reads apps and inputs; an input failure keeps the apps and becomes a notice.
 fn inventory() -> Result<(Inventory, Option<String>), String> {
     let apps = normalize_apps(&inventory_read(
         "luna://com.webos.applicationManager/listApps",
@@ -840,11 +930,14 @@ fn inventory() -> Result<(Inventory, Option<String>), String> {
     }
 }
 
+/// Reads the inputs from EIM's `getAllInputStatus`.
 fn input_inventory() -> Result<Vec<Input>, String> {
     inventory_read("luna://com.webos.service.eim/getAllInputStatus", "devices")
         .and_then(|raw| normalize_inputs(&raw))
 }
 
+/// Returns a trimmed title without control characters, at most 120 characters, or
+/// `fallback` when nothing is left.
 fn title(value: Option<&str>, fallback: &str) -> String {
     let clean: String = value
         .unwrap_or("")
@@ -859,6 +952,14 @@ fn title(value: Option<&str>, fallback: &str) -> String {
     }
 }
 
+/// Turns a `listApps` reply into the visible app list, sorted by title.
+///
+/// Skips Astro, LG Home, input apps, hidden apps (Live TV excepted), vendor apps not marked
+/// visible, invalid IDs and duplicates.
+///
+/// # Errors
+///
+/// Fails when the reply is not an array of at most 1000 entries.
 pub fn normalize_apps(raw: &Value) -> Result<Vec<App>, String> {
     let entries = raw
         .as_array()
@@ -894,6 +995,14 @@ pub fn normalize_apps(raw: &Value) -> Result<Vec<App>, String> {
     Ok(apps)
 }
 
+/// Turns a `getAllInputStatus` device list into HDMI inputs plus Astro's own registered input.
+///
+/// Entries whose app ID, input ID or port disagree with their HDMI number, or that appear
+/// twice, are skipped.
+///
+/// # Errors
+///
+/// Fails when the reply is not an array of at most 128 entries.
 pub fn normalize_inputs(raw: &Value) -> Result<Vec<Input>, String> {
     let entries = raw
         .as_array()
@@ -954,7 +1063,7 @@ pub fn normalize_inputs(raw: &Value) -> Result<Vec<Input>, String> {
             title: title(entry.get("label").and_then(Value::as_str), &port),
             port,
             signal: entry.get("hdmiSignalExist").and_then(Value::as_bool),
-            // Some firmware reports `connected: true` for every existing port;
+            // The TV can report `connected: true` for every existing port;
             // `hdmiPlugIn` is the actual cable state where it is provided.
             connected: entry
                 .get("hdmiPlugIn")

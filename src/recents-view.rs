@@ -1,7 +1,14 @@
-//! Overlapping landscape cards, painted back-to-front with a separate upward exit.
+//! Recent-apps overlay: overlapping landscape cards painted back-to-front.
+//!
+//! Cards are placed by their fractional carousel offset from the focused card; dismissed cards
+//! leave with a separate upward exit animation driven by [`crate::recents`].
 use super::*;
 use crate::recents::{Command, DismissalOutcome};
 
+/// Returns the card rectangle for a carousel `offset` (0 is the centred, front card).
+///
+/// Cards shrink with depth and spread sideways quickly for the first neighbour, then more
+/// tightly, so several rear cards stay partly visible.
 fn card_rect(offset: f32) -> Rect {
     let depth = offset.abs();
     let scale = 1. / (1. + 0.22 * depth);
@@ -16,6 +23,9 @@ fn card_rect(offset: f32) -> Rect {
     )
 }
 
+/// Draws the recents overlay, its empty/loading/error message and the retry button.
+///
+/// Its modal area is the whole screen, so a click on empty space never dismisses it.
 pub fn render(out: &mut Scene, state: &State, assets: &Assets) {
     let language = state.preferences.language;
     let recent = &state.recents;
@@ -168,6 +178,8 @@ pub fn render(out: &mut Scene, state: &State, assets: &Assets) {
     }
 }
 
+/// Returns the focus to draw: the live focus while open, or the focus captured when the
+/// overlay started closing so the fade-out does not highlight the page underneath.
 fn recent_focus(state: &State) -> &Target {
     if state.recents_open() {
         &state.focus
@@ -176,6 +188,7 @@ fn recent_focus(state: &State) -> &Target {
     }
 }
 
+/// Draws an icon pill button, dimmed and without focus fill while a recents command is pending.
 fn button(
     out: &mut Scene,
     state: &State,

@@ -1,4 +1,11 @@
-// One-time native font preparation; normal asset builds and TV use are offline.
+/**
+ * Verifies the bundled Noto Sans SC/KR fonts and their license against pinned Google Fonts
+ * sources (`pnpm assets:fonts`).
+ *
+ * The files are checked in under `assets/fonts`, so this normally only verifies them; a missing
+ * file is downloaded from the pinned commit and checked before it is written. Normal asset builds
+ * and the TV never contact the network.
+ */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';

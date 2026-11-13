@@ -1,3 +1,10 @@
+/**
+ * Installs and launches the packaged IPK on a TV through the webOS CLI (`pnpm run deploy`,
+ * which packages first).
+ *
+ * Usage: `pnpm run deploy --device NAME`, where NAME is an `ares-setup-device` profile
+ * (default `tv`). Installs `dist/<id>_<version>_arm.ipk`, then launches the app.
+ */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';

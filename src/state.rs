@@ -1,3 +1,12 @@
+//! UI state machine: pages, focus, overlays and the effects user input requests.
+//!
+//! [`State`] lives on the SDL thread. Input handlers such as [`State::direction`],
+//! [`State::activate`] and [`State::back`] mutate it and return [`Effect`]s that the main loop
+//! carries out (saving preferences, Luna requests, downloads) so TV and HTTP work stays off the
+//! SDL thread. Remote navigation works on the [`Control`] list of the last rendered frame, and
+//! [`State::dirty`] asks the loop to draw again.
+//!
+//! Layout constants here are in logical 1920×1080 pixels and are shared with [`crate::view`].
 use crate::i18n::Language;
 use crate::model::{
     App, BACKGROUNDS, CATEGORIES, INPUT_NAME_LIMIT, InputMode, Inventory, Preferences,
@@ -8,28 +17,46 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+/// Settings sidebar index of the Widgets section.
 pub const WIDGETS_SECTION: usize = 2;
+/// Settings sidebar index of the System section.
 pub const SYSTEM_SECTION: usize = 3;
+/// Number of Settings sidebar sections; Down on the last one wraps to the first.
 pub const SECTION_COUNT: usize = 4;
+/// Space kept below the last control when a Settings page scrolls focus into view.
 pub const SETTINGS_BOTTOM_PADDING: f32 = 64.;
+/// Smaller bottom padding for the list-like Settings pages (language list, backgrounds gallery).
 pub const SETTINGS_LIST_BOTTOM_PADDING: f32 = 48.;
 /// System row registering Astro as a TV input (astro-helper tv-input), at upstream PR #124's index.
 pub const TV_INPUT_ROW: usize = 12;
+/// Columns of the Apps grid; Up/Down moves by this many grid indices, even into offscreen rows.
 pub const APPS_COLUMNS: usize = 6;
 /// Automatic inventory retries before the error shows: with the 6.5 s Luna timeout about 50 s.
 pub const INVENTORY_RETRIES: u32 = 5;
+/// Delay before each automatic inventory retry.
 pub const INVENTORY_RETRY_DELAY: Duration = Duration::from_secs(2);
+/// Left edge of the Home favorites strip; remote focus keeps the whole focused card inside
+/// `HOME_STRIP_LEFT..HOME_STRIP_RIGHT`.
 pub const HOME_STRIP_LEFT: f32 = 84.;
-// Six favourites in full and the seventh cut off and fading out at the right (Apple TV rows):
-// the strip ends after the sixth tile, so a focused tile never sits in the fade.
+/// Right edge of the Home favorites strip.
+///
+/// Six favourites show in full and the seventh is cut off and fades out at the right (Apple TV
+/// rows): the strip ends after the sixth tile, so a focused tile never sits in the fade.
 pub const HOME_STRIP_RIGHT: f32 = 1748.;
+/// Width of a Home favorite card.
 pub const HOME_TILE_WIDTH: f32 = 256.;
+/// Horizontal distance between the left edges of consecutive favorite cards.
 pub const HOME_TILE_PITCH: f32 = 281.6;
+/// Left limit of the favorites viewport (used once the strip is scrolled) and its edge fade.
 pub const HOME_FADE_LEFT: f32 = 8.;
+/// Right limit of the favorites viewport and its edge fade.
 pub const HOME_FADE_RIGHT: f32 = 1910.;
+/// Cross-fade duration in seconds after the user picks a background.
 pub const BACKGROUND_FADE: f32 = 0.4;
+/// Slower cross-fade duration in seconds for automatic background cycling.
 pub const CYCLE_FADE: f32 = 1.6;
 
+/// Returns the current Unix time in seconds, or 0 if the clock is before the epoch.
 pub fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -40,10 +67,11 @@ pub fn unix_now() -> u64 {
 /// Least time between two automatic switches to Astro's TV input, so an app copy that keeps
 /// failing cannot start a relaunch loop with Home.
 pub const ASTRO_INPUT_INTERVAL: Duration = Duration::from_secs(5);
-/// Automatic switches in a row, each within `ASTRO_INPUT_SETTLE` of the previous one, before Home
-/// stops switching until the Home key is pressed in Home: an input copy that keeps exiting
+/// Automatic switches in a row, each within [`ASTRO_INPUT_SETTLE`] of the previous one, before
+/// Home stops switching until the Home key is pressed in Home: an input copy that keeps exiting
 /// cannot keep reopening.
 pub const ASTRO_INPUT_LIMIT: u32 = 3;
+/// Gap after which an automatic switch no longer counts toward [`ASTRO_INPUT_LIMIT`].
 pub const ASTRO_INPUT_SETTLE: Duration = Duration::from_secs(30);
 /// A started Home switches to Astro's TV input only if its window gains focus within this time of
 /// the start. Home the Home key starts from an HDMI input gained focus just after its inventory in
@@ -51,15 +79,16 @@ pub const ASTRO_INPUT_SETTLE: Duration = Duration::from_secs(30);
 /// only later, when the user leaves that app, which must not send them back to it.
 pub const ASTRO_INPUT_START_WINDOW: Duration = Duration::from_secs(10);
 
-/// When Home switches to Astro's TV input (see `State::astro_input_due`).
+/// When Home switches to Astro's TV input (see [`State::astro_input_due`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum AstroInput {
+    /// No switch is armed.
     #[default]
     Idle,
     /// Home started: switch once the first inventory shows whether the input is registered.
     AfterInventory,
     /// Home started and its inventory arrived: switch only once Home's window has gained focus
-    /// (within `ASTRO_INPUT_START_WINDOW`), because the system also starts Home behind another
+    /// (within [`ASTRO_INPUT_START_WINDOW`]), because the system also starts Home behind another
     /// input or app (after a power-on into Astro's input).
     Started,
     /// Home was relaunched (Home key): switch now if the input is registered.
@@ -69,15 +98,18 @@ pub enum AstroInput {
 /// Whether LG lists Astro as a TV input. Read once when the System section first shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum TvInput {
+    /// Not read yet.
     #[default]
     Unknown,
     /// A status read or a change is running on the platform worker.
     Busy,
+    /// Whether Astro is currently registered as an input.
     Known(bool),
     /// The status read failed (e.g. no Homebrew root); selecting the row still tries to add it.
     Unavailable,
 }
 
+/// Top-level page, selected by the navigation tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum Page {
     Home,
@@ -85,24 +117,38 @@ pub enum Page {
     Settings,
 }
 
+/// Identity of a focusable or clickable control.
+///
+/// The same value names the focus, the pressed control and a hit-test result, so a control
+/// keeps its identity across frames even when its rectangle moves.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum Target {
+    /// Navigation tab by [`State::page_index`] (0 Home, 1 Apps, 2 Settings).
     Nav(usize),
     TvSettings,
     InstallUpdate,
     CheckUpdates,
+    /// Recents card by app ID.
     Recent(String),
+    /// Focus placeholder while the recents overlay has no cards.
     RecentEmpty,
     RecentRetry,
+    /// App card by app ID (Home favorite or Apps grid).
     App(String),
+    /// HDMI input card by input app ID.
     Input(String),
+    /// Home's shortcut to the Apps page.
     Browse,
+    /// Apps filter chip: 1–4 index [`CATEGORIES`], 5 is the hidden-apps filter.
     Filter(usize),
     ClearFilter,
     Search,
     ClearSearch,
+    /// Settings sidebar section.
     Sidebar(usize),
+    /// Row of the current Settings section, by index (see [`TV_INPUT_ROW`]).
     Setting(usize),
+    /// Row of the Widgets section.
     Widget(usize),
     GreetingName,
     GreetingNameClear,
@@ -113,28 +159,35 @@ pub enum Target {
     AppNamesApps,
     ClockFormat,
     ClockTimeFormat,
+    /// Backgrounds gallery tile: bundled backgrounds first, then uploaded wallpapers.
     Background(usize),
     UploadWallpaper,
     WallpaperCycle,
     WallpaperGradient,
     UseBackground,
     DeleteBackground,
+    /// Input row in the Inputs subpage, by input app ID.
     InputMode(String),
     InputRename,
     InputNameReset,
+    /// Option of the open choice subpage (clock, date, language, input mode, …).
     Choice(usize),
     CloseDialog,
+    /// Retries the failed inventory read.
     Retry,
     DismissNotice,
+    /// App options menu row: 0 favorite, 1 hide, 2 uninstall.
     Option(usize),
     OpenApp,
     ConfirmDelete,
     CancelDelete,
     SaveUpload,
     DiscardUpload,
+    /// On-screen keyboard key, indexing [`KEYS`].
     Key(usize),
 }
 
+/// Axis-aligned rectangle in logical 1920×1080 pixels.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Rect {
     pub x: f32,
@@ -146,24 +199,35 @@ impl Rect {
     pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
     }
+    /// Returns whether the point is inside; the right and bottom edges are exclusive.
     pub fn contains(self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.w && y < self.y + self.h
     }
     pub fn center(self) -> (f32, f32) {
         (self.x + self.w / 2., self.y + self.h / 2.)
     }
+    /// Shrinks the rectangle by `n` on every side; a negative `n` grows it.
     pub fn inset(self, n: f32) -> Self {
         Self::new(self.x + n, self.y + n, self.w - 2. * n, self.h - 2. * n)
     }
 }
 
+/// A hit-testable control emitted by the view for the current frame.
 #[derive(Clone, Debug)]
 pub struct Control {
     pub target: Target,
     pub rect: Rect,
+    /// Moves with page scrolling, so it only takes hits inside its scroll viewport.
     pub scrollable: bool,
 }
 
+/// Modal layer above the page.
+///
+/// `restore` is the focus to return to when the overlay closes; `id` is the app or background
+/// the overlay acts on. `Options` is the app menu (favorite, hide, uninstall); `Delete` and
+/// `BackgroundDelete` are confirmations that Back returns to their options menu. `Keyboard` is
+/// Astro's own on-screen keyboard (desktop builds), `SystemKeyboard` the TV's keyboard driven
+/// through SDL-webOS text input, and `WallpaperUpload` the QR-code upload dialog.
 #[derive(Clone, Debug)]
 pub enum Overlay {
     Options { id: String, restore: Target },
@@ -176,6 +240,7 @@ pub enum Overlay {
     BackgroundDelete { id: String, restore: Target },
 }
 
+/// Settings subpage opened from a row; Back and Left return to its parent row.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Subpage {
     AppNames,
@@ -191,13 +256,18 @@ pub enum Subpage {
     TextRendering,
 }
 
+/// Text the keyboard is editing.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum TextField {
+    /// Apps search query.
     Apps,
+    /// Greeting name draft.
     Name,
+    /// Custom name of the input in the open input subpage.
     InputName,
 }
 
+/// Remote arrow direction.
 #[derive(Clone, Copy)]
 pub enum Direction {
     Up,
@@ -206,84 +276,118 @@ pub enum Direction {
     Right,
 }
 
+/// Work the state machine asks the main loop to perform outside [`State`].
 #[derive(Debug, PartialEq)]
 pub enum Effect {
+    /// Persist [`State::preferences`].
     Save,
     /// Read the app inventory again, keeping decoded icons of unchanged apps.
     Refresh,
     /// Refresh apps: read the inventory and every app icon again.
     Reload,
+    /// Launch an app or HDMI input by app ID.
     Launch(String),
     Uninstall(String),
+    /// Delete an uploaded wallpaper on the worker; bundled backgrounds are only hidden.
     DeleteWallpaper(String),
     /// Add the upload awaiting a decision to the gallery.
     SaveUpload(String),
     /// Delete the upload awaiting a decision.
     DiscardUpload(String),
+    /// Run a recents command; replies from an older `generation` are discarded.
     Recent {
         generation: u64,
         command: crate::recents::Command,
     },
+    /// Exit Astro.
     Quit,
     /// Read (`None`) or change Astro's TV input registration.
     TvInput(Option<bool>),
     /// Open `com.danielcanoh22.astro` from Home so the TV keeps Astro as its last input.
     SelectAstroInput,
+    /// Download and install the given release version.
     UpdateDownload(String),
 }
 
+/// Keys of the desktop on-screen keyboard in grid order; the last four are actions.
 pub const KEYS: [&str; 40] = [
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
     "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "Space",
     "Delete", "Clear", "Done",
 ];
 
+/// The whole UI state of one Astro process.
 pub struct State {
     pub page: Page,
     pub focus: Target,
     pub inventory: Inventory,
     pub preferences: Preferences,
+    /// Apps search text.
     pub query: String,
+    /// Apps filter: 0 all, 1–4 [`CATEGORIES`], 5 hidden apps.
     pub filter: usize,
+    /// Settings sidebar section.
     pub section: usize,
     pub subpage: Option<Subpage>,
+    /// Vertical scroll offset of the current page, in logical pixels.
     pub scroll: f32,
+    /// Horizontal scroll offset of the Home favorites strip.
     pub home_scroll: f32,
     pub overlay: Option<Overlay>,
+    /// Favorite being reordered (move mode); Left/Right swap it and OK finishes.
     pub moving: Option<String>,
+    /// An inventory read is in progress.
     pub loading: bool,
     /// Set by Refresh apps: the next inventory also reloads every app icon.
     pub reload_artwork: bool,
+    /// A launch request is in flight; further launches are ignored until it ends.
     pub launching: bool,
+    /// App ID whose uninstall request is in flight.
     pub uninstalling: Option<String>,
+    /// Toast text and when it appeared; it expires after five seconds.
     pub notice: Option<(String, Instant)>,
+    /// Inventory error shown with a Retry button.
     pub error: Option<String>,
+    /// Newer release version, when the last check found one.
     pub available_update: Option<String>,
     pub update_status: crate::update::Status,
+    /// One-shot request for the main loop to start an update check.
     pub update_check_requested: bool,
     /// Inventory loads that failed in a row while no apps were shown yet.
     pub inventory_failures: u32,
+    /// The scene must be rebuilt and drawn again.
     pub dirty: bool,
+    /// The last navigation came from the pointer, so remote-only focus reveal is skipped.
     pub pointer: bool,
+    /// Control under a held OK button or pointer press.
     pub pressed: Option<Target>,
+    /// Previous background and when the cross-fade away from it started.
     pub previous_background: Option<(String, Instant)>,
+    /// Duration in seconds of the running background cross-fade.
     pub background_fade: f32,
+    /// Uploaded wallpapers, listed after the bundled backgrounds.
     pub wallpapers: Vec<crate::wallpapers::Wallpaper>,
+    /// Uploaded wallpaper whose deletion is running on the worker.
     pub deleting_wallpaper: Option<String>,
+    /// Upload session of the open dialog, or why it could not start.
     pub wallpaper_upload: Option<Result<crate::wallpapers::Session, String>>,
     /// An upload of the open dialog's session, previewed until the owner chooses Save or
     /// Discard. It is not part of `wallpapers` (gallery and rotation) before Save.
     pub wallpaper_pending: Option<crate::wallpapers::Wallpaper>,
     /// Astro update (Settings → System), driven by the update worker.
     pub update: crate::update::InstallStatus,
+    /// Start of the panel or subpage opening animation; `None` when settled.
     pub panel_started: Option<Instant>,
     pub keyboard_field: TextField,
     pub greeting_name_draft: String,
+    /// Input name being typed; committed when the keyboard closes.
     pub input_name: String,
     pub recents: crate::recents::Recents,
     pub tv_input: TvInput,
     pub astro_input: AstroInput,
+    /// Time of the last automatic switch to Astro's TV input.
     pub astro_input_switched: Option<Instant>,
+    /// Consecutive automatic switches, bounded by [`ASTRO_INPUT_LIMIT`].
     pub astro_input_streak: u32,
     /// When this Home process started (not preloaded), and when its window first gained focus.
     pub home_started_at: Option<Instant>,
@@ -339,11 +443,16 @@ impl State {
         }
     }
 
+    /// Shows a toast, replacing any current one.
     pub fn notify(&mut self, text: impl Into<String>) {
         self.notice = Some((text.into(), Instant::now()));
         self.dirty = true;
     }
 
+    /// Applies an update check result (`Some(version)` when a newer release exists).
+    ///
+    /// Announces a newly found version once, and moves focus between Check and Install when
+    /// the System row it was on changes meaning.
     pub fn update_response(&mut self, result: Result<Option<String>, String>) {
         match result {
             Ok(latest) => {
@@ -373,6 +482,7 @@ impl State {
         self.dirty = true;
     }
 
+    /// Returns whether an update check, download or install is running.
     pub fn update_busy(&self) -> bool {
         self.update_status == crate::update::Status::Checking
             || matches!(
@@ -382,6 +492,7 @@ impl State {
             )
     }
 
+    /// Applies progress or the final result reported by the update worker.
     pub fn install_response(&mut self, response: crate::update::Response) {
         use crate::update::{InstallStatus, Response};
         match response {
@@ -415,6 +526,8 @@ impl State {
         self.dirty = true;
     }
 
+    /// Advances time-based state once per loop iteration: recents and panel animations,
+    /// background cross-fades and toast expiry. Marks the state dirty while anything moves.
     pub fn tick(&mut self) {
         let recents_open = self.recents_open();
         if recents_open || self.recents.visibility > 0. {
@@ -467,6 +580,7 @@ impl State {
         }
     }
 
+    /// Returns whether an animation is running, so the loop should keep drawing frames.
     pub fn animating(&self) -> bool {
         ((self.recents_open() || self.recents.visibility > 0.)
             && (self.recents.visibility != if self.recents_open() { 1. } else { 0. }
@@ -545,6 +659,11 @@ impl State {
         }
     }
 
+    /// Returns [`Effect::SelectAstroInput`] when an armed switch to Astro's TV input should
+    /// happen now, and disarms it.
+    ///
+    /// Requires Astro to be listed as an input. Relaunch switches are rate-limited by
+    /// [`ASTRO_INPUT_INTERVAL`] and [`ASTRO_INPUT_LIMIT`]; a start switches at most once.
     pub fn astro_input_due(&mut self, now: Instant) -> Option<Effect> {
         let started = match self.astro_input {
             AstroInput::Now => false,
@@ -616,6 +735,7 @@ impl State {
         self.return_home()
     }
 
+    /// Opens a page by navigation index, resetting search, filters, overlays and scroll.
     pub fn open(&mut self, index: usize) {
         self.page = match index {
             1 => Page::Apps,
@@ -636,6 +756,10 @@ impl State {
         self.dirty = true;
     }
 
+    /// Returns the apps the current page lists.
+    ///
+    /// Home lists visible favorites in favorite order. Apps applies the filter and the
+    /// case-insensitive search, then sorts favorites first (by rank) and the rest by title.
     pub fn apps(&self) -> Vec<&App> {
         let ids = self.preferences.favorites(&self.inventory.apps);
         if self.page == Page::Home {
@@ -675,10 +799,12 @@ impl State {
         apps.into_iter().map(|(_, _, app)| app).collect()
     }
 
+    /// Returns the area below the navigation bar where page content scrolls.
     pub fn content_viewport(&self) -> Rect {
         Rect::new(64., 108.8, 1792., 1080. - 108.8)
     }
 
+    /// Returns the lowest y a scrolled control may reach before the page scrolls.
     fn scroll_bottom(&self) -> f32 {
         let viewport = self.content_viewport();
         viewport.y + viewport.h
@@ -695,6 +821,8 @@ impl State {
             }
     }
 
+    /// Returns the clip area of the Home favorites strip; the left fade only exists once the
+    /// strip has scrolled.
     pub fn favorites_viewport(&self) -> Rect {
         let content = self.content_viewport();
         let left = if self.home_scroll > 0. {
@@ -705,16 +833,22 @@ impl State {
         Rect::new(left, content.y, HOME_FADE_RIGHT - left, content.h)
     }
 
+    /// Returns the scroll area of the Apps grid, below the fixed filter and search bar.
     pub fn apps_viewport(&self) -> Rect {
         let content = self.content_viewport();
         Rect::new(content.x, 244.8, content.w, content.y + content.h - 244.8)
     }
 
+    /// Returns the scroll area of the Settings backgrounds gallery.
     pub fn backgrounds_viewport(&self) -> Rect {
         let content = self.content_viewport();
         Rect::new(620., 244.8, 1160., content.y + content.h - 244.8)
     }
 
+    /// Returns the topmost control at a pointer position.
+    ///
+    /// Later controls are drawn on top, so the search runs in reverse; scrollable controls only
+    /// match inside their viewport, so a card scrolled under a header cannot be clicked.
     pub fn hit_test(&self, controls: &[Control], x: f32, y: f32) -> Option<Target> {
         controls
             .iter()
@@ -775,6 +909,8 @@ impl State {
         favorites
     }
 
+    /// Scrolls the favorites strip by `delta` pixels, clamped so the last card can reach the
+    /// strip's right edge. A zero delta re-clamps after favorites change.
     pub fn scroll_favorites(&mut self, delta: f32) {
         let count = self
             .preferences
@@ -798,6 +934,10 @@ impl State {
         }
     }
 
+    /// Applies a successful inventory read.
+    ///
+    /// A `warning` means the apps were read but the inputs were not: it is shown as a toast and
+    /// the previous inputs are kept.
     pub fn set_inventory(&mut self, next: Inventory, warning: Option<String>) {
         self.inventory.apps = next.apps;
         let inputs_read = warning.is_none();
@@ -858,6 +998,7 @@ impl State {
         None
     }
 
+    /// Moves focus to the page's first content when the focused app or input disappeared.
     pub fn reconcile_focus(&mut self) {
         if self.page == Page::Home {
             self.scroll_favorites(0.);
@@ -878,6 +1019,9 @@ impl State {
         }
     }
 
+    /// Returns the control that receives focus when entering the page content.
+    ///
+    /// On Home it is the first fully visible favorite at the current strip scroll.
     pub fn first_content(&self) -> Target {
         match self.page {
             Page::Home => self
@@ -898,6 +1042,8 @@ impl State {
         }
     }
 
+    /// Moves remote focus to `target` and scrolls it into view; a sidebar target also opens
+    /// that Settings section.
     pub fn focus(&mut self, target: Target, controls: &[Control]) {
         self.pointer = false;
         self.focus = target;
@@ -909,6 +1055,8 @@ impl State {
         self.dirty = true;
     }
 
+    /// Scrolls so the whole focused control is visible; returns whether anything scrolled.
+    ///
     /// Remote focus is revealed after layout changes, including hide/reorder.
     /// Pointer paths deliberately do not call this method.
     pub fn reveal_focus(&mut self, controls: &[Control]) -> bool {
@@ -958,6 +1106,8 @@ impl State {
         self.scroll != previous || self.home_scroll != previous_home
     }
 
+    /// Focuses the control under the pointer without scrolling.
+    ///
     /// Hover and pointer-down must not move the control before pointer-up.
     pub fn pointer_focus(&mut self, target: Target) {
         if !self.pointer {
@@ -990,6 +1140,10 @@ impl State {
         self.background_ids().count()
     }
 
+    /// Switches to the next background in gallery order for automatic cycling.
+    ///
+    /// Always restarts the cycle timer. Pins the launch splash to its current choice so cycling
+    /// never changes it. Returns whether the background changed.
     pub fn cycle_wallpaper(&mut self, now: u64) -> bool {
         let ids: Vec<_> = self
             .background_ids()
@@ -1013,10 +1167,13 @@ impl State {
         true
     }
 
+    /// Returns the background ID at a gallery index.
     pub fn background_id(&self, index: usize) -> Option<&str> {
         self.background_ids().nth(index)
     }
 
+    /// Lists gallery IDs: bundled backgrounds not deleted by the user (the current one is always
+    /// kept), then uploaded wallpapers.
     fn background_ids(&self) -> impl Iterator<Item = &str> {
         BACKGROUNDS
             .iter()
@@ -1032,6 +1189,7 @@ impl State {
             .chain(self.wallpapers.iter().map(|item| item.id.as_str()))
     }
 
+    /// Returns whether `id` is in the gallery and is not the current background.
     pub fn can_delete_background(&self, id: &str) -> bool {
         id != self.preferences.background && self.background_ids().any(|known| known == id)
     }
@@ -1044,6 +1202,7 @@ impl State {
         )
     }
 
+    /// Applies the worker's answer to [`Effect::DeleteWallpaper`]; stale answers are ignored.
     pub fn wallpaper_deleted(&mut self, id: String, result: Result<(), String>) -> Vec<Effect> {
         if self.deleting_wallpaper.as_deref() != Some(&id) {
             return vec![];
@@ -1152,6 +1311,8 @@ impl State {
         self.dirty = true;
     }
 
+    /// Replaces the uploaded wallpaper catalog, keeping focus on the same image and closing
+    /// background overlays whose image disappeared.
     pub fn set_wallpapers(&mut self, wallpapers: Vec<crate::wallpapers::Wallpaper>) {
         // A newly uploaded ID can sort before existing entries. Keep the focused
         // image, rather than moving the pointer's target to a different photograph.
@@ -1186,6 +1347,7 @@ impl State {
         self.dirty = true;
     }
 
+    /// Returns the first control focused when entering the current Settings section.
     fn section_entry(&self) -> Target {
         match self.section {
             1 => Target::Background(
@@ -1202,6 +1364,8 @@ impl State {
         }
     }
 
+    /// Closes the current subpage and focuses the row that opened it; nested choice subpages
+    /// return to their parent subpage, and no subpage returns to the sidebar.
     fn close_subpage(&mut self) {
         self.panel_started = None;
         self.pointer = false;
@@ -1235,6 +1399,12 @@ impl State {
         self.dirty = true;
     }
 
+    /// Handles a remote arrow press.
+    ///
+    /// Explicit routes come first (move mode, Home favorites, Settings rows and subpages, the
+    /// six-column Apps grid, the backgrounds gallery). Anything else falls back to spatial
+    /// navigation over `controls`: the nearest control in that direction, heavily penalising
+    /// candidates that do not overlap on the cross axis.
     pub fn direction(&mut self, direction: Direction, controls: &[Control]) -> Vec<Effect> {
         self.pointer = false;
         self.dirty = true;
@@ -1688,6 +1858,7 @@ impl State {
         vec![]
     }
 
+    /// Opens the options menu of the focused app or background.
     pub fn options(&mut self) {
         if self.overlay.is_some() || self.moving.is_some() {
             return;
@@ -1730,6 +1901,7 @@ impl State {
         Some(Effect::TvInput(None))
     }
 
+    /// Applies the result of a TV input read (`request` is `None`) or change.
     pub fn tv_input_response(
         &mut self,
         request: Option<bool>,
@@ -1760,6 +1932,10 @@ impl State {
         }
     }
 
+    /// Applies the result of an uninstall request; answers for another app are ignored.
+    ///
+    /// On success the app leaves the inventory, favorites and hidden list, and focus moves to
+    /// the card that took its place.
     pub fn uninstall_response(&mut self, id: String, result: Result<(), String>) -> Vec<Effect> {
         if self.uninstalling.as_ref() != Some(&id) {
             return vec![];
@@ -1812,6 +1988,7 @@ impl State {
         vec![Effect::Save, Effect::Refresh]
     }
 
+    /// Handles a long OK press: enters move mode on a Home favorite, otherwise opens options.
     pub fn hold(&mut self) {
         if self.page == Page::Home && self.overlay.is_none() {
             if let Target::App(id) = &self.focus {
@@ -1824,6 +2001,8 @@ impl State {
         }
     }
 
+    /// Appends typed text to the active field, dropping control characters and stopping at
+    /// the field's length limit.
     pub fn text(&mut self, text: &str) {
         if self.text_input_active() {
             if self.keyboard_field == TextField::Name {
@@ -1856,6 +2035,7 @@ impl State {
         }
     }
 
+    /// Removes the last character of the active field.
     pub fn delete(&mut self) {
         if self.text_input_active() {
             if self.keyboard_field == TextField::Name {
@@ -1876,6 +2056,7 @@ impl State {
         )
     }
 
+    /// Closes any keyboard, returns focus to its field and commits the typed text.
     pub fn finish_text_input(&mut self) -> Vec<Effect> {
         if self.text_input_active() {
             self.overlay = None;
@@ -1919,6 +2100,7 @@ impl State {
         }
     }
 
+    /// Deletes text the TV keyboard asked to remove around the cursor (at the end of the field).
     pub fn delete_surrounding_text(&mut self, offset: i32, length: i32) {
         if !self.text_input_active() || length <= 0 {
             return;
@@ -1954,6 +2136,8 @@ impl State {
             TextField::Apps => &self.query,
         }
     }
+    /// Opens the keyboard for `field`: the TV's system keyboard on webOS builds, Astro's own
+    /// on-screen keyboard elsewhere.
     pub fn open_keyboard(&mut self, field: TextField) {
         self.keyboard_field = field;
         if field == TextField::Name {
@@ -1986,6 +2170,7 @@ impl State {
         }
         self.dirty = true;
     }
+    /// Returns the control that opened the keyboard for the current field.
     fn keyboard_return(&self) -> Target {
         match self.keyboard_field {
             TextField::Name => Target::GreetingName,
@@ -1994,6 +2179,7 @@ impl State {
         }
     }
 
+    /// Handles OK (or a click) on the focused control and returns the effects it requests.
     pub fn activate(&mut self) -> Vec<Effect> {
         if self.recents_open() {
             use crate::recents::Command;
@@ -2442,6 +2628,11 @@ impl State {
         vec![]
     }
 
+    /// Handles Back, unwinding one level at a time.
+    ///
+    /// Order: move mode, a pending upload (Discard), overlays (nested confirmations return to
+    /// their menu), Settings subpages and rows, Apps search, other pages to Home, and on Home
+    /// it opens recents.
     pub fn back(&mut self) -> Vec<Effect> {
         self.pointer = false;
         self.dirty = true;

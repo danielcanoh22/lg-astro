@@ -1,11 +1,19 @@
-//! Preserve SDL-webOS extension keys before rust-sdl2 converts its closed
-//! Scancode enum. The TV keymap can leave their keycode at SDLK_UNKNOWN (zero).
+//! Polls raw SDL events and maps SDL-webOS extension keys before rust-sdl2 sees them.
+//!
+//! rust-sdl2 converts scancodes into a closed enum and can abort on the TV's extension
+//! values, and the TV keymap can leave their keycode at `SDLK_UNKNOWN` (zero). This module
+//! reads the raw event, rewrites Home, Back and Exit to known keys and blanks any other
+//! scancode outside SDL2's standard range.
 use sdl2::{EventPump, event::Event, keyboard::Keycode, sys};
 use std::mem::MaybeUninit;
 
+/// Keycode given to the remote's Exit key (webOS scancode 505), outside SDL's own keycodes.
 pub const WEBOS_EXIT_KEYCODE: i32 = (1 << 30) | 505;
+/// Keycode given to the remote's Home key (webOS scancode 384), outside SDL's own keycodes.
 pub const WEBOS_HOME_KEYCODE: i32 = (1 << 30) | 384;
 
+/// Converts a raw SDL event into a rust-sdl2 [`Event`], first rewriting webOS key scancodes
+/// when `webos` is set and blanking any scancode that is not a standard SDL2 value.
 pub fn decode(mut raw: sys::SDL_Event, webos: bool) -> Event {
     // SAFETY: SDL always initializes the type tag; only keyboard variants have
     // a keysym. Read the scancode as its ABI integer, since native webOS values
@@ -43,6 +51,9 @@ pub fn decode(mut raw: sys::SDL_Event, webos: bool) -> Event {
     Event::from_ll(raw)
 }
 
+/// Returns the next queued event, decoded with [`decode`], without waiting.
+///
+/// The pump is borrowed only to prove SDL's event subsystem is alive on this thread.
 pub fn poll(_pump: &mut EventPump, webos: bool) -> Option<Event> {
     let mut raw = MaybeUninit::uninit();
     // SAFETY: EventPump keeps SDL events initialized on this SDL thread. SDL
@@ -50,6 +61,7 @@ pub fn poll(_pump: &mut EventPump, webos: bool) -> Option<Event> {
     unsafe { (sys::SDL_PollEvent(raw.as_mut_ptr()) == 1).then(|| decode(raw.assume_init(), webos)) }
 }
 
+/// Waits up to `timeout` milliseconds for the next event, decoded with [`decode`].
 pub fn wait(_pump: &mut EventPump, timeout: u32, webos: bool) -> Option<Event> {
     let mut raw = MaybeUninit::uninit();
     // SAFETY: same ownership/initialization contract as poll; preserve webOS

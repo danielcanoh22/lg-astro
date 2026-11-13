@@ -12,6 +12,13 @@ description = "A remote-first native launcher for rooted LG webOS TVs"
 members = ["vector-geometry", "tools/vector-assets", "tv-helper"]
 resolver = "3"
 
+# Every `unsafe` block states why its invariants hold.
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[lints]
+workspace = true
+
 [features]
 default = []
 webos = ["dep:libc", "astro-tv-helper/webos"]
