@@ -10,14 +10,15 @@ use std::{
     time::Duration,
 };
 const DIR: &str = "/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro";
-const EXE: &str = "/usr/bin/com.webos.app.home";
+/// LG Home on webOS 25 is a Flutter app started by `flutter-client -i com.webos.app.home`.
+const STOCK_MAIN: &str = "/usr/palm/applications/com.webos.app.home/";
+const TARGET: &str = "/usr/palm/applications/com.webos.app.home";
 struct Fixture {
     root: PathBuf,
     calls: RefCell<Vec<String>>,
     replies: RefCell<HashMap<String, VecDeque<Result<Value>>>>,
     mounts: RefCell<BTreeMap<String, String>>,
     front: RefCell<String>,
-    launch_front: Cell<bool>,
     normal: Cell<bool>,
     close_normal: Cell<bool>,
     uid: Cell<u32>,
@@ -47,7 +48,6 @@ impl Fixture {
             replies: RefCell::new(HashMap::new()),
             mounts: RefCell::new(BTreeMap::new()),
             front: RefCell::new("other.app".into()),
-            launch_front: Cell::new(true),
             normal: Cell::new(false),
             close_normal: Cell::new(true),
             uid: Cell::new(0),
@@ -65,14 +65,11 @@ impl Fixture {
             fs::create_dir_all(f.p(dir)).unwrap();
         }
         f.put("/proc/self/mountinfo", b"");
-        f.put("/etc/starfish-release", b"Rockhopper release 5.6.2-21");
-        for id in [home::HOME, home::FULL_HOME] {
-            f.put(&format!("/usr/bin/{id}"), format!("stock-{id}").as_bytes());
-            f.put_json(
-                &format!("/usr/palm/applications/{id}/appinfo.json"),
-                stock(id),
-            );
-        }
+        f.put("/etc/starfish-release", b"Rockhopper release 10.3.2-34");
+        f.put_json(
+            &format!("/usr/palm/applications/{}/appinfo.json", home::HOME),
+            stock(home::HOME),
+        );
         f.put_json(&format!("{DIR}/appinfo.json"),json!({"id":APP,"type":"native","main":"astro","icon":"app-icon.png","largeIcon":"app-icon-large.png","supportGIP":true}));
         f.put(&format!("{DIR}/astro"), b"native-astro");
         f.put(&format!("{DIR}/astro-helper"), b"native-helper");
@@ -94,13 +91,13 @@ impl Fixture {
     fn put_json(&self, path: &str, value: Value) {
         self.put(path, value.to_string().as_bytes());
     }
-    fn config(&self, method: &str, id: &str) -> home::Config {
+    fn config(&self) -> home::Config {
         home::Config {
             enabled: true,
-            method: method.into(),
+            method: "manifest".into(),
             app_dir: DIR.into(),
-            stock: stock(id),
-            home_id: id.into(),
+            stock: stock(home::HOME),
+            home_id: home::HOME.into(),
             extra: BTreeMap::new(),
         }
     }
@@ -217,9 +214,7 @@ impl System for Fixture {
         let reply = match method {
             "getForegroundAppInfo" => json!({"returnValue":true,"appId":*self.front.borrow()}),
             "launch" => {
-                if self.launch_front.get() {
-                    *self.front.borrow_mut() = payload["id"].as_str().unwrap().into();
-                }
+                *self.front.borrow_mut() = payload["id"].as_str().unwrap().into();
                 json!({"returnValue":true})
             }
             "running" => {
@@ -259,84 +254,65 @@ fn ok(reply: Value) -> Output {
     }
 }
 fn stock(id: &str) -> Value {
-    json!({"id":id,"type":"native","main":format!("file:///usr/bin/{id}"),"nativeLifeCycleInterfaceVersion":2})
+    json!({"id":id,"type":"flutter","main":format!("/usr/palm/applications/{id}/"),"nativeLifeCycleInterfaceVersion":2})
 }
 
+/// The original LG Home manifest is in place: no takeover is mounted over it.
+fn stock_manifest_restored(f: &Fixture) -> bool {
+    f.mounts.borrow().is_empty()
+        && system::json(f, format!("{TARGET}/appinfo.json")).unwrap()["main"] == STOCK_MAIN
+}
 #[test]
-fn home_methods_reject_unknown_firmware_or_lifecycle() {
+fn home_takeover_accepts_only_lg_home_on_webos_25() {
+    for release in ["Rockhopper release 10.1.0", "Rockhopper release 10.3.2-34"] {
+        assert_eq!(home::method(release, home::HOME).unwrap(), "manifest");
+    }
     for release in [
-        "Rockhopper release 5.6.2",
+        "Rockhopper release 4.10.2",
+        "Rockhopper release 5.6.2-21",
         "Rockhopper release 6.5.0",
+        "Rockhopper release 7.3.0",
         "Rockhopper release 9.2.4-48 (ombre-okapi)",
+        "Rockhopper release 11.2.0",
+        "no version",
     ] {
-        assert_eq!(
-            home::method(release, &stock(home::HOME), home::HOME).unwrap(),
-            "executable"
+        assert!(
+            home::method(release, home::HOME)
+                .unwrap_err()
+                .contains("webOS 25 (10.x)"),
+            "{release}"
         );
     }
-    for release in ["Rockhopper release 10.1.0", "Rockhopper release 11.2.0"] {
-        assert_eq!(
-            home::method(release, &Value::Null, home::HOME).unwrap(),
-            "manifest"
-        );
-    }
-    for release in ["Rockhopper release 4.10.2", "Rockhopper release 7.3.0"] {
-        assert!(home::method(release, &stock(home::HOME), home::HOME).is_err());
-    }
-    // webOS 24 has the executable method only, so it still needs a native Home.
-    let mut bad24 = stock(home::HOME);
-    bad24["nativeLifeCycleInterfaceVersion"] = json!(1);
-    assert!(home::method("release 9.2.4-48", &bad24, home::HOME).is_err());
-    let mut bad = stock(home::HOME);
-    bad["nativeLifeCycleInterfaceVersion"] = json!(1);
-    assert!(home::method("release 5.6.2", &bad, home::HOME).is_err());
-    assert!(home::method("release 10.1.0", &stock(home::FULL_HOME), home::FULL_HOME).is_err());
+    assert!(home::method("Rockhopper release 10.3.2-34", "com.webos.app.fullhome").is_err());
     assert!(home::Home::new(&Fixture::new(), "../other").is_err());
 }
 #[test]
-fn only_astro_mounts_are_owned_even_after_package_replacement() {
-    for root in [
-        "/developer/apps/usr/palm/applications/com.danielcanoh22.astro/astro",
-        "/cryptofs/apps/usr/palm/applications/com.danielcanoh22.astro/astro//deleted",
-    ] {
-        assert!(home::exe_owned(root));
-    }
-    assert!(!home::exe_owned("/var/lib/other/launcher"));
-    assert!(!home::exe_owned("/com.danielcanoh22.astro/astro/../other"));
-}
-#[test]
-fn executable_apply_mounts_marks_and_launches_then_restore_unmounts() {
+fn enabling_on_another_release_changes_nothing() {
     let f = Fixture::new();
-    let h = home::Home::new(&f, home::HOME).unwrap();
-    let c = f.config("executable", home::HOME);
-    h.apply(&c, true).unwrap();
-    assert!(system::same_file(&f, EXE, format!("{DIR}/astro")));
-    assert_eq!(f.read("/var/run/astro-home"), format!("{APP}\n").as_bytes());
-    assert_eq!(f.front.borrow().as_str(), home::HOME);
-    h.restore(&c).unwrap();
-    assert!(!system::exists(&f, "/var/run/astro-home"));
-    assert_eq!(f.read(EXE), format!("stock-{}", home::HOME).as_bytes());
-}
-#[test]
-fn fullhome_round_trip_and_persisted_target_keep_their_identity() {
-    let f = Fixture::new();
-    home::dispatch(&f, "enable", Some(DIR), Some(home::FULL_HOME)).unwrap();
-    let c = home::load(&f).unwrap().unwrap();
-    assert_eq!(c.home_id, home::FULL_HOME);
-    assert!(c.enabled);
-    assert_eq!(
-        f.read("/var/run/astro-home-target"),
-        format!("{}\n", home::FULL_HOME).as_bytes()
+    f.put("/etc/starfish-release", b"Rockhopper release 9.2.4-48");
+    assert!(
+        home::dispatch(&f, "enable", Some(DIR))
+            .unwrap_err()
+            .contains("webOS 25 (10.x)")
     );
-    let status = home::dispatch(&f, "status", None, None).unwrap();
-    assert_eq!(status["homeId"], home::FULL_HOME);
+    assert!(f.calls().is_empty());
+    assert!(!system::exists(&f, "/var/lib/astro-home/state.json"));
+    assert!(stock_manifest_restored(&f));
+}
+#[test]
+fn status_lists_only_lg_home_and_reports_the_manifest_mount() {
+    let f = Fixture::new();
+    let status = home::dispatch(&f, "status", None).unwrap();
+    assert_eq!(status["availableTargets"], json!([home::HOME]));
+    assert_eq!(status["mounted"], false);
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
+    let status = home::dispatch(&f, "status", None).unwrap();
+    assert_eq!(status["enabled"], true);
+    assert_eq!(status["method"], "manifest");
+    assert_eq!(status["homeId"], home::HOME);
     assert_eq!(status["mounted"], true);
-    home::dispatch(&f, "disable", None, None).unwrap();
-    assert_eq!(
-        f.read("/usr/bin/com.webos.app.fullhome"),
-        b"stock-com.webos.app.fullhome"
-    );
-    assert!(!system::exists(&f, "/var/run/astro-home-target"));
+    assert_eq!(status["bootHook"], true);
+    assert_eq!(status["appDir"], DIR);
 }
 #[test]
 fn installation_under_a_symlinked_temporary_parent_stays_inside_the_root() {
@@ -347,9 +323,9 @@ fn installation_under_a_symlinked_temporary_parent_stays_inside_the_root() {
     std::os::unix::fs::symlink(&real, &link).unwrap();
     {
         let f = Fixture::under(&link);
-        home::dispatch(&f, "enable", Some(DIR), None).unwrap();
+        home::dispatch(&f, "enable", Some(DIR)).unwrap();
         assert_eq!(home::load(&f).unwrap().unwrap().app_dir, DIR);
-        home::dispatch(&f, "disable", None, None).unwrap();
+        home::dispatch(&f, "disable", None).unwrap();
     }
     fs::remove_file(&link).unwrap();
     fs::remove_dir_all(&real).unwrap();
@@ -357,100 +333,72 @@ fn installation_under_a_symlinked_temporary_parent_stays_inside_the_root() {
 #[test]
 fn copied_recovery_binary_and_shell_survive_package_removal() {
     let f = Fixture::new();
-    home::dispatch(&f, "enable", Some(DIR), None).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
     assert_eq!(f.read("/var/lib/astro-home/astro-helper"), b"native-helper");
     fs::remove_dir_all(f.p(DIR)).unwrap();
-    home::dispatch(&f, "disable", None, None).unwrap();
-    assert_eq!(f.read(EXE), b"stock-com.webos.app.home");
+    home::dispatch(&f, "disable", None).unwrap();
+    assert!(stock_manifest_restored(&f));
 }
 #[test]
 fn boot_apply_does_not_take_another_apps_screen() {
     let f = Fixture::new();
-    home::Home::new(&f, home::HOME)
-        .unwrap()
-        .apply(&f.config("executable", home::HOME), false)
-        .unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
+    // A reboot drops the bind mount; the boot hook applies it again behind another app.
+    f.unmount(TARGET);
+    *f.front.borrow_mut() = "other.app".into();
+    let launches = || f.calls().iter().filter(|s| s.contains("/launch ")).count();
+    let before = launches();
+    home::dispatch(&f, "apply", None).unwrap();
+    assert!(!f.mounts.borrow().is_empty());
     assert_eq!(f.front.borrow().as_str(), "other.app");
-    assert!(!f.calls().iter().any(|s| s.contains("/launch ")));
-}
-#[test]
-fn package_update_replaces_the_old_bound_inode() {
-    let f = Fixture::new();
-    let h = home::Home::new(&f, home::HOME).unwrap();
-    let c = f.config("executable", home::HOME);
-    h.apply(&c, false).unwrap();
-    let changed = f.p(&format!("{DIR}/astro.new"));
-    fs::write(&changed, b"updated").unwrap();
-    fs::rename(changed, f.p(&format!("{DIR}/astro"))).unwrap();
-    h.apply(&c, false).unwrap();
-    assert_eq!(f.read(EXE), b"updated");
-    assert!(f.calls().iter().any(|s| s == &format!("/bin/umount {EXE}")));
+    assert_eq!(launches(), before);
 }
 #[test]
 fn foreign_mounts_are_left_untouched() {
     let f = Fixture::new();
-    f.put("/var/lib/other/launcher", b"foreign");
-    f.mount("/var/lib/other/launcher", EXE);
+    f.put_json(
+        "/var/lib/other/home/appinfo.json",
+        json!({"id":home::HOME,"main":"foreign"}),
+    );
+    f.mount("/var/lib/other/home", TARGET);
     let h = home::Home::new(&f, home::HOME).unwrap();
     assert!(
-        h.apply(&f.config("executable", home::HOME), true)
+        h.apply(&f.config(), true)
             .unwrap_err()
             .contains("Another integration")
     );
-    assert_eq!(f.read(EXE), b"foreign");
-    assert!(!f.calls().iter().any(|s| s.contains("umount")));
-}
-#[test]
-fn failed_launch_retries_once_then_restores_stock_files() {
-    let f = Fixture::new();
-    f.launch_front.set(false);
-    let h = home::Home::new(&f, home::HOME).unwrap();
-    assert!(
-        h.apply(&f.config("executable", home::HOME), true)
-            .unwrap_err()
-            .contains("did not come")
-    );
-    assert_eq!(f.read(EXE), b"stock-com.webos.app.home");
-    assert!(!system::exists(&f, "/var/run/astro-home"));
     assert_eq!(
-        f.calls().iter().filter(|s| s.contains("/launch ")).count(),
-        2
+        system::json(&f, format!("{TARGET}/appinfo.json")).unwrap()["main"],
+        "foreign"
     );
+    assert!(!f.calls().iter().any(|s| s.contains("mount")));
 }
 #[test]
 fn restoration_works_even_when_foreground_query_fails() {
     let f = Fixture::new();
-    let h = home::Home::new(&f, home::HOME).unwrap();
-    let c = f.config("executable", home::HOME);
-    h.apply(&c, true).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
     f.reply("getForegroundAppInfo", Err("offline".into()));
-    h.restore(&c).unwrap();
-    assert_eq!(f.read(EXE), b"stock-com.webos.app.home");
+    home::dispatch(&f, "disable", None).unwrap();
+    assert!(stock_manifest_restored(&f));
 }
 #[test]
-fn busy_mounts_use_lazy_unmount_and_restore_reports_stuck_processes() {
+fn busy_mounts_use_lazy_unmount() {
     let f = Fixture::new();
-    let h = home::Home::new(&f, home::HOME).unwrap();
-    let c = f.config("executable", home::HOME);
-    h.apply(&c, true).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
     f.fail_unmount.set(true);
-    h.restore(&c).unwrap();
+    home::dispatch(&f, "disable", None).unwrap();
     assert!(
         f.calls()
             .iter()
-            .any(|s| s == &format!("/bin/umount -l {EXE}"))
+            .any(|s| s == &format!("/bin/umount -l {TARGET}"))
     );
+    assert!(stock_manifest_restored(&f));
 }
 #[test]
-fn changing_an_enabled_target_or_using_a_foreign_hook_is_rejected() {
+fn a_foreign_hook_is_rejected() {
     let f = Fixture::new();
-    home::dispatch(&f, "enable", Some(DIR), None).unwrap();
-    assert!(
-        home::dispatch(&f, "enable", Some(DIR), Some(home::FULL_HOME))
-            .unwrap_err()
-            .contains("Disable")
-    );
-    home::dispatch(&f, "disable", None, None).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
+    home::dispatch(&f, "disable", None).unwrap();
     system::link(
         &f,
         "/other/home.sh",
@@ -458,44 +406,30 @@ fn changing_an_enabled_target_or_using_a_foreign_hook_is_rejected() {
     )
     .unwrap();
     assert!(
-        home::dispatch(&f, "enable", Some(DIR), None)
+        home::dispatch(&f, "enable", Some(DIR))
             .unwrap_err()
             .contains("already in use")
     );
 }
 #[test]
-fn old_configuration_without_method_or_target_is_readable() {
-    let f = Fixture::new();
-    f.put_json(
-        "/var/lib/astro-home/state.json",
-        json!({"enabled":false,"appDir":DIR,"stock":stock(home::HOME),"futureFlag":42}),
-    );
-    let c = home::load(&f).unwrap().unwrap();
-    assert_eq!(c.method, "manifest");
-    assert_eq!(c.home_id, home::HOME);
-    assert_eq!(c.extra["futureFlag"], 42);
-}
-#[test]
 fn manifest_takeover_rereads_staged_metadata_and_restores_the_stock_manifest() {
     let f = Fixture::new();
-    f.put("/etc/starfish-release", b"Rockhopper release 11.2.0");
-    home::dispatch(&f, "enable", Some(DIR), None).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
     assert_eq!(
         system::json(&f, "/usr/palm/applications/com.webos.app.home/appinfo.json").unwrap()["main"],
         "astro"
     );
-    home::dispatch(&f, "disable", None, None).unwrap();
+    home::dispatch(&f, "disable", None).unwrap();
     assert_eq!(
         system::json(&f, "/usr/palm/applications/com.webos.app.home/appinfo.json").unwrap()["main"],
-        format!("file://{EXE}")
+        STOCK_MAIN
     );
 }
 #[test]
 fn release_is_attempted_even_when_the_block_request_times_out() {
     let f = Fixture::new();
-    f.put("/etc/starfish-release", b"Rockhopper release 11.2.0");
     f.reply("blockSystemApp", Err("timeout after block".into()));
-    assert!(home::dispatch(&f, "enable", Some(DIR), None).is_err());
+    assert!(home::dispatch(&f, "enable", Some(DIR)).is_err());
     assert!(
         f.calls()
             .iter()
@@ -511,7 +445,7 @@ fn release_is_attempted_even_when_the_block_request_times_out() {
 fn normal_tile_is_closed_by_app_id_and_an_exiting_instance_is_tolerated() {
     let f = Fixture::new();
     f.normal.set(true);
-    home::dispatch(&f, "enable", Some(DIR), None).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
     assert!(
         f.calls()
             .iter()
@@ -524,7 +458,7 @@ fn normal_close_denials_and_stuck_instances_prevent_mounting() {
     let f = Fixture::new();
     f.normal.set(true);
     f.close_normal.set(false);
-    assert!(home::dispatch(&f, "enable", Some(DIR), None).is_err());
+    assert!(home::dispatch(&f, "enable", Some(DIR)).is_err());
     assert!(f.mounts.borrow().is_empty());
 }
 #[test]
@@ -532,8 +466,23 @@ fn process_matching_never_kills_a_normal_astro_or_unrelated_native_app() {
     let f = Fixture::new();
     let args = |main: &str, meta: Value| vec![main.into(), meta.to_string()];
     let exe = f.p(&format!("{DIR}/astro"));
+    let flutter = |id: &str| -> Vec<String> {
+        vec![
+            "/usr/bin/flutter-client".into(),
+            "-i".into(),
+            id.into(),
+            json!({}).to_string(),
+        ]
+    };
     assert!(home::home_process(
-        &args(EXE, json!({})),
+        &flutter(home::HOME),
+        None,
+        DIR,
+        home::HOME,
+        &f
+    ));
+    assert!(!home::home_process(
+        &flutter("com.webos.app.screensaver"),
         None,
         DIR,
         home::HOME,
@@ -765,6 +714,27 @@ fn an_icon_linked_inside_the_application_roots_is_still_read() {
 }
 
 #[test]
+fn splash_sync_accepts_only_the_developer_installation() {
+    let f = Fixture::new();
+    for other in [
+        "/media/cryptofs/apps/usr/palm/applications/com.danielcanoh22.astro",
+        "/usr/palm/applications/com.danielcanoh22.astro",
+    ] {
+        f.put_json(
+            &format!("{other}/appinfo.json"),
+            json!({"id":APP,"type":"native","main":"astro"}),
+        );
+        f.put(&format!("{other}/splash/forest.png"), b"forest");
+        assert_eq!(
+            files::sync_splash(&f, Path::new(other), "forest").unwrap_err(),
+            "Invalid Astro installation directory"
+        );
+        assert!(!f.p(&format!("{other}/splash.png")).exists());
+    }
+    files::sync_splash(&f, Path::new(DIR), "forest").unwrap();
+}
+
+#[test]
 fn splash_updates_tile_and_only_the_enabled_own_manifest_stage() {
     let f = Fixture::new();
     f.put_json(
@@ -789,9 +759,8 @@ fn splash_updates_tile_and_only_the_enabled_own_manifest_stage() {
     );
 }
 #[test]
-fn executable_other_or_disabled_stages_are_never_written() {
+fn other_or_disabled_stages_are_never_written() {
     for c in [
-        json!({"enabled":true,"method":"executable","appDir":DIR}),
         json!({"enabled":false,"appDir":DIR}),
         json!({"enabled":true,"appDir":"/other/install"}),
     ] {
@@ -869,12 +838,8 @@ fn symlink_storage_directories_are_not_used_as_root_preferences() {
     let f = Fixture::new();
     f.put_json("/other/preferences.json", json!({"background":"prism"}));
     system::link(&f, "/other", format!("/media/developer/{APP}")).unwrap();
-    f.put_json(
-        &format!("/media/developer/temp/{APP}/preferences.json"),
-        json!({"background":"forest"}),
-    );
     files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"dunes");
 }
 
 const UPLOAD: &str = "custom-0123456789abcdef0123456789abcdef";
@@ -1051,32 +1016,54 @@ fn the_package_directory_is_never_storage_for_uploaded_splashes() {
     );
     assert!(files::sync_splash(&f, Path::new(DIR), UPLOAD).is_err());
     assert_eq!(f.read(&format!("{DIR}/splash.png")), b"default");
+    // The package-local preferences are not read either: the default background is staged.
     files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"default");
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"dunes");
+}
+
+#[test]
+fn only_developer_storage_provides_preferences_and_uploaded_splashes() {
+    let f = Fixture::new();
+    enabled_stage(&f);
+    let image = splash_png(1920, 1080, b"other");
+    for other in [
+        format!("/media/developer/temp/{APP}"),
+        format!("/media/internal/.{APP}"),
+    ] {
+        f.put_json(
+            &format!("{other}/preferences.json"),
+            json!({"background":"prism","splash_background":UPLOAD}),
+        );
+        f.put(&format!("{other}/wallpapers/{UPLOAD}/splash.png"), &image);
+    }
+    assert_eq!(
+        files::sync_splash(&f, Path::new(DIR), UPLOAD).unwrap_err(),
+        "Uploaded background unavailable"
+    );
+    assert_eq!(f.read(&format!("{DIR}/splash.png")), b"default");
+    files::stage_splash(&f, Path::new(DIR)).unwrap();
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"dunes");
+    f.put_json(
+        &format!("{}/preferences.json", storage()),
+        json!({"background":"forest"}),
+    );
+    files::stage_splash(&f, Path::new(DIR)).unwrap();
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
 }
 
 #[test]
 fn storage_under_a_symlinked_system_directory_still_provides_uploaded_splashes() {
     let f = Fixture::new();
-    let production = format!("/media/cryptofs/apps/usr/palm/applications/{APP}");
-    f.put_json(
-        &format!("{production}/appinfo.json"),
-        json!({"id":APP,"type":"native","main":"astro"}),
-    );
-    f.put(&format!("{production}/splash.png"), b"default");
-    let image = splash_png(1920, 1080, b"internal");
-    f.put_json(
-        &format!("/real-internal/.{APP}/preferences.json"),
-        json!({"splash_background":UPLOAD}),
-    );
+    fs::rename(f.p("/media/developer"), f.p("/real-developer")).unwrap();
+    system::link(&f, "/real-developer", "/media/developer").unwrap();
+    let image = splash_png(1920, 1080, b"developer");
+    upload_preferences(&f);
     f.put(
-        &format!("/real-internal/.{APP}/wallpapers/{UPLOAD}/splash.png"),
+        &format!("/real-developer/{APP}/wallpapers/{UPLOAD}/splash.png"),
         &image,
     );
-    fs::create_dir_all(f.p("/media")).unwrap();
-    system::link(&f, "/real-internal", "/media/internal").unwrap();
-    files::sync_splash(&f, Path::new(&production), UPLOAD).unwrap();
-    assert_eq!(f.read(&format!("{production}/splash.png")), image);
+    files::sync_splash(&f, Path::new(DIR), UPLOAD).unwrap();
+    assert_eq!(f.read(&format!("{DIR}/splash.png")), image);
 }
 
 #[cfg(target_os = "linux")]
@@ -1132,7 +1119,6 @@ fn uninstall_rejects_failures_wrong_identity_and_resource_exhaustion() {
 fn uninstall_protects_system_apps_and_does_not_spawn_when_denied() {
     for id in [
         APP,
-        "com.ecklf.luma",
         "com.webos.app.home",
         "org.webosbrew.hbchannel",
         "bad/id",
@@ -1176,7 +1162,7 @@ fn input_verification_failure_rolls_back_and_existing_registration_is_preserved(
 fn root_mutations_reject_non_root_callers() {
     let f = Fixture::new();
     f.uid.set(1000);
-    assert!(home::dispatch(&f, "enable", Some(DIR), None).is_err());
+    assert!(home::dispatch(&f, "enable", Some(DIR)).is_err());
     assert!(input::configure(&f, "enable", Path::new(DIR)).is_err());
     assert!(f.calls().is_empty());
 }
@@ -1208,25 +1194,26 @@ fn process_runner_enforces_combined_output_and_deadline() {
 #[test]
 fn restoring_a_background_home_never_opens_over_another_app() {
     let f = Fixture::new();
-    let h = home::Home::new(&f, home::HOME).unwrap();
-    let c = f.config("executable", home::HOME);
-    h.apply(&c, false).unwrap();
-    h.restore(&c).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
+    *f.front.borrow_mut() = "other.app".into();
+    let launches = || f.calls().iter().filter(|s| s.contains("/launch ")).count();
+    let before = launches();
+    home::dispatch(&f, "disable", None).unwrap();
     assert_eq!(f.front.borrow().as_str(), "other.app");
-    assert!(!f.calls().iter().any(|s| s.contains("/launch ")));
+    assert_eq!(launches(), before);
+    assert!(stock_manifest_restored(&f));
 }
 #[test]
 fn a_stuck_home_process_is_reported_after_unmount_recovery() {
     let f = Fixture::new();
-    f.put("/proc/777/cmdline", format!("{EXE}\0{{}}\0").as_bytes());
+    f.put(
+        "/proc/777/cmdline",
+        b"/usr/bin/flutter-client\0-i\0com.webos.app.home\0{}\0",
+    );
     f.stuck.set(true);
-    let error = home::Home::new(&f, home::HOME)
-        .unwrap()
-        .apply(&f.config("executable", home::HOME), true)
-        .unwrap_err();
+    let error = home::dispatch(&f, "enable", Some(DIR)).unwrap_err();
     assert!(error.contains("Restore also failed"));
-    assert_eq!(f.read(EXE), b"stock-com.webos.app.home");
-    assert!(!system::exists(&f, "/var/run/astro-home"));
+    assert!(stock_manifest_restored(&f));
     // apply and its restore each wait the full 5 s budget in 200 ms steps.
     assert_eq!(f.brief_pauses.get(), 2 * 25);
     assert_eq!(system::BRIEF_PAUSE * 25, Duration::from_secs(5));
@@ -1237,7 +1224,7 @@ fn accepted_close_waits_boundedly_and_a_close_race_can_succeed() {
     f.normal.set(true);
     f.reply("closeByAppId", Ok(json!({"returnValue":true})));
     assert!(
-        home::dispatch(&f, "enable", Some(DIR), None)
+        home::dispatch(&f, "enable", Some(DIR))
             .unwrap_err()
             .contains("Close Astro")
     );
@@ -1250,30 +1237,11 @@ fn accepted_close_waits_boundedly_and_a_close_race_can_succeed() {
     );
     f.reply("running", Ok(json!({"returnValue":true,"running":[]})));
     f.reply("closeByAppId", Ok(json!({"returnValue":false})));
-    home::dispatch(&f, "enable", Some(DIR), None).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
 }
 #[test]
-fn developer_and_production_splash_precedence_matches_native_storage() {
+fn persistent_preferences_win_over_package_local_preferences_and_active_stages_refresh() {
     let f = Fixture::new();
-    f.put_json(
-        &format!("/media/developer/{APP}/preferences.json"),
-        json!({"background":"forest"}),
-    );
-    f.put_json(
-        &format!("/media/internal/.{APP}/preferences.json"),
-        json!({"background":"prism"}),
-    );
-    files::stage_splash(&f, Path::new(DIR)).unwrap();
-    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
-    let production = format!("/media/cryptofs/apps/usr/palm/applications/{APP}");
-    f.put(&format!("{production}/splash/prism.png"), b"prism");
-    files::stage_splash(&f, Path::new(&production)).unwrap();
-    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"prism");
-}
-#[test]
-fn persistent_preferences_win_over_package_local_migration_and_active_stages_refresh() {
-    let f = Fixture::new();
-    f.put("/etc/starfish-release", b"Rockhopper release 11.2.0");
     f.put_json(
         &format!("{DIR}/preferences.json"),
         json!({"background":"prism"}),
@@ -1282,7 +1250,7 @@ fn persistent_preferences_win_over_package_local_migration_and_active_stages_ref
         &format!("/media/developer/{APP}/preferences.json"),
         json!({"background":"forest"}),
     );
-    home::dispatch(&f, "enable", Some(DIR), None).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
     assert_eq!(
         f.read("/usr/palm/applications/com.webos.app.home/splash.png"),
         b"forest"
@@ -1291,7 +1259,7 @@ fn persistent_preferences_win_over_package_local_migration_and_active_stages_ref
         &format!("/media/developer/{APP}/preferences.json"),
         json!({"background":"prism"}),
     );
-    home::dispatch(&f, "apply", None, None).unwrap();
+    home::dispatch(&f, "apply", None).unwrap();
     assert_eq!(
         f.read("/usr/palm/applications/com.webos.app.home/splash.png"),
         b"prism"
@@ -1315,44 +1283,38 @@ fn unhealthy_starts_fall_back_once_after_the_limit_and_health_starts_a_new_count
     assert_eq!(f.read(home::FAILURES), b"1\n");
 }
 #[test]
-fn fallback_restores_lg_home_until_the_next_apply_for_both_methods() {
-    for release in ["5.6.2-21", "11.2.0"] {
-        let f = Fixture::new();
-        f.put(
-            "/etc/starfish-release",
-            format!("Rockhopper release {release}").as_bytes(),
-        );
-        home::dispatch(&f, "enable", Some(DIR), None).unwrap();
-        assert!(!f.mounts.borrow().is_empty(), "{release}");
-        let launches = || f.calls().iter().filter(|s| s.contains("/launch ")).count();
-        let before = launches();
-        // A crashing Astro is not in front, yet LG Home must open for the remote.
-        *f.front.borrow_mut() = "other.app".into();
-        home::dispatch(&f, "fallback", None, None).unwrap();
-        assert!(f.mounts.borrow().is_empty(), "{release}");
-        assert_eq!(launches(), before + 1, "{release}");
-        // Only until reboot: the integration and its boot hook stay.
-        assert_eq!(
-            system::json(&f, "/var/lib/astro-home/state.json").unwrap()["enabled"].as_bool(),
-            Some(true)
-        );
-        assert!(system::exists(
-            &f,
-            "/var/lib/webosbrew/init.d/64-astro-home"
-        ));
-        f.put(home::FAILURES, b"3\n");
-        home::dispatch(&f, "apply", None, None).unwrap();
-        assert!(!f.mounts.borrow().is_empty(), "{release}");
-        assert!(!system::exists(&f, home::FAILURES), "{release}");
-    }
+fn fallback_restores_lg_home_until_the_next_apply() {
+    let f = Fixture::new();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
+    assert!(!f.mounts.borrow().is_empty());
+    let launches = || f.calls().iter().filter(|s| s.contains("/launch ")).count();
+    let before = launches();
+    // A crashing Astro is not in front, yet LG Home must open for the remote.
+    *f.front.borrow_mut() = "other.app".into();
+    home::dispatch(&f, "fallback", None).unwrap();
+    assert!(stock_manifest_restored(&f));
+    assert_eq!(launches(), before + 1);
+    // Only until reboot: the integration and its boot hook stay.
+    assert_eq!(
+        system::json(&f, "/var/lib/astro-home/state.json").unwrap()["enabled"].as_bool(),
+        Some(true)
+    );
+    assert!(system::exists(
+        &f,
+        "/var/lib/webosbrew/init.d/64-astro-home"
+    ));
+    f.put(home::FAILURES, b"3\n");
+    home::dispatch(&f, "apply", None).unwrap();
+    assert!(!f.mounts.borrow().is_empty());
+    assert!(!system::exists(&f, home::FAILURES));
 }
 #[test]
 fn fallback_changes_nothing_once_the_integration_is_disabled() {
     let f = Fixture::new();
-    home::dispatch(&f, "enable", Some(DIR), None).unwrap();
-    home::dispatch(&f, "disable", None, None).unwrap();
+    home::dispatch(&f, "enable", Some(DIR)).unwrap();
+    home::dispatch(&f, "disable", None).unwrap();
     let calls = f.calls().len();
-    home::dispatch(&f, "fallback", None, None).unwrap();
+    home::dispatch(&f, "fallback", None).unwrap();
     assert_eq!(f.calls().len(), calls);
     assert!(f.mounts.borrow().is_empty());
 }

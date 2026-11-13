@@ -1,15 +1,8 @@
-//! Find the package owning the running binary, including an executable-only Home bind mount.
+//! Find the package owning the running binary: the directory next to the executable.
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
-pub fn directories() -> impl Iterator<Item = PathBuf> {
-    // The linker uses this same list for libraries needed before Rust startup.
-    include_str!("../tv/install-directories.txt")
-        .lines()
-        .map(PathBuf::from)
-}
 
 fn same_executable(a: &Path, b: &Path) -> bool {
     #[cfg(unix)]
@@ -46,16 +39,11 @@ fn owns_executable(directory: &Path, executable: &Path) -> bool {
     })
 }
 
-pub fn find_directory(
-    executable: &Path,
-    candidates: impl IntoIterator<Item = PathBuf>,
-) -> Result<PathBuf, String> {
+pub fn find_directory(executable: &Path) -> Result<PathBuf, String> {
     executable
         .parent()
         .map(Path::to_path_buf)
-        .into_iter()
-        .chain(candidates)
-        .find(|directory| owns_executable(directory, executable))
+        .filter(|directory| owns_executable(directory, executable))
         .ok_or_else(|| {
             format!(
                 "No installed native Astro package matches {}",
@@ -96,14 +84,6 @@ mod tests {
             .unwrap();
             directory
         }
-
-        fn mounted(&self, directory: &Path) -> PathBuf {
-            let executable = self.0.join("usr/bin/com.webos.app.home");
-            fs::create_dir_all(executable.parent().unwrap()).unwrap();
-            // A hard link preserves the same device/inode relationship as a file bind mount.
-            fs::hard_link(directory.join("astro"), &executable).unwrap();
-            executable
-        }
     }
 
     impl Drop for Fixture {
@@ -119,49 +99,23 @@ mod tests {
         let production = fixture.install("cryptofs");
         for directory in [&developer, &production] {
             assert_eq!(
-                find_directory(
-                    &directory.join("astro"),
-                    [production.clone(), developer.clone()]
-                )
-                .unwrap(),
+                find_directory(&directory.join("astro")).unwrap(),
                 *directory
             );
         }
     }
 
     #[test]
-    fn home_mount_selects_its_source_for_both_developer_and_production_installs() {
-        for source in ["developer", "cryptofs"] {
-            let fixture = Fixture::new();
-            let developer = fixture.install("developer");
-            let production = fixture.install("cryptofs");
-            let selected = if source == "developer" {
-                &developer
-            } else {
-                &production
-            };
-            let executable = fixture.mounted(selected);
-            // Both installations contain identical binary bytes; only the inode identifies the source.
-            assert_eq!(
-                find_directory(&executable, [developer.clone(), production.clone()]).unwrap(),
-                *selected
-            );
-        }
-    }
-
-    #[test]
-    fn missing_or_unrelated_package_never_silently_uses_another_installation() {
+    fn incomplete_package_never_silently_uses_another_installation() {
         let fixture = Fixture::new();
-        let developer = fixture.install("developer");
+        fixture.install("developer");
         let production = fixture.install("cryptofs");
-        let executable = fixture.mounted(&production);
-        assert!(find_directory(&executable, [developer.clone()]).is_err());
         fs::remove_dir(production.join("assets")).unwrap();
-        assert!(find_directory(&executable, [developer, production]).is_err());
+        assert!(find_directory(&production.join("astro")).is_err());
     }
 
     #[test]
-    fn home_mount_requires_the_matching_native_package_manifest() {
+    fn package_requires_the_matching_native_package_manifest() {
         for manifest in [
             "not json",
             r#"{"id":"other","type":"native","main":"astro"}"#,
@@ -170,9 +124,8 @@ mod tests {
         ] {
             let fixture = Fixture::new();
             let directory = fixture.install("cryptofs");
-            let executable = fixture.mounted(&directory);
             fs::write(directory.join("appinfo.json"), manifest).unwrap();
-            assert!(find_directory(&executable, [directory]).is_err());
+            assert!(find_directory(&directory.join("astro")).is_err());
         }
     }
 }

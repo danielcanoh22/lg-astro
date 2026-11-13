@@ -54,55 +54,9 @@ fn select_astro_input() -> Result<(), String> {
 /// The EIM input ID LG gives Astro once `astro-helper tv-input enable` registers it.
 const ASTRO_INPUT: &str = "MVPD_IP-com.danielcanoh22.astro";
 pub const HOME_ID: &str = "com.webos.app.home";
-pub const FULL_HOME_ID: &str = "com.webos.app.fullhome";
 
-pub fn is_home_id(id: &str) -> bool {
-    matches!(id, HOME_ID | FULL_HOME_ID)
-}
-
-/// Keep the window surface and SAM lifecycle identity aligned with the executed Home app.
-fn home_identity(executable: Option<&std::path::Path>, metadata: Option<&Value>) -> &'static str {
-    if let Some(executable) = executable {
-        if executable == std::path::Path::new("/usr/bin/com.webos.app.fullhome") {
-            return FULL_HOME_ID;
-        }
-        if executable == std::path::Path::new(LG_HOME_EXE) {
-            return HOME_ID;
-        }
-    }
-    if metadata.is_some_and(|value| {
-        ["nid", "appId"]
-            .iter()
-            .any(|key| value.get(key).and_then(Value::as_str) == Some(FULL_HOME_ID))
-    }) {
-        FULL_HOME_ID
-    } else {
-        HOME_ID
-    }
-}
-
-/// Derive the identity from SAM's actual launch, never from a saved preference.
-pub fn home_id() -> &'static str {
-    let executable = std::env::current_exe().ok();
-    let metadata = std::env::args()
-        .nth(1)
-        .and_then(|arg| serde_json::from_str::<Value>(&arg).ok());
-    home_identity(executable.as_deref(), metadata.as_ref())
-}
-/// LG's Home executable. A root integration may bind-mount Astro over it, so sam starts Astro
-/// under LG's own Home manifest and LS2 role (lifecycle v2, keep-alive, no sam restart).
-pub const LG_HOME_EXE: &str = "/usr/bin/com.webos.app.home";
-
-/// Whether this process runs in place of LG's Home executable.
-pub fn runs_as_lg_home() -> bool {
-    std::env::current_exe().is_ok_and(|exe| {
-        exe == std::path::Path::new(LG_HOME_EXE)
-            || exe == std::path::Path::new("/usr/bin/com.webos.app.fullhome")
-    })
-}
-
-/// While this file exists, a staged Home (webOS 10/11) does not register with sam and is
-/// restarted per Home key as before. Astro creates it when a relaunch did not bring it to the
+/// While this file exists, the staged Home does not register with sam and is restarted per
+/// Home key as before. Astro creates it when a relaunch did not bring it to the
 /// front; delete it to try registering again.
 #[cfg_attr(
     not(all(feature = "webos", target_os = "linux", target_arch = "arm")),
@@ -110,9 +64,9 @@ pub fn runs_as_lg_home() -> bool {
 )]
 pub const HOME_LIFECYCLE_OFF: &str = "/var/lib/astro-home/no-lifecycle";
 
-/// Whether a relaunch actually brought a staged Home (webOS 10/11) to the front. Only the
-/// compositor's focus or remote input counts: SDL_ShowWindow emits Shown by itself, so Shown
-/// and Restored say nothing about whether the raise reached the screen.
+/// Whether a relaunch actually brought the staged Home to the front. Only the compositor's
+/// focus or remote input counts: SDL_ShowWindow emits Shown by itself, so Shown and Restored
+/// say nothing about whether the raise reached the screen.
 #[derive(Debug, Default)]
 pub struct ForegroundCheck {
     deadline: Option<std::time::Instant>,
@@ -157,18 +111,14 @@ pub enum Lifecycle {
 }
 
 impl Lifecycle {
-    /// Lifecycle v2 (`registerApp`) names the event in `event`; v1 (`registerNativeApp`) in
-    /// `message`. Other replies (`registered`, `pause`, keep-alive) need no action.
+    /// Lifecycle v1 (`registerNativeApp`) names the event in `message`. Other replies need no
+    /// action.
     #[cfg_attr(
         not(all(feature = "webos", target_os = "linux", target_arch = "arm")),
         allow(dead_code)
     )]
     pub fn from_reply(reply: &Value) -> Option<Self> {
-        let name = reply
-            .get("event")
-            .or_else(|| reply.get("message"))
-            .and_then(Value::as_str)?;
-        match name {
+        match reply.get("message").and_then(Value::as_str)? {
             "relaunch" => Some(Self::Relaunch),
             "close" => Some(Self::Close),
             _ => None,
@@ -176,34 +126,28 @@ impl Lifecycle {
     }
 }
 
-/// Directory holding assets/, lib/ and splash/: next to the executable, or the installed
-/// package when the executable runs in place of LG's Home.
+/// Directory holding assets/, lib/ and splash/: the installed package next to the executable.
 pub fn install_dir() -> Result<std::path::PathBuf, String> {
     static DIRECTORY: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
         std::sync::OnceLock::new();
     DIRECTORY
         .get_or_init(|| {
             let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-            installation::find_directory(&executable, installation::directories())
+            installation::find_directory(&executable)
         })
         .clone()
 }
 
 pub fn redirect_to_home() -> Result<bool, String> {
     // The root-only integration mounts this marker with its native Home
-    // manifest, or writes it to /var/run on webOS 5/6, where it mounts this
-    // executable over LG's (a tile's jail sees /usr/bin without that mount).
-    // A normal tile launch then opens that same instance instead of starting
-    // a second renderer writing the same preferences.
+    // manifest. A normal tile launch then opens that same instance instead of
+    // starting a second renderer writing the same preferences.
     let marked = |file| std::fs::read_to_string(file).is_ok_and(|marker| marker.trim() == APP_ID);
-    if marked("/usr/palm/applications/com.webos.app.home/.astro-home")
-        || marked("/var/run/astro-home")
-    {
+    if marked("/usr/palm/applications/com.webos.app.home/.astro-home") {
         thread::spawn(|| {
             call(
                 "luna://com.webos.applicationManager/launch",
-                json!({"id": std::fs::read_to_string("/var/run/astro-home-target").ok()
-                    .filter(|id| is_home_id(id.trim())).map(|id| id.trim().to_owned()).unwrap_or_else(|| HOME_ID.into())}),
+                json!({"id": HOME_ID}),
             )
         })
         .join()
@@ -665,14 +609,7 @@ pub fn can_uninstall(id: &str) -> bool {
             .any(|prefix| id.starts_with(prefix))
         && !matches!(
             id,
-            APP_ID
-                | HOME_ID
-                | "com.ecklf.luma"
-                | "com.luma.native"
-                | "com.luma.launcher"
-                | "com.luma.launcher.native"
-                | "org.webosbrew.hbchannel"
-                | "org.webosbrew.hbchannel.service"
+            APP_ID | HOME_ID | "org.webosbrew.hbchannel" | "org.webosbrew.hbchannel.service"
         )
 }
 
@@ -743,15 +680,6 @@ fn checked_response(value: Value) -> Result<Value, String> {
 }
 
 fn inventory_read(uri: &str, field: &str) -> Result<Value, String> {
-    // In place of LG's Home, Astro holds LG Home's LS2 role and asks sam/EIM itself: an early
-    // root integration can bring this Home up long before Homebrew's service starts (~21 s vs
-    // ~51 s into a cold boot). A refused call answers at once and falls back below.
-    if runs_as_lg_home()
-        && let Ok(response) = call(uri, json!({}))
-        && let Some(value) = response.get(field)
-    {
-        return Ok(value.clone());
-    }
     // Fixed inventory commands use Homebrew's elevated service.
     // Use the same one-reply invocation as the web launcher, without guessing
     // CLI behavior from a firmware-version string.
@@ -957,11 +885,7 @@ pub fn normalize_apps(raw: &Value) -> Result<Vec<App>, String> {
         let live = id == "com.webos.app.livetv";
         let visible = entry.get("visible");
         if id == APP_ID
-            || id == "com.ecklf.luma"
-            || id == "com.luma.native"
-            || id == "com.luma.launcher"
-            || id == "com.luma.launcher.native"
-            || is_home_id(id)
+            || id == HOME_ID
             || id.starts_with("com.webos.app.hdmi")
             || id.starts_with("com.webos.app.externalinput.")
             || (!live && (visible == Some(&json!(false)) || visible == Some(&json!("false"))))
@@ -1088,41 +1012,11 @@ mod update_argument_tests {
 }
 
 #[cfg(test)]
-mod home_identity_tests {
+mod home_inventory_tests {
     use super::*;
     #[test]
-    fn executable_identity_has_priority_over_conflicting_launch_metadata() {
-        assert_eq!(
-            home_identity(
-                Some(std::path::Path::new(LG_HOME_EXE)),
-                Some(&json!({"appId": FULL_HOME_ID}))
-            ),
-            HOME_ID
-        );
-        assert_eq!(
-            home_identity(
-                Some(std::path::Path::new("/usr/bin/com.webos.app.fullhome")),
-                Some(&json!({"nid": HOME_ID}))
-            ),
-            FULL_HOME_ID
-        );
-        assert_eq!(
-            home_identity(None, Some(&json!({"appId": FULL_HOME_ID}))),
-            FULL_HOME_ID
-        );
-        assert_eq!(
-            home_identity(None, Some(&json!({"nid": FULL_HOME_ID}))),
-            FULL_HOME_ID
-        );
-        assert_eq!(
-            home_identity(None, Some(&json!({"nid": "other.app"}))),
-            HOME_ID
-        );
-        assert_eq!(home_identity(None, None), HOME_ID);
-    }
-    #[test]
-    fn both_home_variants_are_hidden_from_application_inventory() {
-        let raw = json!([{"id":HOME_ID,"title":"Home","visible":true}, {"id":FULL_HOME_ID,"title":"Home","visible":true}]);
+    fn lg_home_is_hidden_from_application_inventory() {
+        let raw = json!([{"id":HOME_ID,"title":"Home","visible":true}]);
         assert!(normalize_apps(&raw).unwrap().is_empty());
     }
 }

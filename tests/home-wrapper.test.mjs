@@ -81,7 +81,7 @@ for (const relative of [false, true]) {
     try {
       const status = tv.run('status');
       assert.equal(status.status, 0, status.stderr);
-      assert.deepEqual(await tv.recorded(), [`[home][status][${tv.state}][]`]);
+      assert.deepEqual(await tv.recorded(), [`[home][status][${tv.state}]`]);
     } finally {
       await fs.rm(tv.root, { recursive: true, force: true });
     }
@@ -93,7 +93,7 @@ test('a cold boot through the hook symlink schedules the copied apply', async ()
   try {
     const boot = tv.run();
     assert.equal(boot.status, 0, boot.stderr);
-    assert.deepEqual(await tv.recorded(), [`[home][apply][${tv.state}][]`]);
+    assert.deepEqual(await tv.recorded(), [`[home][apply][${tv.state}]`]);
   } finally {
     await fs.rm(tv.root, { recursive: true, force: true });
   }
@@ -107,7 +107,7 @@ test('a cold boot applies at once and logs when the hook ran and apply started a
     assert.match(log, /Astro Home: boot hook at [\d.]* s\n/);
     assert.match(log, /Astro Home: apply started at [\d.]* s \(attempt 1\)\n/);
     assert.match(log, /Astro Home: apply ended at [\d.]* s \(exit 0\)\n/);
-    assert.deepEqual(await tv.calls(), [`[home][apply][${tv.state}][]`]);
+    assert.deepEqual(await tv.calls(), [`[home][apply][${tv.state}]`]);
     assert.deepEqual(await tv.sleeps(), []);
   } finally {
     await fs.rm(tv.root, { recursive: true, force: true });
@@ -121,7 +121,7 @@ test('a failed boot apply is tried three times, two seconds apart', async () => 
     const log = await tv.bootLog();
     assert.match(log, /apply started at [\d.]* s \(attempt 3\)\n/);
     assert.match(log, /Astro Home: apply ended at [\d.]* s \(exit 1\)\n/);
-    assert.deepEqual(await tv.calls(), Array(3).fill(`[home][apply][${tv.state}][]`));
+    assert.deepEqual(await tv.calls(), Array(3).fill(`[home][apply][${tv.state}]`));
     assert.deepEqual(await tv.sleeps(), ['2', '2']);
   } finally {
     await fs.rm(tv.root, { recursive: true, force: true });
@@ -133,7 +133,7 @@ test('a fallback runs the copied helper', async () => {
   try {
     const fallback = tv.run('fallback');
     assert.equal(fallback.status, 0, fallback.stderr);
-    assert.deepEqual(await tv.recorded(), [`[home][fallback][${tv.state}][]`]);
+    assert.deepEqual(await tv.recorded(), [`[home][fallback][${tv.state}]`]);
   } finally {
     await fs.rm(tv.root, { recursive: true, force: true });
   }

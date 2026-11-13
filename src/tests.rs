@@ -634,8 +634,6 @@ fn inventory_filters_system_apps_duplicates_and_unsafe_identifiers() {
         {"id":"netflix","title":" Netflix\n"}, {"id":"netflix","title":"Duplicate"},
         {"id":"bad;command","title":"Bad"}, {"id":"com.webos.app.hidden","title":"Internal"},
         {"id":"com.webos.app.livetv","visible":false,"title":"Live TV"},
-        {"id":"com.ecklf.luma","visible":true},
-        {"id":"com.luma.launcher.native","visible":true},
         {"id":"com.webos.app.hdmi1","visible":true},
         {"id":"hidden","visible":"false"}
     ]))
@@ -1722,10 +1720,6 @@ fn protected_apps_cannot_be_deleted_through_ui_or_worker() {
         "com.palm.app.input",
         "com.lge.app.store",
         "com.lge.service.example",
-        "com.ecklf.luma",
-        "com.luma.launcher",
-        "com.luma.native",
-        "com.luma.launcher.native",
         "org.webosbrew.hbchannel",
         "org.webosbrew.hbchannel.service",
         "invalid';command",
@@ -2342,18 +2336,9 @@ fn keyboard_done_saves_a_typed_input_name() {
 }
 
 #[test]
-fn home_lifecycle_replies_map_for_both_registration_versions() {
+fn home_lifecycle_replies_map_from_the_registration_message() {
     use crate::platform::Lifecycle;
-    // Lifecycle v2 (registerApp, in place of LG's Home executable) names it in "event".
-    assert_eq!(
-        Lifecycle::from_reply(&json!({"event": "relaunch", "reason": "hotKey"})),
-        Some(Lifecycle::Relaunch)
-    );
-    assert_eq!(
-        Lifecycle::from_reply(&json!({"event": "close"})),
-        Some(Lifecycle::Close)
-    );
-    // Lifecycle v1 (registerNativeApp for a staged Home manifest on webOS 10/11) in "message".
+    // Lifecycle v1 (registerNativeApp for the staged Home manifest) names it in "message".
     assert_eq!(
         Lifecycle::from_reply(&json!({
             "parameters": {"launchType": "homeKey", "activateType": "home"},
@@ -2366,11 +2351,9 @@ fn home_lifecycle_replies_map_for_both_registration_versions() {
         Lifecycle::from_reply(&json!({"returnValue": true, "message": "close"})),
         Some(Lifecycle::Close)
     );
-    // Acknowledgements and keep-alive need no action.
+    // Acknowledgements and refusals need no action.
     for reply in [
         json!({"returnValue": true, "message": "registered"}),
-        json!({"event": "registered"}),
-        json!({"event": "pause", "reason": "keepAlive"}),
         json!({"returnValue": false, "errorText": "refused"}),
     ] {
         assert_eq!(Lifecycle::from_reply(&reply), None, "{reply}");

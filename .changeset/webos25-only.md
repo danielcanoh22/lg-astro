@@ -1,0 +1,9 @@
+---
+'lg-astro': major
+---
+
+Astro now targets one TV, an LG 55NANO80ASA running webOS 25 (10.3.2-34). Support for other webOS
+versions was removed: the webOS 5/6/24 Home takeover that replaced LG's Home executable, the
+`com.webos.app.fullhome` target and webOS 26 (11.x) Home takeover. The `autostart.sh` cold-boot
+launch method, the filters for earlier Luma app IDs and the upgrade paths from older Home
+integrations were removed too. Preferences now live only in `/media/developer/com.danielcanoh22.astro`.

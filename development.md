@@ -10,7 +10,6 @@ vector-geometry/             Shared fill tessellation and vector boundary covera
 tools/vector-assets/         Host-only SVG compiler
 tools/                       Asset preparation, SDK/runtime setup, packaging and release feed
 tests/                       Desktop rendering and mocked HTTP smoke scripts
-tv/autostart.sh              Optional cold-boot launch hook
 tv/home.sh / astro-helper         Optional root-only native Home integration
 dist/                        Generated ARM IPK, checksum and Homebrew feed
 .build/                      Generated assets, SDK/runtime caches and rendering diagnostics
@@ -391,9 +390,8 @@ and isolated `--preferences` / `--test-extra-apps` runs do not update launch spl
 after installation or a package update can still show the packaged default until this sync completes;
 later launches use the saved selection. Already-root Home processes use the Rust file operation directly, avoiding a Homebrew/child-process round trip. With Home takeover enabled, the native Home helper
 copies the selected background's splash into the staged Home app on every apply, reading the saved
-preferences from the TV storage candidates in `storage.rs`. Production installations prefer internal
-storage; developer installations prefer developer storage, with existing files taking precedence over
-the legacy installation-local preferences. Reapplying an active Home mount also refreshes the splash.
+preferences from `/media/developer/<appid>/preferences.json`, the TV storage `storage.rs` uses.
+Reapplying an active Home mount also refreshes the splash.
 
 `sync-splash` and the Home stage also accept an uploaded background's ID (`custom-` and 32 lowercase
 hex digits). The helper finds Astro's storage itself, with the same precedence (never the
@@ -674,7 +672,7 @@ The native adapter registers LS2 connections from the executable and calls `LSCa
 Anonymous names avoid collisions with SDL's registration; the hub still applies the executable's
 role. `luna-send-pub -a` app impersonation is rejected on the development webOS 26 TV and is not
 used; the only `-a` use is the root system-bus `luna-send` that holds a staged Home's lifecycle
-registration (see [Home lifecycle on webOS 10/11](#home-lifecycle-on-webos-1011)). Native requests run on one worker's private GLib context with a 6.5-second budget and 2 MiB
+registration (see [Home lifecycle](#home-lifecycle)). Native requests run on one worker's private GLib context with a 6.5-second budget and 2 MiB
 reply limit. Errors include URI and the bus refusal. Fixed inventory commands run via elevated
 Homebrew Channel `exec`, parsing complete multi-line `luna-send -n 1` JSON replies. Input-read
 failures preserve the last valid inputs. No failed inventory read substitutes demo apps on TV.
@@ -682,11 +680,10 @@ failures preserve the last valid inputs. No failed inventory read substitutes de
 ### Optional native Home integration
 
 `tv/home.sh` and the native Rust `astro-helper` executable are packaged beside `astro`. They are a root-only, explicit integration
-for webOS 10/25 and 11/26 (and webOS 5/6 and 9/24, see below). `enable` stages a native manifest with ID `com.webos.app.home` and
+for webOS 25 (10.x). `enable` stages a native manifest with ID `com.webos.app.home` and
 symlinks to the installed executable, libraries and assets under `/var/lib/astro-home/app`, then
 bind-mounts it over `/usr/palm/applications/com.webos.app.home`. SAM rereads that one app through
-`blockSystemApp` followed by `releaseBlockSystemApp`, including `forceBlockSystemApp: false` when
-the TV schema requires it. The script verifies the reported manifest before stopping the previous
+`blockSystemApp` followed by `releaseBlockSystemApp`. The script verifies the reported manifest before stopping the previous
 Home process. It attempts to restore LG Home if applying the mount or refreshing SAM fails.
 
 Before staging, `enable` closes the normal Astro instance with `closeByAppId` and waits up to five
@@ -694,7 +691,7 @@ seconds for it to leave the running list. The TV's `close` endpoint identifies a
 the package ID there can return `no app matched by pid`. If closing reports an error, the script
 rechecks the running list and proceeds only if the normal instance has already exited.
 
-Root-shell calls use `luna-send -n 1` on both firmware versions, with bounded stdout/stderr
+Root-shell calls use `luna-send -n 1`, with bounded stdout/stderr
 capture and operation-specific diagnostics for empty or invalid replies. `-t 1` is timing mode:
 it logs the payload to stderr and writes timing summaries to stdout, not a JSON response.
 
@@ -720,8 +717,7 @@ and Quick Start+ settings determine whether power-on opens Home. Until the hook 
 can still appear. This integration does not change those settings or install a remote-key filter.
 `disable` (also `restore`) removes the mount, refreshes LG's manifest, stops the native Home
 instance and removes the boot hook. The copied restore scripts remain in `/var/lib/astro-home`
-even if the installed package is removed. Disable the standalone `65-astro` cold-boot hook before
-enabling this integration.
+even if the installed package is removed.
 
 A crash-loop guard keeps a failing Astro from leaving the TV without a Home. On each start as Home,
 before any window or GL work, Astro (as root) counts the start in `/var/run/astro-home-failures`.
@@ -738,59 +734,9 @@ execute at all, or an Astro that hangs without exiting, is not detected.
 
 Build and script checks cannot establish native Home compatibility. Manually verify Home, Back
 out of the last app, standby wake with the TV's chosen Quick Start+ setting, a full cold boot,
-saved preferences and restoring LG Home. The broader webOS 6+ app compatibility statement does
-not establish Home-replacement support on older firmware.
+saved preferences and restoring LG Home.
 
-### Running in place of LG's Home executable (webOS 5/6/24)
-
-On webOS 5 the manifest takeover above does not apply: SAM restarts a v1 native Home on every
-Home launch. A root integration can instead bind-mount the installed `astro` executable over LG's
-`/usr/bin/com.webos.app.home`. SAM then starts it with LG's own Home manifest and LS2 role, which
-is bound to that executable path. Astro detects this (`platform::runs_as_lg_home`) and:
-
-- disables SDL's own app registration, which cannot reach the bus under LG's Home role, and
-  registers with SAM itself through `registerApp` (lifecycle v2) on its own LS2 connection.
-  `luna::subscribe` waits up to 10 s for SAM's first reply (`registered`); a failed connection,
-  call or refused registration is a startup error, so Astro exits and SAM starts Home afresh.
-  Home-replacement mode also claims SDL-webOS's Home key, returning directly to the Home tab
-  when SAM does not relaunch an already-foreground Home. Normal app-tile launches do not claim it.
-  `relaunch` returns to Astro's Home tab, dismisses overlays, raises the window and refreshes
-  the inventory. Keyboard edits are saved before leaving their subpage. `close` and a later
-  `returnValue: false` (registration lost) quit. SAM keeps the process across Home launches and
-  standby (`pause`, reason `keepAlive`) instead of restarting it;
-- resolves `assets/`, `lib/` (extra RPATH) and the splash directory from the installed package,
-  since `current_exe()` names LG's path. Production Homebrew Channel installs under
-  `/media/cryptofs`, developer installs under `/media/developer` and system installs under
-  `/usr/palm/applications` share the lookup list in `tv/install-directories.txt`. Library search
-  retains `$ORIGIN/lib` first and includes all three locations before Rust startup. Native
-  discovery validates the package manifest and matches the executable by device/inode, so assets
-  and splash updates use the source package even when developer and production copies both exist.
-  A missing or unrelated source package is an explicit startup error;
-- writes its stderr to `/tmp/astro-home.log`, because SAM discards a system app's output;
-- skips the per-icon elevated-service fallback for installed artwork: as root every file is
-  readable, so that fallback would only spend seconds per icon to fail the same way.
-
-`tv/home.sh` chooses this method (`"method": "executable"` in `state.json`) on webOS 5/6 and 24 (9.x) when LG
-Home's manifest is native, starts `file:///usr/bin/com.webos.app.home` and declares
-`nativeLifeCycleInterfaceVersion: 2`. `enable` and the boot hook bind-mount the installed
-executable over that path, stop the previous Home process and open Home if it was in front (or
-on `enable`). Astro in front within about 15 s is the success condition, with one repeated launch
-after 6 s, because SAM can accept the first launch right after the old process stopped without
-starting anything; otherwise the mount is removed again. A mount whose source is Astro's executable
-counts as its own also after a package update (`//deleted`) and is replaced; any other mount over
-LG's executable is refused. `disable` unmounts (lazily while Home runs), stops Astro and reopens LG
-Home if Home was in front. While mounted, `/var/run/astro-home` names Astro, so a normal
-tile launch redirects to the Home instance: the tile's jail sees `/usr/bin` without the mount but
-shares `/var/run`, which is volatile like the mount itself. LG's file stays underneath, and a cold boot
-without the hook gives LG's Home back. Verified on an LG 49UN7100
-(webOS 5): Home key to Astro in about 0.4 s instead of a restart of about 2 s.
-
-webOS 24 (9.x) also uses this method because its SAM has no `releaseBlockSystemApp` to reread a
-mounted Home manifest. The author verified takeover, same-process Home-key relaunch and cold-boot
-reapplication on one LG OLED65G46LA (2024 G4), running `9.2.4-48`. No other 9.x models have been
-tested; treat this path as experimental rather than a claim of support for every webOS 24 TV.
-
-### Home lifecycle on webOS 10/11
+### Home lifecycle
 
 With the staged manifest (see [Optional native Home integration](#optional-native-home-integration)), SAM starts Astro's own executable for `com.webos.app.home`, but
 never as a registered app: on every Home key it kills Astro and starts it again. Running in place
@@ -837,11 +783,11 @@ handling as v2.
   manifest. It does not register Home there (SAM restarted Astro per Home key with it enabled),
   and disabling it would change startup on a path without a reason seen on a TV.
 
-Verified on an LG OLED65C36LC (webOS 26, 11.2.0-3701): without registration the Astro PID changes
+Without registration the Astro PID changes
 on every Home key. With it, the PID stays the same across Home presses and Back out of apps, SAM
 sends `relaunch` with `launchType: homeKey`, Astro comes to the front, and it registers again after
 a cold boot. SDL's own registration logs `Failed to register app: Failed to get
-nativeLifeCycleInterfaceVersion` at startup there, without effect. That the compositor sends
+nativeLifeCycleInterfaceVersion` at startup, without effect. That the compositor sends
 `FocusGained` after such a relaunch, which the watchdog relies on, shows in the `Astro window:` log.
 
 ## Manual extra-app preview
@@ -860,25 +806,20 @@ The placeholder cards are never a fallback for an inventory failure.
 ## Storage and languages
 
 TV preferences live in an app-owned persistent directory outside the installed executable's
-payload. Startup probes `/media/developer/<appid>/`, `/media/developer/temp/<appid>/` and
-`/media/internal/.<appid>/`, selecting a directory the jailed app can actually create and write.
-Production `/media/cryptofs` installations prefer internal storage. `/media/developer/temp` is
-on the persistent developer partition, not the reboot-cleared `/tmp`. No settings are placed
-in `/tmp` and no system/app-payload permissions are widened. webOS developer mode creates
-`/media/developer/<appid>/` world-writable (mode 0777, like the rest of `/media/developer`), so
-once a directory is selected Astro removes group and other permissions from it and from its
-`wallpapers/` gallery when each is a real directory owned like the selected one; symlinks are
+payload: `/media/developer/<appid>/`, on the persistent developer partition. Startup creates it
+if needed (only that leaf, never a missing parent) and checks that the jailed app owns it and can
+write to it; otherwise startup reports `No writable persistent TV storage found:` with the reason.
+No settings are placed in `/tmp` and no system/app-payload permissions are widened. webOS
+developer mode creates `/media/developer/<appid>/` world-writable (mode 0777, like the rest of
+`/media/developer`), so Astro removes group and other permissions from it and from its
+`wallpapers/` gallery when each is a real directory owned like the storage; symlinks are
 not followed, private directories are left untouched and entries inside keep their own modes.
 The shared `/media/developer` parent stays world-writable without a sticky bit; Astro cannot
-change that. Root Home takeover reuses these
-same app-owned directories, preferring existing app-owned preferences over root-owned fallback
-files left by an earlier takeover. It does not merge or delete duplicate preferences. Preference
+change that. Root Home takeover reuses the same app-owned directory. Preference
 saves retain the directory owner's UID/GID so the normal app can still read
-them after Home is disabled. Symlink storage directories remain rejected. The executable Home
-method uses its source installation for storage precedence and legacy migration, not LG's
-`/usr/bin` executable path. Existing JSON preferences from beside this installation's old
-executable are imported once, without overwriting the chosen destination. Invalid existing preferences still report an error.
-Startup prints `Astro persistent storage:` with the chosen path. Desktop preview retains the legacy
+them after Home is disabled. A symlink storage directory is rejected. Invalid existing preferences
+still report an error.
+Startup prints `Astro persistent storage:` with the storage path. Desktop preview retains the legacy
 `$XDG_CONFIG_HOME/astro-native/preferences.json` path, or `~/.config/astro-native/preferences.json`,
 so existing preview choices survive flattening. `--preferences PATH` isolates a manual run.
 Invalid preference files report an error rather than being overwritten. Writes use atomic
@@ -935,17 +876,9 @@ package installation in these previews.
 
 ## Compatibility
 
-Astro's native startup, rendering and app/input discovery have been verified on rooted webOS 26.
-External testing confirms compatibility with webOS 6 and newer. On webOS 26 use elevated Homebrew Channel
-0.8.0-rc1+ for `lunabus.query`. Root SSH execution does not establish the normal jailed caller
+Astro targets one TV: an LG 55NANO80ASA running webOS 25 (10.3.2-34). Code for other webOS
+versions and models was removed. Root SSH execution does not establish the normal jailed caller
 permissions; check TV-menu startup, launching/reopening and remote/pointer behavior manually.
-
-[webOS Homebrew Can I Use](https://www.webosbrew.org/develop/caniuse) lists firmware library
-versions. Its [library guide](https://www.webosbrew.org/develop/guides/library-version) maps
-internal releases to marketing names: 7/22, 8/23, 9/24, 10/25, 11/26. SDL-webOS's newer
-[`2.30.12-webos.6`](https://github.com/webosbrew/SDL-webOS/releases/tag/release-2.30.12-webos.6)
-reports hotplug verification on webOS 3.4, 4 and 10. That is subsystem evidence for a newer
-prerelease than the pinned `.5` library, not a full Astro compatibility guarantee.
 
 ## Checks and CI
 
@@ -1066,27 +999,12 @@ Key modules: `state.rs` focus/preferences, `view.rs` geometry, `renderer.rs` GPU
 `font.rs` lazy metrics/outlines, `vector.rs` GPU mesh upload, `platform.rs` worker/inventory,
 `luna.rs` LS2, `storage.rs` atomic JSON, and `main.rs` SDL loop.
 
-### Home-key routing on webOS 5/6 (#109)
+### Home status
 
-`home.sh status` reports the selected `homeId` and installed Home candidates. `mounted`,
+`home.sh status` reports the Home target and whether LG Home's manifest is installed. `mounted`,
 `enabled` and `bootHook` describe integration files, not a successful remote Home-key test;
 `homeKeyVerified` therefore remains `null` (unknown). LG Home can be an overlay, so foreground app
 identity alone is not sufficient evidence that Astro rendered or received the Home key.
-
-If diagnostics on the affected TV establish that Home opens `com.webos.app.fullhome`, disable
-existing takeover first, then explicitly select that target:
-
-```sh
-sh /var/lib/astro-home/home.sh disable
-sh /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro/home.sh enable /media/developer/apps/usr/palm/applications/com.danielcanoh22.astro com.webos.app.fullhome
-```
-
-Use the installed package directory on production installations. The selected target is saved
-for boot, package reapply and restore; no input remapping or Linux key-code assumption is used.
-The original `home` target remains the default. Press Home from another app to verify, then test
-disable restores LG's dashboard. This is a targeted compatibility option, not confirmation of
-the unreported cause of #109. The reporter's device still needs to establish which Home app
-receives the key. Do not infer support for webOS 4 from this option.
 
 ### Native TV helper
 
@@ -1101,12 +1019,8 @@ which reads its two JSON fields with POSIX tools.
 
 `home.sh` retains its explicit confirmation and filesystem lock. Enabling Home copies both that
 script and the native helper into `/var/lib/astro-home`, so recovery remains available after the
-source package is removed. When upgrading an existing integration from the interpreter helper,
-run the packaged `home.sh enable` again to replace its copied recovery/boot files. Configurations
-from the former scripts keep their method, installation and original stock manifest. Both `home`
-and `fullhome` executable targets are supported; the latter requires matching native lifecycle
-support from #142. Manifest takeover remains limited to webOS
-10/11. The optional `tv-input` subcommand implements the #124 registration/verification contract;
+source package is removed. Home takeover uses
+the staged manifest on `com.webos.app.home` and is limited to webOS 25 (10.x). The optional `tv-input` subcommand implements the #124 registration/verification contract;
 **Settings → System → Show as TV input** runs it through Homebrew Channel's root service, and the
 package declares the required `supportGIP`. With the input registered, the Home copy opens
 `com.danielcanoh22.astro` on start once Home's own window gains focus (or receives a key) within
@@ -1132,18 +1046,3 @@ for focused checks. The workspace tests include the helper, and ARM builds/packa
 require both native binaries with executable permissions. `tests/home-wrapper.test.mjs` runs
 `home.sh` itself through absolute and relative boot-hook symlinks in a temporary root, so the copied
 helper is found beside the script's target rather than the `init.d` link.
-
-On an LG 49UN71006LB running webOS 5.6.2, a manual comparison of the same Homebrew Channel icon
-request returned identical image bytes. Measured from a TV-local parent process around each
-complete child invocation (startup, file reads, JSON/hex output and exit), the old Node 8.12.0
-helper took a median 2.588 seconds over three samples; the native ARM helper took 0.0128 seconds
-over seven samples (range 0.0120–0.0208 seconds). This is about 203 times faster for that helper
-invocation, saving about 2.575 seconds. It excludes Homebrew transport and is not a measurement of
-the full launcher startup or every helper operation. No memory-usage comparison was made.
-
-Manual verification on that TV covered native package installation, Home enable/disable, the
-actual HOME button from YouTube, explicit fullhome launch and normal-tile redirect, splash
-synchronization, copied recovery files, protected uninstall rejection, and complete removal of a
-new disposable test app through status 31. The previous build, preferences and integration policy
-were restored after testing. Manifest takeover on webOS 10/11 is covered by fixtures, but was not
-tested on hardware in this run; standby and cold boot were not tested.

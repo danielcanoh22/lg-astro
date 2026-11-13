@@ -104,10 +104,8 @@ pub fn read_icons(system: &impl System, source: &IconSource) -> Result<Value> {
     Ok(json!({"returnValue":true,"icons":icons}))
 }
 fn installed(system: &impl System, directory: &Path) -> Result<Value> {
-    if !ROOTS[..3]
-        .iter()
-        .any(|root| directory == Path::new(root).join(APP))
-    {
+    // Astro is a developer-mode install on the target TV.
+    if directory != Path::new(ROOTS[0]).join(APP) {
         return Err("Invalid Astro installation directory".into());
     }
     let app = system::json(system, directory.join("appinfo.json"))?;
@@ -121,12 +119,10 @@ const SPLASH_LIMIT: usize = 32 * 1024 * 1024;
 pub fn sync_splash(system: &impl System, directory: &Path, background: &str) -> Result<Value> {
     installed(system, directory)?;
     let image = if valid_upload(background) {
-        // The first ranked storage that holds this upload, as native preferences select it.
-        let storage = preference_files(system, directory)
-            .iter()
-            .filter_map(|path| storage_of(path, directory).map(Path::to_path_buf))
-            .find(|storage| system::exists(system, storage.join("wallpapers").join(background)))
-            .ok_or("Uploaded background unavailable")?;
+        let storage = storage();
+        if !system::exists(system, storage.join("wallpapers").join(background)) {
+            return Err("Uploaded background unavailable".into());
+        }
         uploaded_splash(system, &storage, background)?
     } else if valid_background(background) {
         system::read(
@@ -141,10 +137,7 @@ pub fn sync_splash(system: &impl System, directory: &Path, background: &str) -> 
     let config_path = Path::new("/var/lib/astro-home/state.json");
     if system::exists(system, config_path) {
         let config = system::json(system, config_path)?;
-        if config["enabled"] == true
-            && config["method"] != "executable"
-            && config["appDir"].as_str() == directory.to_str()
-        {
+        if config["enabled"] == true && config["appDir"].as_str() == directory.to_str() {
             replace(
                 system,
                 Path::new("/var/lib/astro-home/app/splash.png"),
@@ -237,77 +230,38 @@ pub(crate) fn opened_at(file: &fs::File, path: &Path) -> bool {
         true
     }
 }
-/// The storage directory a `preferences.json` candidate belongs to; never the package itself,
-/// whose legacy preferences file does not make it a place for uploaded backgrounds.
-fn storage_of<'a>(preferences: &'a Path, directory: &Path) -> Option<&'a Path> {
-    (preferences != directory.join("preferences.json"))
-        .then(|| preferences.parent())
-        .flatten()
+/// Astro's app-owned storage directory, which holds its `preferences.json` and uploaded
+/// backgrounds. The package directory never counts as storage.
+fn storage() -> PathBuf {
+    Path::new("/media/developer").join(APP)
 }
-/// Ranked `preferences.json` candidates: the same app-owned storage precedence as native
-/// preferences, root-owned directories after the others, symlinked storage directories never
-/// (this runs as root), then the package-local file older native builds used.
-fn preference_files(system: &impl System, directory: &Path) -> Vec<PathBuf> {
-    let mut candidates = vec![
-        format!("/media/developer/{APP}/preferences.json"),
-        format!("/media/developer/temp/{APP}/preferences.json"),
-        format!("/media/internal/.{APP}/preferences.json"),
-    ];
-    if directory.starts_with("/media/cryptofs") {
-        candidates.rotate_right(1);
-    }
-    let mut ranked = vec![];
-    for (index, path) in candidates.into_iter().enumerate() {
-        let parent = Path::new(&path).parent().unwrap();
-        if let Ok(meta) = fs::symlink_metadata(system.path(parent))
-            && meta.is_dir()
-            && system::exists(system, &path)
-        {
-            #[cfg(unix)]
-            let root_owned = {
-                use std::os::unix::fs::MetadataExt;
-                meta.uid() == 0
-            };
-            #[cfg(not(unix))]
-            let root_owned = false;
-            ranked.push((root_owned, index, path));
-        }
-    }
-    ranked.sort_by_key(|(root, index, _)| (*root, *index));
-    let mut candidates: Vec<_> = ranked
-        .into_iter()
-        .map(|(_, _, path)| PathBuf::from(path))
-        .collect();
-    candidates.push(directory.join("preferences.json"));
-    candidates
+/// Astro's saved preferences; never read through a symlinked storage directory (this runs as
+/// root).
+fn saved_preferences(system: &impl System) -> Option<Value> {
+    let storage = storage();
+    fs::symlink_metadata(system.path(&storage))
+        .ok()
+        .filter(fs::Metadata::is_dir)?;
+    system::json(system, storage.join("preferences.json")).ok()
 }
-/// Select the same app-owned storage precedence as native preferences; never follow a storage
-/// directory symlink while running as root. Older native builds also saved splash_background.
-/// An uploaded splash comes from the storage whose preferences chose it; if it is unusable, the
-/// package's current splash.png (normally the same image, synced earlier) is staged instead.
+/// Stages the splash Astro's saved preferences select. Older native builds also saved
+/// splash_background. An unusable uploaded splash stages the package's current splash.png
+/// (normally the same image, synced earlier) instead.
 pub(crate) fn stage_splash(system: &impl System, directory: &Path) -> Result<()> {
-    let (preferences, background) = preference_files(system, directory)
-        .into_iter()
-        .find_map(|path| {
-            system::json(system, &path).ok().and_then(|value| {
-                value
-                    .get("splash_background")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| value.get("background").and_then(Value::as_str))
-                    .filter(|s| valid_background(s) || valid_upload(s))
-                    .map(|s| (Some(path.clone()), s.to_owned()))
-            })
+    let background = saved_preferences(system)
+        .and_then(|value| {
+            value
+                .get("splash_background")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .or_else(|| value.get("background").and_then(Value::as_str))
+                .filter(|s| valid_background(s) || valid_upload(s))
+                .map(str::to_owned)
         })
-        .unwrap_or_else(|| (None, "dunes".into()));
+        .unwrap_or_else(|| "dunes".into());
     let fallback = || system::read(system, directory.join("splash.png"), SPLASH_LIMIT);
     let bytes = if valid_upload(&background) {
-        preferences
-            .as_deref()
-            .and_then(|preferences| storage_of(preferences, directory))
-            .ok_or_else(|| "Missing storage".to_string())
-            .and_then(|storage| uploaded_splash(system, storage, &background))
-            .or_else(|_| fallback())?
+        uploaded_splash(system, &storage(), &background).or_else(|_| fallback())?
     } else {
         let path = directory.join(format!("splash/{background}.png"));
         if system::exists(system, &path) {

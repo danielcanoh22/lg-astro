@@ -20,36 +20,14 @@ pub fn default_path(webos: bool) -> Result<PathBuf, String> {
 
 #[cfg(all(feature = "webos", unix))]
 fn tv_path() -> Result<PathBuf, String> {
-    // The executable takeover runs at LG's path, but must retain the source
-    // installation's storage precedence and installation-local migration path.
-    let installation = crate::platform::install_dir()?;
-    let legacy = installation.join("preferences.json");
-    let id = crate::platform::APP_ID;
-    // These volumes persist across boots. The app-specific directory also
-    // survives replacement of the installed payload on an ordinary update.
-    // Production native jails expose internal storage instead of developer.
-    let developer = PathBuf::from("/media/developer")
-        .join(id)
-        .join("preferences.json");
-    let shared_developer = PathBuf::from("/media/developer/temp")
-        .join(id)
-        .join("preferences.json");
-    let internal = PathBuf::from("/media/internal")
-        .join(format!(".{id}"))
-        .join("preferences.json");
-    let candidates = if installation.starts_with("/media/cryptofs") {
-        [internal, developer, shared_developer]
-    } else {
-        [developer, shared_developer, internal]
-    };
-    tv_path_in(candidates, &legacy, unsafe { libc::geteuid() })
+    tv_path_in(&tv_storage(), unsafe { libc::geteuid() })
 }
 
+/// The app's directory in developer storage, which persists across boots and survives
+/// replacement of the installed payload on an update. The jailed app and root Home share it.
 #[cfg(all(feature = "webos", unix))]
-fn storage_rank(existing: bool, owner: Option<u32>, user: u32) -> (bool, bool) {
-    // Root Home must prefer the app's existing settings over a root-owned
-    // fallback left by an earlier takeover. Never merge or overwrite either.
-    (!existing, user == 0 && owner == Some(0))
+fn tv_storage() -> PathBuf {
+    Path::new("/media/developer").join(crate::platform::APP_ID)
 }
 
 /// Removes group and other permissions from `directory` when it is a real directory owned by
@@ -82,111 +60,61 @@ fn restrict_to_owner(directory: &Path, owner: u32) -> std::io::Result<()> {
 }
 
 #[cfg(all(feature = "webos", unix))]
-fn tv_path_in(mut candidates: [PathBuf; 3], legacy: &Path, user: u32) -> Result<PathBuf, String> {
+/// Prepares the storage `directory` and returns its `preferences.json`, or why the directory is
+/// unusable. Existing preferences are never read, merged or replaced here.
+#[cfg(all(feature = "webos", unix))]
+fn tv_path_in(directory: &Path, user: u32) -> Result<PathBuf, String> {
     use std::{
         io::Write,
         os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     };
 
-    // Keep existing settings ahead of new destinations, including after a reboot.
-    candidates.sort_by_key(|path| {
-        let owner = path
-            .parent()
-            .and_then(|directory| fs::symlink_metadata(directory).ok())
-            .filter(|metadata| metadata.is_dir())
-            .map(|metadata| metadata.uid());
-        storage_rank(path.exists(), owner, user)
-    });
-    let mut failures = Vec::new();
-    for path in candidates {
-        let directory = path.parent().ok_or("Invalid TV storage directory")?;
-        // Create only this app's leaf, not a missing system mount hierarchy.
-        let created = fs::DirBuilder::new().mode(0o700).create(directory);
-        if let Err(error) = created
-            && error.kind() != std::io::ErrorKind::AlreadyExists
-        {
-            failures.push(format!("{}: {error}", directory.display()));
-            continue;
-        }
-        let metadata = match fs::symlink_metadata(directory) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                failures.push(format!("{}: {error}", directory.display()));
-                continue;
-            }
-        };
-        // Home runs as root rather than the jailed app user. It may reuse the
-        // app's directory, but a normal app must still reject foreign owners.
-        // symlink_metadata keeps symlink directories rejected in both modes.
-        if !metadata.is_dir() || (user != 0 && metadata.uid() != user) {
-            failures.push(format!(
-                "{} is not owned by the app user",
-                directory.display()
-            ));
-            continue;
-        }
-        let probe = directory.join(format!(".write-probe-{}", std::process::id()));
-        let writable = (|| {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&probe)?;
-            let result = file
-                .write_all(b"Astro storage probe")
-                .and_then(|_| file.sync_all());
-            drop(file);
-            // Only remove a probe that this process created successfully.
-            let cleanup = fs::remove_file(&probe);
-            result.and(cleanup)
-        })();
-        if let Err(error) = writable {
-            failures.push(format!("{}: {error}", directory.display()));
-            continue;
-        }
-        if !path.exists() {
-            // Import JSON only from the old path in THIS installation, never
-            // browser storage or another app ID's preferences.
-            match fs::read(legacy) {
-                Ok(bytes) => {
-                    let mut preferences: Preferences =
-                        serde_json::from_slice(&bytes).map_err(|e| {
-                            format!(
-                                "Existing preferences {} could not be read: {e}",
-                                legacy.display()
-                            )
-                        })?;
-                    preferences.sanitize();
-                    save(&path, &preferences)?;
-                    eprintln!(
-                        "Astro preferences migrated from {} to {}",
-                        legacy.display(),
-                        path.display()
-                    );
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(format!(
-                        "Existing preferences {} could not be read: {error}",
-                        legacy.display()
-                    ));
-                }
-            }
-        }
-        // webOS developer mode creates the app's data directory world-writable. Only this app
-        // and root Home use it, so group and other access is removed from it and its gallery.
-        for private in [directory.to_path_buf(), directory.join("wallpapers")] {
-            if let Err(error) = restrict_to_owner(&private, metadata.uid()) {
-                eprintln!("Could not make {} private: {error}", private.display());
-            }
-        }
-        eprintln!("Astro persistent storage: {}", directory.display());
-        return Ok(path);
+    let unusable = |reason: String| format!("No writable persistent TV storage found: {reason}");
+    // Create only this app's leaf, not a missing system mount hierarchy.
+    let created = fs::DirBuilder::new().mode(0o700).create(directory);
+    if let Err(error) = created
+        && error.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(unusable(format!("{}: {error}", directory.display())));
     }
-    Err(format!(
-        "No writable persistent TV storage found: {}",
-        failures.join("; ")
-    ))
+    let metadata = fs::symlink_metadata(directory)
+        .map_err(|error| unusable(format!("{}: {error}", directory.display())))?;
+    // Home runs as root rather than the jailed app user. It may reuse the
+    // app's directory, but a normal app must still reject foreign owners.
+    // symlink_metadata keeps symlink directories rejected in both modes.
+    if !metadata.is_dir() || (user != 0 && metadata.uid() != user) {
+        return Err(unusable(format!(
+            "{} is not owned by the app user",
+            directory.display()
+        )));
+    }
+    let probe = directory.join(format!(".write-probe-{}", std::process::id()));
+    let writable = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&probe)?;
+        let result = file
+            .write_all(b"Astro storage probe")
+            .and_then(|_| file.sync_all());
+        drop(file);
+        // Only remove a probe that this process created successfully.
+        let cleanup = fs::remove_file(&probe);
+        result.and(cleanup)
+    })();
+    if let Err(error) = writable {
+        return Err(unusable(format!("{}: {error}", directory.display())));
+    }
+    // webOS developer mode creates the app's data directory world-writable. Only this app
+    // and root Home use it, so group and other access is removed from it and its gallery.
+    for private in [directory.to_path_buf(), directory.join("wallpapers")] {
+        if let Err(error) = restrict_to_owner(&private, metadata.uid()) {
+            eprintln!("Could not make {} private: {error}", private.display());
+        }
+    }
+    eprintln!("Astro persistent storage: {}", directory.display());
+    Ok(directory.join("preferences.json"))
 }
 
 pub fn load(path: &Path) -> Result<Preferences, String> {
@@ -211,6 +139,8 @@ pub fn stamp(path: &Path) -> Stamp {
     Some((metadata.modified().ok()?, metadata.len()))
 }
 
+/// Writes preferences synchronously. The app saves through `Saver`; tests seed files with this.
+#[cfg(test)]
 pub fn save(path: &Path, preferences: &Preferences) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(preferences)
         .map_err(|e| format!("Could not encode preferences: {e}"))?;
@@ -477,13 +407,13 @@ mod tests {
             Self(root)
         }
 
-        fn candidates(&self) -> [PathBuf; 3] {
-            ["developer", "shared", "internal"]
-                .map(|name| self.0.join(name).join("preferences.json"))
+        /// The app's storage directory in this fixture, not created yet.
+        fn storage(&self) -> PathBuf {
+            self.0.join("storage")
         }
 
-        fn legacy(&self) -> PathBuf {
-            self.0.join("preferences.json")
+        fn preferences(&self) -> PathBuf {
+            self.storage().join("preferences.json")
         }
     }
 
@@ -494,32 +424,53 @@ mod tests {
     }
 
     #[test]
-    fn root_home_reuses_each_existing_app_storage_destination() {
-        for index in 0..3 {
+    fn tv_preferences_live_only_in_the_apps_developer_storage() {
+        assert_eq!(
+            tv_storage().join("preferences.json"),
+            Path::new("/media/developer/com.danielcanoh22.astro/preferences.json")
+        );
+        for user in [0, unsafe { libc::geteuid() }] {
             let fixture = Fixture::new();
-            let candidates = fixture.candidates();
-            let existing = &candidates[index];
-            let preferences = Preferences {
-                background: "forest".into(),
-                favorites: Some(vec!["youtube.leanback.v4".into()]),
-                ..Preferences::default()
-            };
-            save(existing, &preferences).unwrap();
-            let original = fs::read(existing).unwrap();
-            // Model root Home on a host-owned directory without requiring sudo.
-            let selected = tv_path_in(candidates.clone(), &fixture.legacy(), 0).unwrap();
-            assert_eq!(&selected, existing);
-            assert_eq!(load(&selected).unwrap().background, "forest");
-            assert_eq!(fs::read(existing).unwrap(), original);
-            for (other, path) in candidates.iter().enumerate() {
-                if other != index {
-                    assert!(!path.parent().unwrap().exists());
-                }
-            }
-            let normal =
-                tv_path_in(candidates, &fixture.legacy(), unsafe { libc::geteuid() }).unwrap();
-            assert_eq!(normal, selected);
+            let selected = tv_path_in(&fixture.storage(), user).unwrap();
+            assert_eq!(selected, fixture.preferences(), "user {user}");
+            assert!(fixture.storage().is_dir(), "user {user}");
+            assert!(!selected.exists(), "no preferences are written up front");
+            assert_eq!(mode_of(&fixture.storage()), 0o700, "user {user}");
         }
+    }
+
+    #[test]
+    fn root_home_and_the_app_reuse_existing_preferences_unchanged() {
+        let fixture = Fixture::new();
+        let preferences = Preferences {
+            background: "forest".into(),
+            favorites: Some(vec!["youtube.leanback.v4".into()]),
+            ..Preferences::default()
+        };
+        save(&fixture.preferences(), &preferences).unwrap();
+        let original = fs::read(fixture.preferences()).unwrap();
+        // Model root Home on a host-owned directory without requiring sudo.
+        for user in [0, unsafe { libc::geteuid() }] {
+            let selected = tv_path_in(&fixture.storage(), user).unwrap();
+            assert_eq!(selected, fixture.preferences());
+            assert_eq!(load(&selected).unwrap().background, "forest");
+            assert_eq!(fs::read(&selected).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn a_missing_storage_volume_is_reported_and_not_created() {
+        let fixture = Fixture::new();
+        let directory = fixture.0.join("volume").join("app");
+        let error = tv_path_in(&directory, unsafe { libc::geteuid() }).unwrap_err();
+        assert!(
+            error.starts_with(&format!(
+                "No writable persistent TV storage found: {}: ",
+                directory.display()
+            )),
+            "{error}"
+        );
+        assert!(!fixture.0.join("volume").exists());
     }
 
     #[test]
@@ -695,31 +646,20 @@ mod tests {
     }
 
     #[test]
-    fn existing_app_preferences_rank_before_root_fallbacks_without_changing_normal_order() {
-        assert!(storage_rank(true, Some(5000), 0) < storage_rank(true, Some(0), 0));
-        assert!(storage_rank(true, Some(0), 0) < storage_rank(false, Some(5000), 0));
-        assert_eq!(
-            storage_rank(true, Some(5000), 5000),
-            storage_rank(true, Some(0), 5000)
-        );
-    }
-
-    #[test]
-    fn the_selected_storage_and_its_gallery_lose_group_and_other_access() {
+    fn the_storage_and_its_gallery_lose_group_and_other_access() {
         let mode = |path: &Path| fs::symlink_metadata(path).unwrap().mode() & 0o7777;
         for user in [0, unsafe { libc::geteuid() }] {
             let fixture = Fixture::new();
-            let candidates = fixture.candidates();
-            let directory = candidates[0].parent().unwrap().to_owned();
+            let directory = fixture.storage();
             let wallpapers = directory.join("wallpapers");
             let upload = wallpapers.join("custom-00000000000000000000000000000001");
             fs::create_dir_all(&upload).unwrap();
-            save(&candidates[0], &Preferences::default()).unwrap();
+            save(&fixture.preferences(), &Preferences::default()).unwrap();
             // As webOS developer mode leaves the app's data directory: world-writable.
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
             fs::set_permissions(&wallpapers, fs::Permissions::from_mode(0o775)).unwrap();
             fs::set_permissions(&upload, fs::Permissions::from_mode(0o755)).unwrap();
-            let selected = tv_path_in(candidates, &fixture.legacy(), user).unwrap();
+            let selected = tv_path_in(&directory, user).unwrap();
             assert_eq!(selected.parent().unwrap(), directory);
             assert_eq!(mode(&directory), 0o700, "user {user}");
             assert_eq!(mode(&wallpapers), 0o700, "user {user}");
@@ -732,16 +672,15 @@ mod tests {
     fn a_private_storage_is_unchanged_and_a_linked_gallery_is_not_followed() {
         for user in [0, unsafe { libc::geteuid() }] {
             let fixture = Fixture::new();
-            let candidates = fixture.candidates();
-            let directory = candidates[0].parent().unwrap().to_owned();
+            let directory = fixture.storage();
             fs::create_dir(&directory).unwrap();
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
-            save(&candidates[0], &Preferences::default()).unwrap();
+            save(&fixture.preferences(), &Preferences::default()).unwrap();
             let outside = fixture.0.join("outside");
             fs::create_dir(&outside).unwrap();
             fs::set_permissions(&outside, fs::Permissions::from_mode(0o777)).unwrap();
             symlink(&outside, directory.join("wallpapers")).unwrap();
-            tv_path_in(candidates, &fixture.legacy(), user).unwrap();
+            tv_path_in(&directory, user).unwrap();
             assert_eq!(mode_of(&directory), 0o700, "user {user}");
             assert_eq!(
                 mode_of(&outside),
@@ -752,9 +691,8 @@ mod tests {
     }
 
     fn insecure_storage(fixture: &Fixture) -> PathBuf {
-        let candidates = fixture.candidates();
-        let directory = candidates[0].parent().unwrap().to_owned();
-        save(&candidates[0], &Preferences::default()).unwrap();
+        let directory = fixture.storage();
+        save(&fixture.preferences(), &Preferences::default()).unwrap();
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
         directory
     }
@@ -772,7 +710,7 @@ mod tests {
             fs::create_dir(&wallpapers).unwrap();
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o3777)).unwrap();
             fs::set_permissions(&wallpapers, fs::Permissions::from_mode(0o1757)).unwrap();
-            tv_path_in(fixture.candidates(), &fixture.legacy(), user).unwrap();
+            tv_path_in(&directory, user).unwrap();
             assert_eq!(mode_of(&directory), 0o3700, "user {user}");
             assert_eq!(mode_of(&wallpapers), 0o1700, "user {user}");
         }
@@ -806,12 +744,10 @@ mod tests {
                     }
                     _ => {}
                 }
-                let (candidates, legacy) = (fixture.candidates(), fixture.legacy());
+                let storage = directory.clone();
                 let (sender, receiver) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    sender
-                        .send(tv_path_in(candidates, &legacy, user).is_ok())
-                        .unwrap()
+                    sender.send(tv_path_in(&storage, user).is_ok()).unwrap()
                 });
                 let selected = receiver
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -831,70 +767,47 @@ mod tests {
     #[test]
     fn normal_app_still_rejects_foreign_owned_directories() {
         let fixture = Fixture::new();
-        let candidates = fixture.candidates();
         let foreign_user = unsafe { libc::geteuid() } + 1;
-        let error = tv_path_in(candidates.clone(), &fixture.legacy(), foreign_user).unwrap_err();
-        assert!(error.contains("not owned by the app user"));
-        assert!(candidates.iter().all(|path| !path.exists()));
+        let error = tv_path_in(&fixture.storage(), foreign_user).unwrap_err();
+        assert_eq!(
+            error,
+            format!(
+                "No writable persistent TV storage found: {} is not owned by the app user",
+                fixture.storage().display()
+            )
+        );
+        assert!(!fixture.preferences().exists());
     }
 
     #[test]
     fn root_and_normal_app_both_reject_symlink_storage_directories() {
         for user in [0, unsafe { libc::geteuid() }] {
             let fixture = Fixture::new();
-            let candidates = fixture.candidates();
-            save(&candidates[1], &Preferences::default()).unwrap();
-            symlink(
-                candidates[1].parent().unwrap(),
-                candidates[0].parent().unwrap(),
-            )
-            .unwrap();
-            assert_eq!(
-                tv_path_in(candidates.clone(), &fixture.legacy(), user).unwrap(),
-                candidates[1]
-            );
+            let real = fixture.0.join("real");
+            save(&real.join("preferences.json"), &Preferences::default()).unwrap();
+            let original = fs::read(real.join("preferences.json")).unwrap();
+            symlink(&real, fixture.storage()).unwrap();
+            let error = tv_path_in(&fixture.storage(), user).unwrap_err();
+            assert!(error.contains("not owned by the app user"), "user {user}");
+            assert_eq!(fs::read(real.join("preferences.json")).unwrap(), original);
         }
     }
 
     #[test]
     fn existing_corrupt_app_preferences_are_not_replaced_with_defaults() {
         let fixture = Fixture::new();
-        let candidates = fixture.candidates();
-        fs::create_dir(candidates[1].parent().unwrap()).unwrap();
-        fs::write(&candidates[1], "broken").unwrap();
-        let selected = tv_path_in(candidates.clone(), &fixture.legacy(), 0).unwrap();
-        assert_eq!(selected, candidates[1]);
+        fs::create_dir(fixture.storage()).unwrap();
+        fs::write(fixture.preferences(), "broken").unwrap();
+        let selected = tv_path_in(&fixture.storage(), 0).unwrap();
+        assert_eq!(selected, fixture.preferences());
         assert!(load(&selected).is_err());
         assert_eq!(fs::read_to_string(&selected).unwrap(), "broken");
     }
 
     #[test]
-    fn root_home_can_still_import_installation_local_preferences_once() {
-        let fixture = Fixture::new();
-        let candidates = fixture.candidates();
-        save(
-            &fixture.legacy(),
-            &Preferences {
-                background: "forest".into(),
-                ..Preferences::default()
-            },
-        )
-        .unwrap();
-        let selected = tv_path_in(candidates.clone(), &fixture.legacy(), 0).unwrap();
-        assert_eq!(selected, candidates[0]);
-        assert_eq!(load(&selected).unwrap().background, "forest");
-        fs::write(fixture.legacy(), "broken").unwrap();
-        assert_eq!(
-            tv_path_in(candidates, &fixture.legacy(), 0).unwrap(),
-            selected
-        );
-        assert_eq!(load(&selected).unwrap().background, "forest");
-    }
-
-    #[test]
     fn atomic_saves_keep_private_app_owned_files_and_clean_up_failed_writes() {
         let fixture = Fixture::new();
-        let preferences = fixture.legacy();
+        let preferences = fixture.0.join("preferences.json");
         for bytes in [b"first".as_slice(), b"second".as_slice()] {
             write_atomic(&preferences, bytes).unwrap();
             let owner = fs::metadata(&fixture.0).unwrap();

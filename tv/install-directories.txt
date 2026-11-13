@@ -1,3 +1,0 @@
-/media/cryptofs/apps/usr/palm/applications/com.danielcanoh22.astro
-/media/developer/apps/usr/palm/applications/com.danielcanoh22.astro
-/usr/palm/applications/com.danielcanoh22.astro

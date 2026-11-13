@@ -10,36 +10,26 @@ const STATE: &str = "/var/lib/astro-home";
 const CONFIG: &str = "/var/lib/astro-home/state.json";
 const STAGE: &str = "/var/lib/astro-home/app";
 const HOOK: &str = "/var/lib/webosbrew/init.d/64-astro-home";
-const MARKER: &str = "/var/run/astro-home";
 /// Astro starts as Home that have not become healthy yet. tmpfs: a reboot clears it, and with it
 /// any fallback to LG Home.
 pub const FAILURES: &str = "/var/run/astro-home-failures";
 /// Consecutive unhealthy starts after which the next start gives LG Home back until reboot.
 pub const FAILURE_LIMIT: u32 = 3;
 pub const HOME: &str = "com.webos.app.home";
-pub const FULL_HOME: &str = "com.webos.app.fullhome";
-fn default_home() -> String {
-    HOME.into()
-}
-fn default_method() -> String {
-    "manifest".into()
-}
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     pub enabled: bool,
-    #[serde(default = "default_method")]
     pub method: String,
     pub app_dir: String,
     pub stock: Value,
-    #[serde(default = "default_home")]
     pub home_id: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 impl Config {
     fn validate(&self) -> Result<()> {
-        if !matches!(self.method.as_str(), "manifest" | "executable") {
+        if self.method != "manifest" {
             return Err("Invalid Home method".into());
         }
         target(&self.home_id)?;
@@ -57,7 +47,7 @@ impl Config {
     }
 }
 fn target(id: &str) -> Result<()> {
-    if matches!(id, HOME | FULL_HOME) {
+    if id == HOME {
         Ok(())
     } else {
         Err("Unsupported Home target".into())
@@ -67,7 +57,6 @@ pub struct Home<'a, S: System> {
     system: &'a S,
     id: String,
     target: String,
-    exe: String,
 }
 impl<'a, S: System> Home<'a, S> {
     pub fn new(system: &'a S, id: &str) -> Result<Self> {
@@ -76,7 +65,6 @@ impl<'a, S: System> Home<'a, S> {
             system,
             id: id.into(),
             target: format!("/usr/palm/applications/{id}"),
-            exe: format!("/usr/bin/{id}"),
         })
     }
     fn read(&self, path: impl AsRef<Path>) -> Result<Vec<u8>> {
@@ -118,24 +106,6 @@ impl<'a, S: System> Home<'a, S> {
                 .mounts()?
                 .iter()
                 .any(|(_, p)| p == &self.target || p.starts_with(&format!("{}/", self.target))))
-    }
-    fn exe_mount(&self) -> Result<Option<String>> {
-        Ok(self
-            .mounts()?
-            .into_iter()
-            .filter(|(_, p)| p == &self.exe)
-            .map(|(root, _)| root)
-            .next_back())
-    }
-    fn exe_mounted(&self, app: &str) -> bool {
-        system::same_file(self.system, Path::new(app).join("astro"), &self.exe)
-    }
-    fn owned_mount(&self) -> Result<Option<String>> {
-        let root = self.exe_mount()?;
-        if root.as_ref().is_some_and(|root| !exe_owned(root)) {
-            return Err("Another integration is mounted over LG Home".into());
-        }
-        Ok(root)
     }
     fn unmount(&self, path: &str) -> Result<()> {
         if let Err(error) = system::command(self.system, "/bin/umount", &[path]) {
@@ -185,20 +155,6 @@ impl<'a, S: System> Home<'a, S> {
     fn launch(&self) -> Result<()> {
         accepted(self.luna("launch", json!({"id":self.id}))?).map(|_| ())
     }
-    fn open_executable(&self) -> Result<()> {
-        for i in 0..15 {
-            if (i == 0 || i == 6)
-                && let Err(error) = self.launch()
-            {
-                eprintln!("Astro Home: {error}");
-            }
-            if self.foreground()? == self.id {
-                return Ok(());
-            }
-            self.system.pause();
-        }
-        Err("Home did not come to the front".into())
-    }
     fn release(&self) -> Result<()> {
         let mut last = String::new();
         for _ in 0..3 {
@@ -222,13 +178,7 @@ impl<'a, S: System> Home<'a, S> {
         Err(format!("Could not release Home: {last}"))
     }
     fn reread(&self, expected: &Value) -> Result<()> {
-        let mut payload = json!({"id":self.id});
-        if self
-            .read("/etc/palm/schemas/sam/applicationManager.blockSystemApp.schema")
-            .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).contains("\"forceBlockSystemApp\""))
-        {
-            payload["forceBlockSystemApp"] = json!(false);
-        }
+        let payload = json!({"id":self.id});
         // Release even if the request timed out after taking effect; preserve the original error.
         let blocked = self.luna("blockSystemApp", payload).and_then(|reply| {
             let text = reply["errorText"]
@@ -316,31 +266,19 @@ impl<'a, S: System> Home<'a, S> {
                 false
             }
         };
-        if config.method == "executable" {
-            let root = self.owned_mount()?;
-            system::remove(self.system, MARKER)?;
-            system::remove(self.system, format!("{MARKER}-target"))?;
-            if root.is_some() {
-                self.unmount(&self.exe)?;
-                if self.exe_mount()?.is_some() {
-                    return Err("The Home bind mount is still active".into());
-                }
-            }
-        } else {
-            if self.foreign_mount()? {
-                return Err("Another integration is mounted over LG Home".into());
-            }
-            if self.mounted() {
-                self.unmount(&self.target)?;
-                if self.mounted() {
-                    return Err("The Home bind mount is still active".into());
-                }
-            }
-            self.reread(&system::json(
-                self.system,
-                format!("{}/appinfo.json", self.target),
-            )?)?;
+        if self.foreign_mount()? {
+            return Err("Another integration is mounted over LG Home".into());
         }
+        if self.mounted() {
+            self.unmount(&self.target)?;
+            if self.mounted() {
+                return Err("The Home bind mount is still active".into());
+            }
+        }
+        self.reread(&system::json(
+            self.system,
+            format!("{}/appinfo.json", self.target),
+        )?)?;
         self.stop_home(&config.app_dir)?;
         if open || was_home {
             self.launch()?;
@@ -361,62 +299,27 @@ impl<'a, S: System> Home<'a, S> {
         }
         // Every apply (boot, enable, manual) gives Astro a fresh set of attempts.
         system::remove(self.system, FAILURES)?;
-        let root = if config.method == "executable" {
-            self.owned_mount()?
-        } else {
-            if self.foreign_mount()? {
-                return Err("Another integration is mounted over LG Home".into());
-            }
-            None
-        };
-        if config.method != "executable"
-            && let Err(e) = files::stage_splash(self.system, Path::new(&config.app_dir))
-        {
+        if self.foreign_mount()? {
+            return Err("Another integration is mounted over LG Home".into());
+        }
+        if let Err(e) = files::stage_splash(self.system, Path::new(&config.app_dir)) {
             eprintln!("Astro Home: splash not staged: {e}");
         }
         let front = self.foreground()?;
         let result = (|| {
-            if config.method == "executable" {
-                if root.is_some() && !self.exe_mounted(&config.app_dir) {
-                    self.unmount(&self.exe)?;
-                }
-                if !self.exe_mounted(&config.app_dir) {
-                    system::command(
-                        self.system,
-                        "/bin/mount",
-                        &["--bind", &format!("{}/astro", config.app_dir), &self.exe],
-                    )?;
-                }
-                if !self.exe_mounted(&config.app_dir) {
-                    return Err("The Home bind mount did not take".into());
-                }
-                system::write(
-                    self.system,
-                    format!("{MARKER}-target"),
-                    format!("{}\n", self.id).as_bytes(),
-                    0o644,
-                )?;
-                system::write(self.system, MARKER, format!("{APP}\n").as_bytes(), 0o644)?;
-                stage("mounted");
-            } else {
-                if !self.mounted() {
-                    system::command(self.system, "/bin/mount", &["--bind", STAGE, &self.target])?;
-                }
-                if !self.mounted() {
-                    return Err("The Home bind mount did not take".into());
-                }
-                stage("mounted");
-                self.reread(&system::json(self.system, format!("{STAGE}/appinfo.json"))?)?;
-                stage("manifest reread");
+            if !self.mounted() {
+                system::command(self.system, "/bin/mount", &["--bind", STAGE, &self.target])?;
             }
+            if !self.mounted() {
+                return Err("The Home bind mount did not take".into());
+            }
+            stage("mounted");
+            self.reread(&system::json(self.system, format!("{STAGE}/appinfo.json"))?)?;
+            stage("manifest reread");
             self.stop_home(&config.app_dir)?;
             stage("previous Home stopped");
             if open || (front == self.id && self.foreground()? == self.id) {
-                if config.method == "executable" {
-                    self.open_executable()?;
-                } else {
-                    self.launch()?;
-                }
+                self.launch()?;
                 stage("launched");
             }
             Ok(())
@@ -435,8 +338,6 @@ impl<'a, S: System> Home<'a, S> {
             let bytes = system::read(self.system, app.join(name), 16 * 1024 * 1024)?;
             system::write(self.system, format!("{STATE}/{name}"), &bytes, mode)?;
         }
-        // Retire the former interpreter script only after both replacement files are available.
-        system::remove(self.system, format!("{STATE}/home.cjs"))?;
         Ok(())
     }
     pub fn install(&self, app: &Path) -> Result<()> {
@@ -456,12 +357,6 @@ impl<'a, S: System> Home<'a, S> {
             return Err("Enable this from an installed native Astro package".into());
         }
         let previous = load(self.system)?;
-        if previous
-            .as_ref()
-            .is_some_and(|c| c.enabled && c.home_id != self.id)
-        {
-            return Err("Disable the existing Home integration before changing its target".into());
-        }
         let stock = if self.mounted() {
             previous
                 .as_ref()
@@ -472,70 +367,62 @@ impl<'a, S: System> Home<'a, S> {
         };
         let release =
             String::from_utf8(self.read("/etc/starfish-release")?).map_err(|e| e.to_string())?;
-        let method = method(&release, &stock, &self.id)?;
+        let method = method(&release, &self.id)?;
         if self.foreign_mount()? {
             return Err("Another integration is mounted over LG Home".into());
         }
-        self.owned_mount()?;
         if self.exists(HOOK) && !hook_owned(self.system) {
             return Err("64-astro-home is already in use".into());
-        }
-        if self.exists("/var/lib/webosbrew/init.d/65-astro") {
-            return Err(
-                "Disable the standalone cold-boot hook with autostart.sh disable first".into(),
-            );
         }
         if stock["id"] != self.id || stock["main"] == "astro" {
             return Err("Could not identify the original LG Home manifest".into());
         }
         self.close_normal()?;
-        if method == "manifest" {
-            system::mkdir(self.system, STAGE)?;
-            let mut links = vec![
-                "astro".to_owned(),
-                "assets".into(),
-                "lib".into(),
-                "splash".into(),
-            ];
-            for key in ["icon", "largeIcon"] {
-                if let Some(name) = manifest[key].as_str() {
-                    if Path::new(name).is_absolute()
-                        || Path::new(name)
-                            .components()
-                            .any(|c| matches!(c, std::path::Component::ParentDir))
-                    {
-                        return Err("Invalid package artwork path".into());
-                    }
-                    links.push(name.into());
+        system::mkdir(self.system, STAGE)?;
+        let mut links = vec![
+            "astro".to_owned(),
+            "assets".into(),
+            "lib".into(),
+            "splash".into(),
+        ];
+        for key in ["icon", "largeIcon"] {
+            if let Some(name) = manifest[key].as_str() {
+                if Path::new(name).is_absolute()
+                    || Path::new(name)
+                        .components()
+                        .any(|c| matches!(c, std::path::Component::ParentDir))
+                {
+                    return Err("Invalid package artwork path".into());
                 }
+                links.push(name.into());
             }
-            links.sort();
-            links.dedup();
-            for name in links {
-                let link = Path::new(STAGE).join(&name);
-                let tmp = link.with_file_name(format!(
-                    "{}.new",
-                    link.file_name()
-                        .ok_or("Invalid stage link")?
-                        .to_string_lossy()
-                ));
-                system::remove(self.system, &tmp)?;
-                system::link(self.system, app.join(&name), &tmp)?;
-                fs::rename(self.system.path(&tmp), self.system.path(&link))
-                    .map_err(|e| e.to_string())?;
-            }
-            manifest["id"] = json!(self.id);
-            manifest["title"] = json!("Home");
-            manifest["visible"] = json!(false);
-            manifest["appCategory"] = json!(["home"]);
-            system::write_json(self.system, format!("{STAGE}/appinfo.json"), &manifest)?;
-            system::write(
-                self.system,
-                format!("{STAGE}/.astro-home"),
-                format!("{APP}\n").as_bytes(),
-                0o644,
-            )?;
         }
+        links.sort();
+        links.dedup();
+        for name in links {
+            let link = Path::new(STAGE).join(&name);
+            let tmp = link.with_file_name(format!(
+                "{}.new",
+                link.file_name()
+                    .ok_or("Invalid stage link")?
+                    .to_string_lossy()
+            ));
+            system::remove(self.system, &tmp)?;
+            system::link(self.system, app.join(&name), &tmp)?;
+            fs::rename(self.system.path(&tmp), self.system.path(&link))
+                .map_err(|e| e.to_string())?;
+        }
+        manifest["id"] = json!(self.id);
+        manifest["title"] = json!("Home");
+        manifest["visible"] = json!(false);
+        manifest["appCategory"] = json!(["home"]);
+        system::write_json(self.system, format!("{STAGE}/appinfo.json"), &manifest)?;
+        system::write(
+            self.system,
+            format!("{STAGE}/.astro-home"),
+            format!("{APP}\n").as_bytes(),
+            0o644,
+        )?;
         self.install_scripts(&app)?;
         let mut config = Config {
             enabled: false,
@@ -562,11 +449,6 @@ fn unescape(s: &str) -> String {
         .replace("\\012", "\n")
         .replace("\\134", "\\")
 }
-pub fn exe_owned(root: &str) -> bool {
-    root.strip_suffix("//deleted")
-        .unwrap_or(root)
-        .ends_with("/com.danielcanoh22.astro/astro")
-}
 pub fn home_process(
     args: &[String],
     executable: Option<&Path>,
@@ -575,7 +457,6 @@ pub fn home_process(
     system: &impl System,
 ) -> bool {
     let main = args.first().map(String::as_str).unwrap_or("");
-    let native = main == format!("/usr/bin/{id}");
     let flutter = Path::new(main)
         .file_name()
         .is_some_and(|name| name == "flutter-client")
@@ -587,30 +468,21 @@ pub fn home_process(
     let metadata = args
         .get(1)
         .and_then(|arg| serde_json::from_str::<Value>(arg).ok());
-    native || flutter || (astro && metadata.is_some_and(|m| m["nid"] == id || m["appId"] == id))
+    flutter || (astro && metadata.is_some_and(|m| m["nid"] == id || m["appId"] == id))
 }
-pub fn method<'a>(release: &str, stock: &Value, id: &str) -> Result<&'a str> {
+/// The takeover stages a Home manifest that SAM rereads through releaseBlockSystemApp; it is
+/// only verified on starfish 10.x (webOS 25).
+pub fn method(release: &str, id: &str) -> Result<&'static str> {
     target(id)?;
     let version = release
         .split("release")
         .nth(1)
         .and_then(|s| s.trim_start().split('.').next())
         .and_then(|s| s.parse::<u32>().ok());
-    if matches!(version, Some(10 | 11)) && id == HOME {
+    if version == Some(10) {
         return Ok("manifest");
     }
-    // webOS 24 (9.x) behaves like 5/6 here, not like 10/11: its SAM has no
-    // releaseBlockSystemApp, so a mounted Home manifest is never reread and the
-    // takeover has to replace the Home executable instead. Verified on a 2024 G4
-    // running 9.2.4-48, where the manifest method fails on that missing method.
-    if matches!(version, Some(5 | 6 | 9))
-        && stock["type"] == "native"
-        && stock["main"] == format!("file:///usr/bin/{id}")
-        && stock["nativeLifeCycleInterfaceVersion"] == 2
-    {
-        return Ok("executable");
-    }
-    Err("This Home integration currently targets webOS 5/6, 24 (9.x) and 25/26 (10.x/11.x)".into())
+    Err("This Home integration targets webOS 25 (10.x)".into())
 }
 pub fn hook_owned(system: &impl System) -> bool {
     fs::read_link(system.path(Path::new(HOOK)))
@@ -625,22 +497,14 @@ pub fn load(system: &impl System) -> Result<Option<Config>> {
     config.validate()?;
     Ok(Some(config))
 }
-pub fn dispatch(
-    system: &impl System,
-    command: &str,
-    app: Option<&str>,
-    selected: Option<&str>,
-) -> Result<Value> {
+pub fn dispatch(system: &impl System, command: &str, app: Option<&str>) -> Result<Value> {
     system::root(system)?;
     let saved = load(system)?;
-    let id = selected
-        .filter(|id| !id.is_empty())
-        .or_else(|| saved.as_ref().map(|c| c.home_id.as_str()))
-        .unwrap_or(HOME);
+    let id = HOME;
     let home = Home::new(system, id)?;
     match command {
         "status" => Ok(
-            json!({"enabled":saved.as_ref().is_some_and(|c|c.enabled),"method":saved.as_ref().map(|c|c.method.as_str()),"homeId":id,"homeKeyVerified":null,"availableTargets":([HOME,FULL_HOME].into_iter().filter(|id|home.exists(format!("/usr/palm/applications/{id}/appinfo.json"))).collect::<Vec<_>>()),"mounted":saved.as_ref().is_some_and(|c|if c.method=="executable"{home.exe_mounted(&c.app_dir)}else{home.mounted()}),"bootHook":hook_owned(system),"appDir":saved.as_ref().map(|c|c.app_dir.as_str())}),
+            json!({"enabled":saved.as_ref().is_some_and(|c|c.enabled),"method":saved.as_ref().map(|c|c.method.as_str()),"homeId":id,"homeKeyVerified":null,"availableTargets":([HOME].into_iter().filter(|id|home.exists(format!("/usr/palm/applications/{id}/appinfo.json"))).collect::<Vec<_>>()),"mounted":saved.is_some()&&home.mounted(),"bootHook":hook_owned(system),"appDir":saved.as_ref().map(|c|c.app_dir.as_str())}),
         ),
         "enable" => {
             home.install(Path::new(app.ok_or("Missing installation directory")?))?;
