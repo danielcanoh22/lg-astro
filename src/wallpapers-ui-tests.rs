@@ -1088,3 +1088,74 @@ fn upload_qr_code_draws_dark_modules_on_a_light_plate_with_a_quiet_zone() {
         assert!(luminance(plate_color) - luminance(color) > 0.5);
     }
 }
+
+#[test]
+fn a_chosen_upload_becomes_the_splash_and_rotation_keeps_it() {
+    let mut state = ready();
+    let lake = custom(1);
+    state.set_wallpapers(vec![lake.clone()]);
+    state.open(2);
+    state.section = 1;
+    state.focus = Target::Background(BACKGROUNDS.len());
+    state.activate();
+    assert_eq!(state.activate(), vec![Effect::Save]);
+    assert_eq!(state.preferences.background, lake.id);
+    assert_eq!(state.preferences.splash_background(), lake.id);
+    state.preferences.wallpaper_cycle = true;
+    assert!(state.cycle_wallpaper(state.preferences.wallpaper_changed + 1));
+    assert_ne!(state.preferences.background, lake.id);
+    assert_eq!(state.preferences.splash_background(), lake.id);
+}
+
+fn confirm_delete(state: &mut State, id: &str) -> Vec<Effect> {
+    state.open(2);
+    state.section = 1;
+    let index = (0..state.background_count())
+        .find(|&i| state.background_id(i) == Some(id))
+        .unwrap();
+    state.focus = Target::Background(index);
+    state.activate();
+    state.focus = Target::DeleteBackground;
+    state.activate();
+    state.focus = Target::ConfirmDelete;
+    state.activate()
+}
+
+#[test]
+fn deleting_the_splash_background_moves_the_splash_to_the_current_background() {
+    // A bundled splash chosen by hand, after rotation moved the wallpaper on.
+    let mut state = ready();
+    state.preferences.background = "slate".into();
+    state.preferences.splash_background = Some("forest".into());
+    assert_eq!(confirm_delete(&mut state, "forest"), vec![Effect::Save]);
+    assert_eq!(state.preferences.splash_background, None);
+    assert_eq!(state.preferences.splash_background(), "slate");
+
+    // An uploaded splash: the worker's report asks for the save that updates the splash.
+    let mut state = ready();
+    let lake = custom(1);
+    let mountain = custom(2);
+    state.set_wallpapers(vec![lake.clone(), mountain.clone()]);
+    state.preferences.background = "slate".into();
+    state.preferences.splash_background = Some(lake.id.clone());
+    assert_eq!(
+        confirm_delete(&mut state, &lake.id),
+        vec![Effect::DeleteWallpaper(lake.id.clone())]
+    );
+    assert_eq!(
+        state.wallpaper_deleted(lake.id.clone(), Ok(())),
+        vec![Effect::Save]
+    );
+    assert_eq!(state.preferences.splash_background, None);
+    assert_eq!(state.preferences.splash_background(), "slate");
+
+    // Deleting a background the splash does not show leaves the splash alone.
+    state.preferences.splash_background = Some("forest".into());
+    assert_eq!(
+        confirm_delete(&mut state, &mountain.id),
+        vec![Effect::DeleteWallpaper(mountain.id.clone())]
+    );
+    assert!(state.wallpaper_deleted(mountain.id, Ok(())).is_empty());
+    assert_eq!(confirm_delete(&mut state, "summit"), vec![Effect::Save]);
+    assert_eq!(state.preferences.splash_background(), "forest");
+}

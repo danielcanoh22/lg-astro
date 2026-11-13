@@ -877,6 +877,220 @@ fn symlink_storage_directories_are_not_used_as_root_preferences() {
     assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"forest");
 }
 
+const UPLOAD: &str = "custom-0123456789abcdef0123456789abcdef";
+
+/// The start of a PNG: signature and IHDR dimensions, followed by `marker`.
+fn splash_png(width: u32, height: u32, marker: &[u8]) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    bytes.extend(width.to_be_bytes());
+    bytes.extend(height.to_be_bytes());
+    bytes.extend(marker);
+    bytes
+}
+
+fn storage() -> String {
+    format!("/media/developer/{APP}")
+}
+
+fn upload_preferences(f: &Fixture) {
+    f.put_json(
+        &format!("{}/preferences.json", storage()),
+        json!({"background":"prism","splash_background":UPLOAD}),
+    );
+}
+
+fn enabled_stage(f: &Fixture) {
+    f.put_json(
+        "/var/lib/astro-home/state.json",
+        json!({"enabled":true,"method":"manifest","appDir":DIR}),
+    );
+    f.put("/var/lib/astro-home/app/splash.png", b"old");
+}
+
+#[test]
+fn uploaded_splash_is_copied_from_storage_to_the_package_and_enabled_stage() {
+    let f = Fixture::new();
+    enabled_stage(&f);
+    upload_preferences(&f);
+    let image = splash_png(1920, 1080, b"upload");
+    f.put(
+        &format!("{}/wallpapers/{UPLOAD}/splash.png", storage()),
+        &image,
+    );
+    files::sync_splash(&f, Path::new(DIR), UPLOAD).unwrap();
+    assert_eq!(f.read(&format!("{DIR}/splash.png")), image);
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), image);
+}
+
+#[test]
+fn unsafe_or_invalid_uploaded_splashes_preserve_previous_images() {
+    let good = splash_png(1920, 1080, b"upload");
+    let folder = format!("{}/wallpapers/{UPLOAD}", storage());
+    type Setup<'a> = Box<dyn Fn(&Fixture) + 'a>;
+    let cases: Vec<(&str, Setup<'_>)> = vec![
+        (
+            "missing image",
+            Box::new(|f| fs::create_dir_all(f.p(&folder)).unwrap()),
+        ),
+        (
+            "not a PNG",
+            Box::new(|f| f.put(&format!("{folder}/splash.png"), b"not a png image file")),
+        ),
+        (
+            "wrong size",
+            Box::new(|f| {
+                f.put(
+                    &format!("{folder}/splash.png"),
+                    &splash_png(1280, 720, b"upload"),
+                )
+            }),
+        ),
+        (
+            "symlinked image",
+            Box::new(|f| {
+                f.put("/other/splash.png", &good);
+                fs::create_dir_all(f.p(&folder)).unwrap();
+                system::link(f, "/other/splash.png", format!("{folder}/splash.png")).unwrap();
+            }),
+        ),
+        (
+            "symlinked upload folder",
+            Box::new(|f| {
+                f.put("/other/splash.png", &good);
+                fs::create_dir_all(f.p(&format!("{}/wallpapers", storage()))).unwrap();
+                system::link(f, "/other", &folder).unwrap();
+            }),
+        ),
+        (
+            "symlinked gallery",
+            Box::new(|f| {
+                f.put(&format!("/other/{UPLOAD}/splash.png"), &good);
+                system::link(f, "/other", format!("{}/wallpapers", storage())).unwrap();
+            }),
+        ),
+        (
+            "symlinked storage",
+            Box::new(|f| {
+                fs::remove_dir_all(f.p(&storage())).unwrap();
+                f.put_json(
+                    "/other/preferences.json",
+                    json!({"splash_background":UPLOAD}),
+                );
+                f.put(&format!("/other/wallpapers/{UPLOAD}/splash.png"), &good);
+                system::link(f, "/other", storage()).unwrap();
+            }),
+        ),
+    ];
+    for (name, setup) in cases {
+        let f = Fixture::new();
+        enabled_stage(&f);
+        upload_preferences(&f);
+        setup(&f);
+        assert!(
+            files::sync_splash(&f, Path::new(DIR), UPLOAD).is_err(),
+            "{name}"
+        );
+        assert_eq!(f.read(&format!("{DIR}/splash.png")), b"default", "{name}");
+        assert_eq!(
+            f.read("/var/lib/astro-home/app/splash.png"),
+            b"old",
+            "{name}"
+        );
+    }
+    for id in [
+        "custom-0123456789abcdef0123456789abcde",
+        "custom-0123456789ABCDEF0123456789ABCDEF",
+        "custom-../../../../../../../../../../xx",
+    ] {
+        let f = Fixture::new();
+        upload_preferences(&f);
+        if !id.contains("..") {
+            f.put(&format!("{}/wallpapers/{id}/splash.png", storage()), &good);
+        }
+        assert!(files::sync_splash(&f, Path::new(DIR), id).is_err(), "{id}");
+        assert_eq!(f.read(&format!("{DIR}/splash.png")), b"default", "{id}");
+    }
+}
+
+#[test]
+fn stage_uses_the_manual_upload_splash_from_storage() {
+    let f = Fixture::new();
+    upload_preferences(&f);
+    let image = splash_png(1920, 1080, b"upload");
+    f.put(
+        &format!("{}/wallpapers/{UPLOAD}/splash.png", storage()),
+        &image,
+    );
+    files::stage_splash(&f, Path::new(DIR)).unwrap();
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), image);
+}
+
+#[test]
+fn stage_uses_the_package_splash_when_the_upload_splash_is_unusable() {
+    let f = Fixture::new();
+    upload_preferences(&f);
+    f.put(
+        &format!("{}/wallpapers/{UPLOAD}/splash.png", storage()),
+        b"not a png image file",
+    );
+    files::stage_splash(&f, Path::new(DIR)).unwrap();
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"default");
+}
+
+#[test]
+fn the_package_directory_is_never_storage_for_uploaded_splashes() {
+    let f = Fixture::new();
+    enabled_stage(&f);
+    f.put_json(
+        &format!("{DIR}/preferences.json"),
+        json!({"splash_background":UPLOAD}),
+    );
+    f.put(
+        &format!("{DIR}/wallpapers/{UPLOAD}/splash.png"),
+        &splash_png(1920, 1080, b"package"),
+    );
+    assert!(files::sync_splash(&f, Path::new(DIR), UPLOAD).is_err());
+    assert_eq!(f.read(&format!("{DIR}/splash.png")), b"default");
+    files::stage_splash(&f, Path::new(DIR)).unwrap();
+    assert_eq!(f.read("/var/lib/astro-home/app/splash.png"), b"default");
+}
+
+#[test]
+fn storage_under_a_symlinked_system_directory_still_provides_uploaded_splashes() {
+    let f = Fixture::new();
+    let production = format!("/media/cryptofs/apps/usr/palm/applications/{APP}");
+    f.put_json(
+        &format!("{production}/appinfo.json"),
+        json!({"id":APP,"type":"native","main":"astro"}),
+    );
+    f.put(&format!("{production}/splash.png"), b"default");
+    let image = splash_png(1920, 1080, b"internal");
+    f.put_json(
+        &format!("/real-internal/.{APP}/preferences.json"),
+        json!({"splash_background":UPLOAD}),
+    );
+    f.put(
+        &format!("/real-internal/.{APP}/wallpapers/{UPLOAD}/splash.png"),
+        &image,
+    );
+    fs::create_dir_all(f.p("/media")).unwrap();
+    system::link(&f, "/real-internal", "/media/internal").unwrap();
+    files::sync_splash(&f, Path::new(&production), UPLOAD).unwrap();
+    assert_eq!(f.read(&format!("{production}/splash.png")), image);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn opened_files_are_located_by_the_kernel_not_by_the_requested_path() {
+    let f = Fixture::new();
+    f.put("/real/splash.png", b"image");
+    system::link(&f, "/real", "/linked").unwrap();
+    let real = f.p("/real/splash.png");
+    let file = fs::File::open(f.p("/linked/splash.png")).unwrap();
+    assert!(!files::opened_at(&file, &f.p("/linked/splash.png")));
+    assert!(files::opened_at(&file, &real));
+}
+
 #[test]
 fn uninstall_requires_matching_completion_not_just_acceptance() {
     let mut s = uninstall::Stream::default();

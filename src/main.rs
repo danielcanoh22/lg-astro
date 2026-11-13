@@ -317,12 +317,15 @@ fn reload_changed_preferences(
 
 /// Applies finished background preference writes as the synchronous save did: a failed user
 /// save is announced, and a successful one updates the launch splash.
-fn saved(saver: &storage::Saver, state: &mut State, platform: &Platform) {
+fn saved(
+    saver: &storage::Saver,
+    state: &mut State,
+    platform: &Platform,
+    wallpapers: &wallpapers::Service,
+) {
     for saved in saver.results() {
         match saved.result {
-            Ok(()) if saved.report => {
-                platform.sync_splash(state.preferences.splash_background());
-            }
+            Ok(()) if saved.report => sync_splash(state, platform, wallpapers),
             Ok(()) => {}
             Err(error) => {
                 eprintln!("{error}");
@@ -331,6 +334,22 @@ fn saved(saver: &storage::Saver, state: &mut State, platform: &Platform) {
                 }
             }
         }
+    }
+}
+
+/// Points LG's launch splash at the manually chosen background. An upload's splash image is
+/// prepared on the wallpaper worker first, and `Event::Splash` then hands it to the platform;
+/// a bundled splash goes straight to the platform and removes any upload's splash image.
+fn sync_splash(state: &State, platform: &Platform, wallpapers: &wallpapers::Service) {
+    if !platform.updates_splash() {
+        return;
+    }
+    let background = state.preferences.splash_background();
+    if wallpapers::valid_id(background) {
+        wallpapers.prepare_splash(Some(background.to_owned()));
+    } else {
+        wallpapers.prepare_splash(None);
+        platform.sync_splash(background);
     }
 }
 
@@ -775,7 +794,7 @@ fn run() -> Result<(), String> {
         &wallpaper_service,
         &updates,
     );
-    platform.sync_splash(state.preferences.splash_background());
+    sync_splash(&state, &platform, &wallpaper_service);
     startup_stage("preferences and workers");
 
     let sdl = sdl2::init()?;
@@ -1105,8 +1124,24 @@ fn run() -> Result<(), String> {
                 wallpapers::Event::Deleted(id, result) => {
                     // Its directory name is random, so it matches only that wallpaper's files.
                     renderer.forget(&id);
-                    state.wallpaper_deleted(id, result);
+                    let deleted = state.wallpaper_deleted(id, result);
+                    effects(
+                        deleted,
+                        &mut state,
+                        &platform,
+                        &saver,
+                        &wallpaper_service,
+                        &updates,
+                    );
                 }
+                wallpapers::Event::Splash(id, result) => match result {
+                    // A later choice may have replaced it while the image was prepared.
+                    Ok(()) if state.preferences.splash_background() == id => {
+                        platform.sync_splash(&id);
+                    }
+                    Ok(()) => {}
+                    Err(error) => eprintln!("Astro splash: {error}"),
+                },
                 wallpapers::Event::Session(generation, result)
                     if generation == wallpaper_service.generation()
                         && matches!(state.overlay, Some(Overlay::WallpaperUpload)) =>
@@ -1176,7 +1211,7 @@ fn run() -> Result<(), String> {
                 eprintln!("{error}");
             }
         }
-        saved(&saver, &mut state, &platform);
+        saved(&saver, &mut state, &platform, &wallpaper_service);
         while let Ok(response) = updates.receiver.try_recv() {
             state.install_response(response);
         }

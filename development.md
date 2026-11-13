@@ -308,8 +308,12 @@ directory it was created in). Preferences retain only
 the generated selected ID. Invalid metadata and entries with missing files are skipped; an unavailable selected image
 renders the bundled default without destroying the saved selection. These files survive app
 updates, and normal/takeover launches using the shared preferences location use the same gallery.
-Custom images are not used as LG's launch splash: runtime splash updates are skipped for them,
-and takeover boot staging uses a bundled fallback.
+An upload chosen by hand also becomes LG's launch splash. On TV runs that update the splash, the
+wallpaper worker then writes a 1920×1080 PNG of its shaded wallpaper to `custom-<id>/splash.png`
+and the TV helper copies it into the package (see [Splash images](#splash-images)). At most one
+upload holds a splash image: choosing another background removes it. Deleting the background the
+splash shows moves the splash to the current background; deleting an upload removes its folder,
+splash image included, and preferences keep no reference to it.
 
 The fixed actions are **Upload**, **Gradient**, and **Rotation**, from left to right.
 **Gradient** toggles readability shading immediately without moving the controls. Its
@@ -379,7 +383,8 @@ checks do not establish webOS jail networking permissions or TV/browser behavior
 wallpapers. `tools/package.mjs` ships them under `splash/` plus `splash.png` (the default background),
 which `appinfo.json` names as `splashBackground`, with `bgColor` set to the UI base colour so the
 frame between the splash and the first draw is not black. On a normal TV launch and after successful
-preference saves, the native platform worker passes the loaded background to the native
+preference saves (once the wallpaper worker has prepared an upload's splash image), the native
+platform worker passes the manually chosen background to the native
 `astro-helper sync-splash` command through Homebrew Channel's elevated `exec` service. It atomically updates
 the installed `splash.png` and the matching enabled Home stage, skipping identical images. Desktop
 and isolated `--preferences` / `--test-extra-apps` runs do not update launch splashes. The first launch
@@ -389,6 +394,16 @@ copies the selected background's splash into the staged Home app on every apply,
 preferences from the TV storage candidates in `storage.rs`. Production installations prefer internal
 storage; developer installations prefer developer storage, with existing files taking precedence over
 the legacy installation-local preferences. Reapplying an active Home mount also refreshes the splash.
+
+`sync-splash` and the Home stage also accept an uploaded background's ID (`custom-` and 32 lowercase
+hex digits). The helper finds Astro's storage itself, with the same precedence (never the
+package directory), and reads the 1920×1080 PNG the app writes to
+`wallpapers/custom-<id>/splash.png`; the request never carries a path. Running as root, it refuses
+a symlink at any path component below the storage's parent, a file the kernel reports at another
+path once opened (a component swapped during the checks), a file replaced between its check and
+its opening, a file not owned by the storage directory's owner, and anything but a 1920×1080 PNG
+within 32 MiB. A refused image leaves both splashes unchanged; the Home stage then
+copies the installed `splash.png` instead.
 `pnpm test:home` checks splash selection, runtime updates and mounted refreshes with a mocked filesystem
 and no TV calls. Verify the system-rendered splash on a real TV by changing Background, quitting Astro,
 and relaunching its normal tile; desktop checks cannot establish SAM/compositor image caching behavior.

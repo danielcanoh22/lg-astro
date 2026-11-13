@@ -3496,16 +3496,18 @@ fn failed_saves_notify_only_for_user_saves() {
     std::fs::write(&blocker, b"").unwrap();
     let saver = storage::Saver::new(blocker.join("preferences.json"));
     let platform = crate::platform::Platform::new(false, false);
+    let wallpapers =
+        crate::wallpapers::Service::new(&directory.join("preferences.json"), true).unwrap();
     let mut state = ready();
     // A rotation save that fails is only logged.
     saver.save(&state.preferences, false).unwrap();
     saver.flush();
-    crate::saved(&saver, &mut state, &platform);
+    crate::saved(&saver, &mut state, &platform, &wallpapers);
     assert!(state.notice.is_none());
     // A user save that fails shows the save error notice.
     saver.save(&state.preferences, true).unwrap();
     saver.flush();
-    crate::saved(&saver, &mut state, &platform);
+    crate::saved(&saver, &mut state, &platform, &wallpapers);
     let expected = state.preferences.language.t("savedError");
     assert_eq!(
         state.notice.as_ref().map(|(text, _)| text.as_str()),

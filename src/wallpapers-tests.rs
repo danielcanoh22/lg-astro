@@ -1566,6 +1566,7 @@ fn assert_quiet(service: &Service) {
         Ok(Event::Deleted(id, _)) => panic!("unexpected Deleted({id})"),
         Ok(Event::Ended(_)) => panic!("unexpected Ended"),
         Ok(Event::Session(..)) => panic!("unexpected Session"),
+        Ok(Event::Splash(id, _)) => panic!("unexpected Splash({id})"),
     }
 }
 
@@ -1964,4 +1965,61 @@ fn no_upload_server_response_reveals_the_storage_or_preferences_path() {
     assert!(ok.starts_with("HTTP/1.1 201"), "{ok}");
     record("POST ok", ok);
     assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+#[test]
+fn only_the_splash_upload_keeps_a_generated_splash_and_deletion_removes_it() {
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    create_directory(&root).unwrap();
+    let first = listed_wallpaper(&root, 1);
+    let second = listed_wallpaper(&root, 2);
+    for id in [&first, &second] {
+        fs::write(root.join(id).join("wallpaper.jpg"), image(1920, 1080)).unwrap();
+    }
+    prepare_splash(&root, Some(&first)).unwrap();
+    let png = fs::read(root.join(&first).join(SPLASH)).unwrap();
+    let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (1920, 1080));
+    assert!(!root.join(&second).join(SPLASH).exists());
+
+    prepare_splash(&root, Some(&second)).unwrap();
+    assert!(!root.join(&first).join(SPLASH).exists());
+    assert!(root.join(&second).join(SPLASH).exists());
+    prepare_splash(&root, None).unwrap();
+    assert!(!root.join(&second).join(SPLASH).exists());
+
+    prepare_splash(&root, Some(&second)).unwrap();
+    delete_wallpaper(&root, &second, "dunes").unwrap();
+    assert!(!root.join(&second).exists());
+    // Only the upload's own files remain: no splash and no temporary file.
+    let mut names: Vec<_> = fs::read_dir(root.join(&first))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["metadata.json", "thumbnail.jpg", "wallpaper.jpg"]);
+}
+
+#[test]
+fn splash_preparation_rejects_missing_invalid_and_unreadable_uploads_without_writing() {
+    let fixture = Fixture::new();
+    let root = fixture.wallpapers();
+    create_directory(&root).unwrap();
+    let broken = listed_wallpaper(&root, 1);
+    assert!(prepare_splash(&root, Some(&broken)).is_err());
+    assert!(!root.join(&broken).join(SPLASH).exists());
+    assert!(prepare_splash(&root, Some(&format!("custom-{:032x}", 9))).is_err());
+    assert!(prepare_splash(&root, Some("custom-xyz")).is_err());
+    assert!(prepare_splash(&root, Some("dunes")).is_err());
+    #[cfg(unix)]
+    {
+        let elsewhere = fixture.0.join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        fs::write(elsewhere.join("wallpaper.jpg"), image(1920, 1080)).unwrap();
+        let linked = format!("custom-{:032x}", 3);
+        std::os::unix::fs::symlink(&elsewhere, root.join(&linked)).unwrap();
+        assert!(prepare_splash(&root, Some(&linked)).is_err());
+        assert!(!elsewhere.join(SPLASH).exists());
+    }
 }
