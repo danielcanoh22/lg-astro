@@ -1,9 +1,18 @@
-//! Bundled English and Spanish translations.
+//! Bundled English and Spanish translations, plus locale-aware date, clock and greeting text.
+//!
+//! Messages come from `assets/messages.json`, embedded at compile time and parsed once. Lookups
+//! fall back to English and then to the key itself, so a missing string never panics at runtime.
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{collections::BTreeMap, sync::OnceLock};
 use time::OffsetDateTime;
 
+/// Message catalog: key → language code → text.
 type Messages = BTreeMap<String, BTreeMap<String, String>>;
+/// Returns the parsed message catalog.
+///
+/// # Panics
+///
+/// Panics on first use if the bundled `messages.json` is invalid; unit tests parse it.
 fn messages() -> &'static Messages {
     static CATALOG: OnceLock<Messages> = OnceLock::new();
     CATALOG.get_or_init(|| {
@@ -12,6 +21,10 @@ fn messages() -> &'static Messages {
     })
 }
 
+/// A supported UI language, persisted by its lowercase code.
+///
+/// Adding a variant also requires translations, font coverage and the Homebrew description
+/// (see `agents.md`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
@@ -20,13 +33,16 @@ pub enum Language {
     Es,
 }
 impl Language {
+    /// Every language in picker order, sorted by displayed name; [`Language::index`] relies on it.
     pub const ALL: [Self; 2] = [Self::En, Self::Es];
+    /// Returns the code used in preferences and as the catalog column.
     pub fn code(self) -> &'static str {
         match self {
             Self::En => "en",
             Self::Es => "es",
         }
     }
+    /// Returns the language's own name for the picker.
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
@@ -39,6 +55,7 @@ impl Language {
             .position(|language| *language == self)
             .unwrap()
     }
+    /// Translates `key`, falling back to English and then to the key itself.
     pub fn t(self, key: &str) -> &str {
         messages()
             .get(key)
@@ -46,6 +63,7 @@ impl Language {
             .map(String::as_str)
             .unwrap_or(key)
     }
+    /// Translates `key` and replaces each `{name}` placeholder with its value.
     pub fn format(self, key: &str, values: &[(&str, &str)]) -> String {
         let mut value = self.t(key).to_owned();
         for (name, replacement) in values {
@@ -53,6 +71,7 @@ impl Language {
         }
         value
     }
+    /// Translates a [`crate::model::CATEGORIES`] name; unknown values read as Utilities.
     pub fn category(self, value: &str) -> &str {
         match value {
             "Streaming" => self.t("categoryStreaming"),
@@ -62,6 +81,7 @@ impl Language {
             _ => self.t("categoryUtilities"),
         }
     }
+    /// Returns the Home greeting for a local `hour` (0–23), naming the user when `name` is set.
     pub fn greeting(self, hour: u8, name: &str) -> String {
         let key = match hour {
             0..=4 => "greetingNight",
@@ -76,6 +96,7 @@ impl Language {
             self.format(&format!("{key}Named"), &[("name", name)])
         }
     }
+    /// Formats the localized, upper-case weekday and date ("WEDNESDAY, OCTOBER 21").
     pub fn date(self, now: OffsetDateTime) -> String {
         let weekday = now.weekday().number_days_from_monday() as usize;
         let month = now.month() as usize - 1;
@@ -138,6 +159,7 @@ impl Language {
             .to_uppercase(),
         }
     }
+    /// Formats the time; seconds are inserted before any AM/PM suffix.
     pub fn clock(self, now: OffsetDateTime, hour24: bool, seconds: bool) -> String {
         let base = self.clock_base(now, hour24);
         if !seconds {
@@ -149,6 +171,7 @@ impl Language {
             None => format!("{base}{tail}"),
         }
     }
+    /// Formats hours and minutes: English pads 24-hour times ("08:05"), Spanish does not.
     fn clock_base(self, now: OffsetDateTime, hour24: bool) -> String {
         if hour24 {
             return if self == Self::En {
@@ -168,6 +191,7 @@ impl Language {
         )
     }
 }
+/// Deserializes [`Language`] leniently for [`crate::model::Preferences`].
 pub fn deserialize_language<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Language, D::Error> {
