@@ -1,6 +1,6 @@
 {
   "name": "lg-astro",
-  "version": "4.1.4",
+  "version": "4.2.0",
   "private": true,
   "description": "A modern, remote-first webOS launcher.",
   "license": "MIT",
