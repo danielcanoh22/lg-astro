@@ -141,10 +141,7 @@ pub fn sync_splash(system: &impl System, directory: &Path, background: &str) -> 
     let config_path = Path::new("/var/lib/astro-home/state.json");
     if system::exists(system, config_path) {
         let config = system::json(system, config_path)?;
-        if config["enabled"] == true
-            && config["method"] != "executable"
-            && config["appDir"].as_str() == directory.to_str()
-        {
+        if config["enabled"] == true && config["appDir"].as_str() == directory.to_str() {
             replace(
                 system,
                 Path::new("/var/lib/astro-home/app/splash.png"),
