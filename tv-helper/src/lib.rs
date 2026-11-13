@@ -22,6 +22,24 @@ pub fn valid_app_id(id: &str) -> bool {
             .split(['.', '_', '-'])
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
+/// LG and Palm system namespaces: never removable and hidden from the app list unless visible.
+pub fn vendor_app(id: &str) -> bool {
+    ["com.webos.", "com.palm.", "com.lge."]
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+}
+/// Whether an application may be uninstalled: a valid ID outside vendor namespaces that is
+/// neither Astro nor Homebrew Channel. Identities only, never titles.
+pub fn removable(id: &str) -> bool {
+    valid_app_id(id)
+        && !vendor_app(id)
+        && ![
+            APP,
+            "org.webosbrew.hbchannel",
+            "org.webosbrew.hbchannel.service",
+        ]
+        .contains(&id)
+}
 /// Opens `path` only if, with every symlink resolved, it is a regular file inside one of
 /// `roots`. A path is otherwise only checked as text, so a link inside an application's
 /// directory could name any file on the TV, or a FIFO or device that stalls a reader.

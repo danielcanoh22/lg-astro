@@ -1,25 +1,11 @@
 use crate::{
-    APP, Result,
+    Result,
     system::{self, Pipe},
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 pub fn allowed(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 256
-        && id.as_bytes()[0].is_ascii_alphanumeric()
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-        && !["com.webos.", "com.palm.", "com.lge."]
-            .iter()
-            .any(|prefix| id.starts_with(prefix))
-        && ![
-            APP,
-            "org.webosbrew.hbchannel",
-            "org.webosbrew.hbchannel.service",
-        ]
-        .contains(&id)
+    crate::removable(id)
 }
 /// An accepting reply is not completion. Only matching status 31 can confirm removal.
 pub fn completed(reply: &Value, id: &str) -> Result<bool> {

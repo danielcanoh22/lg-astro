@@ -1131,6 +1131,14 @@ fn uninstall_protects_system_apps_and_does_not_spawn_when_denied() {
     assert_eq!(uninstall::remove("sample", 1000)["returnValue"], false);
 }
 #[test]
+fn uninstall_accepts_only_ids_the_app_itself_accepts() {
+    for id in ["a..b", &"a".repeat(200)] {
+        assert!(!uninstall::allowed(id), "{id}");
+        assert_eq!(uninstall::remove(id, 0)["returnValue"], false);
+    }
+    assert!(uninstall::allowed("org.example.app"));
+}
+#[test]
 fn input_verification_failure_rolls_back_and_existing_registration_is_preserved() {
     let f = Fixture::new();
     f.reply(

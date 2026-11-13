@@ -302,13 +302,7 @@ pub fn clean_input_name(name: &str) -> String {
     clean.trim_end().into()
 }
 
-pub fn valid_app_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .split(['.', '_', '-'])
-            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric()))
-}
+pub use astro_tv_helper::valid_app_id;
 
 pub fn demo_inventory() -> Inventory {
     let mut inventory = Inventory {

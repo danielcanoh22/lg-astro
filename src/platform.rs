@@ -602,15 +602,7 @@ fn tv_input(request: Option<bool>) -> Result<bool, String> {
 /// Conservatively includes removable vendor apps until firmware provides a
 /// reliable cross-version removability flag.
 pub fn can_uninstall(id: &str) -> bool {
-    valid_app_id(id)
-        && !crate::scroll_preview::is_placeholder(id)
-        && !["com.webos.", "com.palm.", "com.lge."]
-            .iter()
-            .any(|prefix| id.starts_with(prefix))
-        && !matches!(
-            id,
-            APP_ID | HOME_ID | "org.webosbrew.hbchannel" | "org.webosbrew.hbchannel.service"
-        )
+    astro_tv_helper::removable(id) && !crate::scroll_preview::is_placeholder(id)
 }
 
 pub fn uninstall_request(id: &str) -> Result<(&'static str, Value), String> {
@@ -889,11 +881,7 @@ pub fn normalize_apps(raw: &Value) -> Result<Vec<App>, String> {
             || id.starts_with("com.webos.app.hdmi")
             || id.starts_with("com.webos.app.externalinput.")
             || (!live && (visible == Some(&json!(false)) || visible == Some(&json!("false"))))
-            || (!live
-                && ["com.webos.", "com.palm.", "com.lge."]
-                    .iter()
-                    .any(|prefix| id.starts_with(prefix))
-                && visible != Some(&json!(true)))
+            || (!live && astro_tv_helper::vendor_app(id) && visible != Some(&json!(true)))
             || !seen.insert(id)
         {
             continue;
