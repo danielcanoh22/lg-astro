@@ -1,17 +1,37 @@
 //! Automatic background cycling with one fixed interval and no per-image exclusions.
+//!
+//! The pure scheduling rules live here; the event loop in `main.rs` decides when the launcher
+//! is idle enough to switch and [`crate::state::State`] applies the change.
 use serde::{Deserialize, Deserializer};
 use std::time::Duration;
 
+/// Seconds between automatic background changes.
 pub const INTERVAL: u64 = 15 * 60;
 
+/// Returns whether cycling is enabled and [`INTERVAL`] seconds have passed since the last change.
+///
+/// Both timestamps are Unix seconds. A `changed` time in the future (the TV clock moved back)
+/// saturates to zero elapsed, so the background waits instead of switching immediately.
 pub fn due(enabled: bool, changed: u64, now: u64) -> bool {
     enabled && now.saturating_sub(changed) >= INTERVAL
 }
 
+/// Returns whether the one launch-time advance should run now.
+///
+/// It waits for the wallpaper catalog scan so uploaded backgrounds can participate, but gives up
+/// waiting after three seconds so a slow scan cannot postpone the change indefinitely.
 pub fn startup_due(enabled: bool, pending: bool, catalog_ready: bool, elapsed: Duration) -> bool {
     enabled && pending && (catalog_ready || elapsed >= Duration::from_secs(3))
 }
 
+/// Deserializes the `wallpaper_cycle` preference as an on/off flag.
+///
+/// Accepts the current boolean and the string modes saved by the former duration-based UI;
+/// any other value reads as disabled instead of failing the whole preferences file.
+///
+/// # Errors
+///
+/// Returns the deserializer's error only when the value itself cannot be read.
 pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     Ok(match serde_json::Value::deserialize(deserializer)? {
         serde_json::Value::Bool(enabled) => enabled,
@@ -24,7 +44,10 @@ pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D
     })
 }
 
-/// Advance in gallery order and wrap; unavailable images are absent from `ids`.
+/// Returns the background after `current` in gallery order, wrapping at the end.
+///
+/// Unavailable images are expected to be absent from `ids`. An unknown `current` starts from
+/// the first entry, and `None` means there is no other background to switch to.
 pub fn next(ids: &[String], current: &str) -> Option<String> {
     let start = ids
         .iter()

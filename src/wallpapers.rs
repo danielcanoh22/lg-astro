@@ -1,5 +1,24 @@
 //! Immutable, app-owned wallpapers and a short-lived, capability-protected LAN upload server.
-//! Network I/O, decoding, normalization, metadata discovery and QR generation stay on this worker.
+//!
+//! Network I/O, decoding, normalization, metadata discovery and QR generation run on one worker
+//! thread; the SDL thread talks to it through [`Service`] and receives [`Event`]s.
+//!
+//! Uploads live in a `wallpapers/` directory beside the preferences file, one directory per
+//! image, at most [`MAX_WALLPAPERS`]:
+//!
+//! ```text
+//! wallpapers/custom-<id>/
+//!     metadata.json   the generated ID only
+//!     wallpaper.jpg   1920 × 1080 with Astro's readability shading
+//!     original.jpg    the same image without shading (older uploads may lack it)
+//!     thumbnail.jpg   480 × 270 gallery thumbnail
+//!     splash.png      LG launch splash, only for the upload the splash shows
+//! ```
+//!
+//! An upload is first written to a hidden `.custom-<id>` staging directory, waits there for the
+//! owner's Save or Discard on the TV, and joins the gallery by one atomic rename. Paths never
+//! change after that, so GPU texture caches cannot show an older image. The HTTP side is built
+//! from [`crate::companion`].
 pub use crate::companion::Session;
 use crate::companion::{
     PENDING_LIMIT, Pending, Request, carries_token, error_response, listen, local_peer,
@@ -21,35 +40,47 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Largest accepted upload body and stored image file, in bytes.
 const MAX_BODY: usize = 12 * 1024 * 1024;
+/// Uploaded images the gallery holds.
 const MAX_WALLPAPERS: usize = 20;
+/// How long an upload session stays open after the dialog opens it.
 const SESSION_TIME: Duration = Duration::from_secs(600);
 /// No upload outlives its session, so staging this old belongs to no live process.
 const STAGING_ABANDONED: Duration = Duration::from_secs(SESSION_TIME.as_secs() + 5 * 60);
+/// Token-carrying requests one session serves before it closes.
 const SESSION_REQUEST_LIMIT: usize = 64;
+/// Time allowed for one request, body included, once its headers have arrived.
 const REQUEST_TIME: Duration = Duration::from_secs(20);
 /// How long Astro's exit waits for the worker to delete an upload awaiting a decision.
 const EXIT_TIME: Duration = Duration::from_secs(2);
+/// The `desired` generation that tells the worker to exit.
 const STOP: u64 = u64::MAX;
 /// Only one upload awaits the owner's decision on the TV at a time.
 const AWAITING_DECISION: &str = "Save or discard the previous image on your TV first";
 const GALLERY_FULL: &str = "The wallpaper gallery is full (20 images)";
 /// LG's launch splash for an upload, which the TV helper copies into the package.
 const SPLASH: &str = "splash.png";
+/// Temporary name while the splash is written, renamed into place when complete.
 const SPLASH_PARTIAL: &str = ".splash.png.new";
 
+/// An uploaded wallpaper; only `id` is stored in its `metadata.json`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Wallpaper {
+    /// `custom-` followed by 32 random lowercase hex digits; see [`valid_id`].
     pub id: String,
+    /// The gallery directory, or the staging directory while the upload awaits a decision.
     #[serde(skip)]
     pub directory: PathBuf,
+    /// Whether an unshaded `original.jpg` exists.
     #[serde(skip)]
     pub has_original: bool,
 }
 
 impl Wallpaper {
+    /// Returns the path of the image without readability shading, used when the gradient is off.
     pub fn unshaded_image(&self) -> String {
-        // Preserve full resolution for older uploads without an unshaded original.
+        // Older uploads have no original; their shaded image still keeps full resolution.
         self.directory
             .join(if self.has_original {
                 "original.jpg"
@@ -59,12 +90,14 @@ impl Wallpaper {
             .to_string_lossy()
             .into_owned()
     }
+    /// Returns the path of the shaded full-screen image.
     pub fn image(&self) -> String {
         self.directory
             .join("wallpaper.jpg")
             .to_string_lossy()
             .into_owned()
     }
+    /// Returns the path of the gallery thumbnail.
     pub fn thumbnail(&self) -> String {
         self.directory
             .join("thumbnail.jpg")
@@ -73,6 +106,10 @@ impl Wallpaper {
     }
 }
 
+/// Returns whether `id` has the exact shape of a generated upload ID.
+///
+/// Only such names are read or deleted in the gallery, so a hand-made entry or a path
+/// component can never be selected.
 pub fn valid_id(id: &str) -> bool {
     id.strip_prefix("custom-").is_some_and(|id| {
         id.len() == 32
@@ -82,10 +119,15 @@ pub fn valid_id(id: &str) -> bool {
     })
 }
 
+/// A message from the wallpaper worker to the SDL thread.
 pub enum Event {
+    /// The current gallery, sorted by ID.
     Catalog(Vec<Wallpaper>),
+    /// The result of deleting the wallpaper with this ID.
     Deleted(String, Result<(), String>),
+    /// The upload session for this generation opened, or why it could not.
     Session(u64, Result<Session, String>),
+    /// The upload session for this generation closed.
     Ended(u64),
     /// An upload of that session waits, hidden from the gallery, for Save or Discard on the TV.
     /// Its `directory` is the staging directory holding the preview images.
@@ -98,6 +140,8 @@ pub enum Event {
     Splash(String, Result<(), String>),
 }
 
+/// A request from the SDL thread to the worker; `Wake` only makes it re-read the desired
+/// session generation.
 enum Command {
     Wake,
     Delete { id: String, selected: String },
@@ -106,7 +150,11 @@ enum Command {
     Splash(Option<String>),
 }
 
+/// The SDL thread's handle to the wallpaper worker.
+///
+/// Dropping it stops the worker and waits briefly for an undecided upload to be deleted.
 pub struct Service {
+    /// Generation of the session the UI wants open: 0 for none, [`STOP`] to exit.
     desired: Arc<AtomicU64>,
     wake: mpsc::Sender<Command>,
     pub receiver: mpsc::Receiver<Event>,
@@ -117,6 +165,14 @@ pub struct Service {
 }
 
 impl Service {
+    /// Starts the worker for the gallery beside the `preferences` file.
+    ///
+    /// The worker first removes abandoned staging and sends the initial [`Event::Catalog`].
+    /// `loopback_only` serves upload sessions on 127.0.0.1 only (scripted desktop runs).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the worker thread cannot be spawned.
     pub fn new(preferences: &Path, loopback_only: bool) -> Result<Self, String> {
         let directory = preferences
             .parent()
@@ -150,6 +206,10 @@ impl Service {
         })
     }
 
+    /// Opens or closes the upload session, which stays open only while the upload dialog is
+    /// shown and Astro is in the foreground.
+    ///
+    /// Each opening gets a new generation, so events from an earlier session can be told apart.
     pub fn set_active(&mut self, active: bool) {
         if self.active != active {
             self.active = active;
@@ -160,10 +220,13 @@ impl Service {
         }
     }
 
+    /// Returns the generation of the latest session request.
     pub fn generation(&self) -> u64 {
         self.generation
     }
 
+    /// Deletes an uploaded wallpaper unless it is `selected`; reported by [`Event::Deleted`]
+    /// and a new [`Event::Catalog`].
     pub fn delete(&self, id: String, selected: String) {
         let _ = self.wake.send(Command::Delete { id, selected });
     }
@@ -179,7 +242,7 @@ impl Service {
     }
 
     /// Prepares the launch splash image of the upload the splash now shows, reported by
-    /// `Event::Splash`, and removes every other upload's; `None` (a bundled splash) removes all.
+    /// [`Event::Splash`], and removes every other upload's; `None` (a bundled splash) removes all.
     pub fn prepare_splash(&self, upload: Option<String>) {
         let _ = self.wake.send(Command::Splash(upload));
     }
@@ -203,6 +266,7 @@ impl Drop for Service {
     }
 }
 
+/// Returns 32 random lowercase hex digits for a new upload ID.
 fn random_id() -> Result<String, String> {
     let mut bytes = [0; 16];
     getrandom::getrandom(&mut bytes)
@@ -210,10 +274,12 @@ fn random_id() -> Result<String, String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+/// Returns whether `path` is a directory itself, not a symlink to one.
 fn real_directory(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
+/// Reads a regular file (never through a symlink) of at most `maximum` bytes.
 fn small_file(path: &Path, maximum: u64) -> Option<Vec<u8>> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() > maximum {
@@ -228,6 +294,8 @@ fn small_file(path: &Path, maximum: u64) -> Option<Vec<u8>> {
     (bytes.len() as u64 <= maximum).then_some(bytes)
 }
 
+/// Lists the committed uploads whose metadata matches their directory name and whose image
+/// files are present, sorted by ID.
 fn catalog(directory: &Path) -> Vec<Wallpaper> {
     if !real_directory(directory) {
         return vec![];
@@ -275,6 +343,9 @@ fn catalog(directory: &Path) -> Vec<Wallpaper> {
     result
 }
 
+/// Removes one upload's directory.
+///
+/// The selected background is refused, as is any name that is not a generated upload ID.
 fn delete_wallpaper(directory: &Path, id: &str, selected: &str) -> Result<(), String> {
     if id == selected || !valid_id(id) || !real_directory(directory) {
         return Err("Background cannot be deleted".into());
@@ -402,7 +473,10 @@ fn sync_directory(directory: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Root Home creates files readable by the same app user after takeover is disabled.
+/// Creates a private directory, or accepts an existing real one, owned like its parent.
+///
+/// The owner matters when Astro runs as root Home: the app user must still read the files
+/// after Home takeover is disabled.
 fn create_directory(path: &Path) -> Result<(), String> {
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
@@ -422,8 +496,10 @@ fn create_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Gives a new file or directory the owner of its parent when running as root on the TV.
 fn inherit_owner(path: &Path) -> Result<(), String> {
     #[cfg(all(feature = "webos", unix))]
+    // SAFETY: geteuid takes no arguments, cannot fail and has no preconditions.
     if unsafe { libc::geteuid() } == 0 {
         use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
         let parent = path.parent().ok_or("Missing wallpaper storage parent")?;
@@ -437,6 +513,7 @@ fn inherit_owner(path: &Path) -> Result<(), String> {
             .custom_flags(libc::O_NOFOLLOW)
             .open(path)
             .map_err(|e| e.to_string())?;
+        // SAFETY: `file` owns the descriptor and stays open for the call; fchown only reads it.
         if unsafe { libc::fchown(file.as_raw_fd(), owner.uid(), owner.gid()) } != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
@@ -445,6 +522,9 @@ fn inherit_owner(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Creates a new private file with `bytes`, synced to disk and owned like its parent.
+///
+/// Fails if the path already exists, so a planted file or symlink is never written through.
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -460,6 +540,14 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     inherit_owner(path)
 }
 
+/// Decodes an upload into an opaque 1920 × 1080 RGB image.
+///
+/// Only JPEG, PNG and WebP are accepted, at exactly 1920 × 1080 after EXIF orientation, with a
+/// 32 MiB decoder allocation limit. Re-encoding later strips all source metadata.
+///
+/// # Errors
+///
+/// Returns a message for the owner when the format, size or content is not accepted.
 fn decode(bytes: &[u8]) -> Result<image::RgbImage, String> {
     if bytes.len() > MAX_BODY {
         return Err("Image exceeds 12 MiB".into());
@@ -506,6 +594,7 @@ fn decode(bytes: &[u8]) -> Result<image::RgbImage, String> {
     }))
 }
 
+/// Applies the readability shading of the bundled wallpapers in place.
 fn shade(image: &mut image::RgbImage) {
     // Same base, image opacity and gradients as tools/assets.mjs. Only source-specific
     // saturation adjustments are omitted for owner-supplied photographs.
@@ -566,6 +655,7 @@ fn thumbnail(image: &image::RgbImage) -> image::RgbImage {
     })
 }
 
+/// Encodes an image as JPEG at `quality` (1-100).
 fn jpeg(image: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality)
@@ -747,6 +837,12 @@ fn update(
     }
 }
 
+/// Runs the wallpaper worker until [`STOP`] or until the SDL side hangs up.
+///
+/// Between sessions it waits for commands. While a session is desired it serves the upload
+/// page and accepts uploads, polling non-blocking sockets so commands from the TV still apply.
+/// A session ends when the dialog closes, after [`SESSION_TIME`] or after
+/// [`SESSION_REQUEST_LIMIT`] requests; an upload still undecided then is deleted.
 fn worker(
     directory: &Path,
     desired: &AtomicU64,
@@ -904,6 +1000,7 @@ fn worker(
     }
 }
 
+/// Reads a request head with the upload body limit and its owner-facing message.
 fn request(
     reader: &mut impl Read,
     valid: &impl Fn() -> bool,
@@ -921,9 +1018,18 @@ fn reject(stream: &mut TcpStream, error: &str) -> Result<(), String> {
     error_response(stream, "400 Bad Request", error)
 }
 
+/// Answers one request: the upload page and its assets, or an image upload.
+///
 /// `received` holds bytes already read from `stream`: the complete headers and possibly the
-/// start of the body. The body gets its own REQUEST_TIME from here. `awaiting` is whether an
+/// start of the body. The body gets its own [`REQUEST_TIME`] from here. `awaiting` is whether an
 /// earlier upload still waits for the owner's decision; an accepted upload is returned staged.
+/// Uploads must be a `POST` to `/{token}/upload` with the token repeated in `X-Astro-Upload`,
+/// which a cross-site form cannot send.
+///
+/// # Errors
+///
+/// Returns an error when the socket fails or the session ends mid-request; refused requests
+/// are answered with an HTTP error and return `Ok(None)`.
 fn serve(
     stream: &mut TcpStream,
     received: &[u8],
