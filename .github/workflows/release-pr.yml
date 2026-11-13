@@ -22,9 +22,9 @@ jobs:
       pull-requests: write
       actions: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '24'
           cache: pnpm
@@ -32,7 +32,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Create or update the version PR
         id: changesets
-        uses: changesets/action@v2
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2
         with:
           version-script: pnpm version:release
           pr-title: Version Packages
@@ -41,7 +41,7 @@ jobs:
           push-git-tags: false
       - name: Describe the release and run its CI checks
         if: steps.changesets.outputs.pr-number != ''
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           RELEASE_PR_NUMBER: ${{ steps.changesets.outputs.pr-number }}
         with:
