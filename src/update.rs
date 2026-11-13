@@ -1,9 +1,8 @@
 pub mod discovery {
-    use serde::{Deserialize, Serialize};
-    use std::{io::Read, sync::mpsc, thread, time::Duration};
+    use serde::Serialize;
+    use std::{sync::mpsc, thread, time::Duration};
 
-    use super::FEED;
-    const LIMIT: usize = 256 * 1024;
+    use super::{CURRENT, FEED};
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
     #[serde(rename_all = "snake_case")]
@@ -30,16 +29,11 @@ pub mod discovery {
             let (sender, receiver) = mpsc::channel();
             let (command_tx, command_rx) = mpsc::channel();
             thread::spawn(move || {
-                let agent = ureq::Agent::config_builder()
-                    .timeout_global(Some(Duration::from_secs(10)))
-                    .max_redirects(5)
-                    .https_only(true)
-                    .proxy(None)
-                    .build()
-                    .new_agent();
+                let agent = super::agent(Duration::from_secs(10));
                 while command_rx.recv().is_ok() {
                     let result = if enabled {
-                        fetch(&agent, FEED, env!("CARGO_PKG_VERSION"))
+                        super::offered(&agent, FEED, CURRENT)
+                            .map(|release| release.map(|release| release.version))
                     } else {
                         Err(
                             "Public release checks are disabled for scripted/simulated previews"
@@ -67,41 +61,6 @@ pub mod discovery {
         }
     }
 
-    fn fetch(agent: &ureq::Agent, url: &str, current: &str) -> Result<Option<String>, String> {
-        let mut response = agent
-            .get(url)
-            .header("Accept", "application/json")
-            .header("User-Agent", "AstroNative")
-            .call()
-            .map_err(|error| error.to_string())?;
-        let mut bytes = Vec::new();
-        response
-            .body_mut()
-            .as_reader()
-            .take(LIMIT as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        if bytes.len() > LIMIT {
-            return Err("Release feed is too large".into());
-        }
-        newer_version(&bytes, current)
-    }
-
-    #[derive(Deserialize)]
-    struct Feed {
-        packages: Vec<Package>,
-    }
-    #[derive(Deserialize)]
-    struct Package {
-        id: String,
-        manifest: Manifest,
-    }
-    #[derive(Deserialize)]
-    struct Manifest {
-        id: String,
-        version: String,
-    }
-
     /// Shipping releases use strict three-part numeric versions, never lexical comparison.
     pub(super) fn version(value: &str) -> Option<[u64; 3]> {
         if value.len() > 32 {
@@ -124,23 +83,6 @@ pub mod discovery {
         Some(result)
     }
 
-    pub fn newer_version(bytes: &[u8], current: &str) -> Result<Option<String>, String> {
-        let current = version(current).ok_or("Invalid installed version")?;
-        let feed: Feed = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
-        let mut matching = feed
-            .packages
-            .into_iter()
-            .filter(|package| package.id == "com.danielcanoh22.astro");
-        let package = matching
-            .next()
-            .ok_or("Astro is missing from the release feed")?;
-        if matching.next().is_some() || package.manifest.id != "com.danielcanoh22.astro" {
-            return Err("Ambiguous Astro release metadata".into());
-        }
-        let latest = version(&package.manifest.version).ok_or("Invalid release version")?;
-        Ok((latest > current).then_some(package.manifest.version))
-    }
-
     pub fn validate_preview(latest: &str, current: &str) -> Result<(), String> {
         let current = version(current).ok_or("Invalid installed version")?;
         let latest = version(latest).ok_or("Update preview requires a version such as 99.0.0")?;
@@ -154,7 +96,12 @@ pub mod discovery {
 
     #[cfg(test)]
     mod tests {
+        use super::super::{FEED_LIMIT, RELEASES, newer_release, offered};
         use super::*;
+        /// The version the update notice announces for a downloaded feed.
+        fn newer_version(bytes: &[u8], current: &str) -> Result<Option<String>, String> {
+            newer_release(bytes, current).map(|release| release.map(|release| release.version))
+        }
         #[test]
         fn interactive_checks_are_live_but_scripts_and_simulations_stay_offline() {
             assert!(public_checks_enabled(false, false));
@@ -171,7 +118,32 @@ pub mod discovery {
             }
         }
         fn feed(value: &str) -> Vec<u8> {
-            serde_json::to_vec(&serde_json::json!({"packages":[{"id":"com.danielcanoh22.astro","manifest":{"id":"com.danielcanoh22.astro","version":value}}]})).unwrap()
+            serde_json::to_vec(
+                &serde_json::json!({"packages":[{"id":"com.danielcanoh22.astro","manifest":{
+                    "id":"com.danielcanoh22.astro","version":value,
+                    "ipkUrl":format!("{RELEASES}v{value}/com.danielcanoh22.astro_{value}_arm.ipk"),
+                    "ipkHash":{"sha256":"a".repeat(64)},"ipkSize":1000
+                }}]}),
+            )
+            .unwrap()
+        }
+        #[test]
+        fn never_announces_a_release_the_installer_would_refuse() {
+            let valid: serde_json::Value = serde_json::from_slice(&feed("9.0.0")).unwrap();
+            assert_eq!(
+                newer_version(&feed("9.0.0"), "2.13.0").unwrap().as_deref(),
+                Some("9.0.0")
+            );
+            for (key, value) in [
+                ("ipkHash", serde_json::json!({"sha256": "abc"})),
+                ("ipkUrl", serde_json::json!("https://example.com/x_arm.ipk")),
+                ("ipkSize", serde_json::json!(0)),
+            ] {
+                let mut bad = valid.clone();
+                bad["packages"][0]["manifest"][key] = value;
+                let bytes = serde_json::to_vec(&bad).unwrap();
+                assert!(newer_version(&bytes, "2.13.0").is_err(), "{bad}");
+            }
         }
         #[test]
         fn compares_numeric_versions_and_never_offers_equal_or_older_releases() {
@@ -226,11 +198,14 @@ pub mod discovery {
         }
         #[test]
         fn local_http_checks_bound_responses_and_report_errors() {
-            use std::{io::Write, net::TcpListener};
+            use std::{
+                io::{Read, Write},
+                net::TcpListener,
+            };
             for (status, body, valid) in [
                 ("200 OK", feed("9.0.0"), true),
                 ("503 Unavailable", vec![], false),
-                ("200 OK", vec![b' '; LIMIT + 1], false),
+                ("200 OK", vec![b' '; FEED_LIMIT as usize + 1], false),
                 ("200 OK", b"invalid".to_vec(), false),
             ] {
                 let server = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -252,7 +227,7 @@ pub mod discovery {
                     .build()
                     .new_agent();
                 assert_eq!(
-                    fetch(&agent, &format!("http://{address}/repo.json"), "2.13.0").is_ok(),
+                    offered(&agent, &format!("http://{address}/repo.json"), "2.13.0").is_ok(),
                     valid
                 );
                 worker.join().unwrap();
@@ -404,12 +379,14 @@ pub enum Response {
     Installing(String),
 }
 
-fn agent() -> ureq::Agent {
+/// The HTTPS-only client for the release feed and its packages. Only the overall deadline
+/// differs: a short one for the update notice, a long one for package downloads.
+fn agent(global: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         // GitHub answers release downloads with a redirect to its asset storage.
         .max_redirects(5)
         .https_only(true)
-        .timeout_global(Some(Duration::from_secs(180)))
+        .timeout_global(Some(global))
         .timeout_connect(Some(Duration::from_secs(10)))
         .timeout_recv_body(Some(Duration::from_secs(60)))
         .proxy(None)
@@ -417,9 +394,12 @@ fn agent() -> ureq::Agent {
         .new_agent()
 }
 
-fn check(agent: &ureq::Agent) -> Result<Option<Release>, String> {
+/// Downloads the release feed at `url` and returns its Astro release if it is newer than
+/// `current`. The update notice and the installer both use it, so the notice never offers
+/// a release the installer would refuse.
+fn offered(agent: &ureq::Agent, url: &str, current: &str) -> Result<Option<Release>, String> {
     let mut response = agent
-        .get(FEED)
+        .get(url)
         .header("User-Agent", "AstroNative")
         .call()
         .map_err(|_| "GitHub is unavailable. Try again shortly.")?;
@@ -433,10 +413,14 @@ fn check(agent: &ureq::Agent) -> Result<Option<Release>, String> {
     if bytes.len() as u64 > FEED_LIMIT {
         return Err("The release feed is too large".into());
     }
+    newer_release(&bytes, current)
+}
+
+fn newer_release(bytes: &[u8], current: &str) -> Result<Option<Release>, String> {
     let feed: Value =
-        serde_json::from_slice(&bytes).map_err(|_| "The release feed could not be read")?;
+        serde_json::from_slice(bytes).map_err(|_| "The release feed could not be read")?;
     let release = parse_feed(&feed)?;
-    Ok(newer(CURRENT, &release.version).then_some(release))
+    Ok(newer(current, &release.version).then_some(release))
 }
 
 fn download(
@@ -500,7 +484,7 @@ impl Worker {
         thread::Builder::new()
             .name("astro-update".into())
             .spawn(move || {
-                let agent = agent();
+                let agent = agent(Duration::from_secs(180));
                 for request in incoming {
                     let response = match request {
                         Request::Recover if enabled => {
@@ -525,8 +509,8 @@ impl Worker {
                             let result = (|| {
                                 // Re-read authenticated release metadata at install time, but
                                 // never silently install a version the user was not offered.
-                                let release =
-                                    check(&agent)?.ok_or("No newer release is available")?;
+                                let release = offered(&agent, FEED, CURRENT)?
+                                    .ok_or("No newer release is available")?;
                                 if release.version != version {
                                     return Err(
                                         "The release changed. Check for updates again.".into()
