@@ -5,6 +5,7 @@ use crate::companion::{
     PENDING_LIMIT, Pending, Request, carries_token, error_response, listen, local_peer,
     random_token, read_exact, redirect_to_page, response, session,
 };
+use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -33,6 +34,9 @@ const STOP: u64 = u64::MAX;
 /// Only one upload awaits the owner's decision on the TV at a time.
 const AWAITING_DECISION: &str = "Save or discard the previous image on your TV first";
 const GALLERY_FULL: &str = "The wallpaper gallery is full (20 images)";
+/// LG's launch splash for an upload, which the TV helper copies into the package.
+const SPLASH: &str = "splash.png";
+const SPLASH_PARTIAL: &str = ".splash.png.new";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Wallpaper {
@@ -90,6 +94,8 @@ pub enum Event {
     Saved(String, Result<(), String>),
     /// An upload awaiting a decision was deleted: discarded, or its session ended.
     Discarded(String),
+    /// The upload's launch splash image is ready for the TV helper, or could not be made.
+    Splash(String, Result<(), String>),
 }
 
 enum Command {
@@ -97,6 +103,7 @@ enum Command {
     Delete { id: String, selected: String },
     Save(String),
     Discard(String),
+    Splash(Option<String>),
 }
 
 pub struct Service {
@@ -169,6 +176,12 @@ impl Service {
     /// Deletes the upload awaiting a decision (the owner chose Discard on the TV).
     pub fn discard_upload(&self, id: String) {
         let _ = self.wake.send(Command::Discard(id));
+    }
+
+    /// Prepares the launch splash image of the upload the splash now shows, reported by
+    /// `Event::Splash`, and removes every other upload's; `None` (a bundled splash) removes all.
+    pub fn prepare_splash(&self, upload: Option<String>) {
+        let _ = self.wake.send(Command::Splash(upload));
     }
 }
 
@@ -273,6 +286,62 @@ fn delete_wallpaper(directory: &Path, id: &str, selected: &str) -> Result<(), St
     // Only the strictly validated app-owned directory is removed; symlink
     // entries within it are unlinked, never followed by remove_dir_all.
     fs::remove_dir_all(path).map_err(|error| error.to_string())
+}
+
+/// Leaves at most one launch splash image in the gallery: `keep`'s, created from its shaded
+/// wallpaper (like the bundled splashes) when missing. Every other upload loses its splash, so a
+/// background the splash no longer shows keeps nothing of it behind; `None` (a bundled splash)
+/// removes them all. Symlinks are unlinked, never followed.
+fn prepare_splash(directory: &Path, keep: Option<&str>) -> Result<(), String> {
+    if real_directory(directory)
+        && let Ok(entries) = fs::read_dir(directory)
+    {
+        let uploads = entries.flatten().filter_map(|entry| {
+            let id = entry.file_name().to_string_lossy().into_owned();
+            valid_id(&id).then(|| (entry.path(), id))
+        });
+        // Bounded like the catalog scan.
+        for (path, id) in uploads.take(128) {
+            if Some(id.as_str()) != keep && real_directory(&path) {
+                let _ = fs::remove_file(path.join(SPLASH));
+                let _ = fs::remove_file(path.join(SPLASH_PARTIAL));
+            }
+        }
+    }
+    let Some(id) = keep else {
+        return Ok(());
+    };
+    let folder = directory.join(id);
+    if !valid_id(id) || !real_directory(directory) || !real_directory(&folder) {
+        return Err("Splash background unavailable".into());
+    }
+    if fs::symlink_metadata(folder.join(SPLASH)).is_ok_and(|metadata| metadata.is_file()) {
+        return Ok(());
+    }
+    let wallpaper = small_file(&folder.join("wallpaper.jpg"), MAX_BODY as u64)
+        .ok_or("Splash wallpaper unavailable")?;
+    let image = decode(&wallpaper)?;
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new_with_quality(
+        &mut png,
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::Adaptive,
+    )
+    .write_image(
+        image.as_raw(),
+        image.width(),
+        image.height(),
+        image::ExtendedColorType::Rgb8,
+    )
+    .map_err(|e| e.to_string())?;
+    let partial = folder.join(SPLASH_PARTIAL);
+    let _ = fs::remove_file(&partial);
+    let written = write_new(&partial, &png)
+        .and_then(|_| fs::rename(&partial, folder.join(SPLASH)).map_err(|e| e.to_string()));
+    if written.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    written
 }
 
 /// Removes `.custom-<id>` staging entries an interrupted upload left behind (power loss or a
@@ -662,6 +731,18 @@ fn update(
             };
             remove_staging(&staged.directory);
             sender.send(Event::Discarded(id)).is_ok()
+        }
+        Command::Splash(upload) => {
+            let result = prepare_splash(directory, upload.as_deref());
+            match upload {
+                Some(id) => sender.send(Event::Splash(id, result)).is_ok(),
+                None => {
+                    if let Err(error) = result {
+                        eprintln!("Astro splash: {error}");
+                    }
+                    true
+                }
+            }
         }
     }
 }

@@ -1044,20 +1044,26 @@ impl State {
         )
     }
 
-    pub fn wallpaper_deleted(&mut self, id: String, result: Result<(), String>) {
+    pub fn wallpaper_deleted(&mut self, id: String, result: Result<(), String>) -> Vec<Effect> {
         if self.deleting_wallpaper.as_deref() != Some(&id) {
-            return;
+            return vec![];
         }
         self.deleting_wallpaper = None;
         if let Err(error) = result {
             eprintln!("Astro background deletion: {error}");
             self.notify(self.preferences.language.t("deleteBackgroundError"));
-            return;
+            return vec![];
         }
-        self.finish_background_delete(&id);
+        if self.finish_background_delete(&id) {
+            vec![Effect::Save]
+        } else {
+            vec![]
+        }
     }
 
-    fn finish_background_delete(&mut self, id: &str) {
+    /// Removes a deleted background from the gallery; true when it was the splash, which then
+    /// follows the current background and needs a save to update LG's launch splash.
+    fn finish_background_delete(&mut self, id: &str) -> bool {
         let index = self
             .background_ids()
             .position(|known| known == id)
@@ -1081,6 +1087,11 @@ impl State {
         }
         self.pressed = None;
         self.notify(self.preferences.language.t("backgroundDeleted"));
+        let splash = self.preferences.splash_background.as_deref() == Some(id);
+        if splash {
+            self.preferences.splash_background = None;
+        }
+        splash
     }
 
     /// The open upload dialog's session staged an upload: preview it until Save or Discard.
@@ -2226,11 +2237,7 @@ impl State {
                         Some((self.preferences.background.clone(), Instant::now()));
                     self.background_fade = BACKGROUND_FADE;
                 }
-                self.preferences.splash_background = Some(if crate::wallpapers::valid_id(&id) {
-                    self.preferences.splash_background().to_owned()
-                } else {
-                    id.clone()
-                });
+                self.preferences.splash_background = Some(id.clone());
                 self.preferences.background = id;
                 self.preferences.wallpaper_changed = unix_now();
                 self.back();

@@ -283,6 +283,9 @@ save it on the TV, and an image not saved before the dialog closes is deleted.
 
 The upload link works only while its TV dialog is open and focused.
 
+The background you choose, bundled or uploaded, is also the LG splash shown while Astro opens.
+Deleting it leaves nothing behind: the splash moves to your current background.
+
 Enable **Rotation** beside **Upload** to cycle through backgrounds on each Astro restart and every
 15 minutes with a slow cross-fade. Rotation is off by default and leaves your manually chosen
 LG splash unchanged.

@@ -308,8 +308,12 @@ directory it was created in). Preferences retain only
 the generated selected ID. Invalid metadata and entries with missing files are skipped; an unavailable selected image
 renders the bundled default without destroying the saved selection. These files survive app
 updates, and normal/takeover launches using the shared preferences location use the same gallery.
-Custom images are not used as LG's launch splash: runtime splash updates are skipped for them,
-and takeover boot staging uses a bundled fallback.
+An upload chosen by hand also becomes LG's launch splash. On TV runs that update the splash, the
+wallpaper worker then writes a 1920×1080 PNG of its shaded wallpaper to `custom-<id>/splash.png`
+and the TV helper copies it into the package (see [Splash images](#splash-images)). At most one
+upload holds a splash image: choosing another background removes it. Deleting the background the
+splash shows moves the splash to the current background; deleting an upload removes its folder,
+splash image included, and preferences keep no reference to it.
 
 The fixed actions are **Upload**, **Gradient**, and **Rotation**, from left to right.
 **Gradient** toggles readability shading immediately without moving the controls. Its
@@ -379,7 +383,8 @@ checks do not establish webOS jail networking permissions or TV/browser behavior
 wallpapers. `tools/package.mjs` ships them under `splash/` plus `splash.png` (the default background),
 which `appinfo.json` names as `splashBackground`, with `bgColor` set to the UI base colour so the
 frame between the splash and the first draw is not black. On a normal TV launch and after successful
-preference saves, the native platform worker passes the loaded background to the native
+preference saves (once the wallpaper worker has prepared an upload's splash image), the native
+platform worker passes the manually chosen background to the native
 `astro-helper sync-splash` command through Homebrew Channel's elevated `exec` service. It atomically updates
 the installed `splash.png` and the matching enabled Home stage, skipping identical images. Desktop
 and isolated `--preferences` / `--test-extra-apps` runs do not update launch splashes. The first launch

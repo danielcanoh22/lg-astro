@@ -440,8 +440,14 @@ impl Platform {
         let _ = self.sender.send(request);
     }
 
+    /// Whether this run updates LG's launch splash: TV runs with the installed package only.
+    pub fn updates_splash(&self) -> bool {
+        self.webos && self.splash_enabled
+    }
+
+    /// An upload's splash image must already be prepared by the wallpaper worker.
     pub fn sync_splash(&self, background: &str) {
-        if self.webos && self.splash_enabled && !crate::wallpapers::valid_id(background) {
+        if self.updates_splash() {
             self.send(Request::SyncSplash(background.to_owned()));
         }
     }
