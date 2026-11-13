@@ -908,6 +908,11 @@ and `pnpm test:release` covers version synchronization and the publish gate, inc
 Changesets version command in an isolated fixture. Host CI cannot prove hardware compatibility,
 small-text quality or presentation frame rate.
 
+Every workflow action is pinned to a full commit SHA, with its tag in a trailing comment
+(`actions/checkout@<sha> # v7`), so a moved or replaced tag cannot change what builds or
+publishes the IPK. Update an action by resolving the new tag to its commit
+(`gh api repos/<owner>/<action>/commits/<tag> -q .sha`) and replacing both.
+
 ### PR test IPKs
 
 `.github/workflows/pr-test-ipk.yml` runs **PR Test IPK** whenever a PR is opened, reopened or

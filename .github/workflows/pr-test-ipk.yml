@@ -23,19 +23,19 @@ jobs:
     steps:
       # Keep this job read-only, without secrets, persisted credentials, or shared build
       # caches, even though only this repository's own branches reach it.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
           allow-unsafe-pr-checkout: true
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '24'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - uses: dtolnay/rust-toolchain@1.93.0
+      - uses: dtolnay/rust-toolchain@48b64ba94bc1a6fe819fd9afc0799a7647efdc65 # 1.93.0
         with:
           targets: armv7-unknown-linux-gnueabi
       - name: Install asset dependencies
@@ -54,7 +54,7 @@ jobs:
           pnpm build
           node tools/package.mjs
       - name: Upload test IPK and checksum
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: astro-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           if-no-files-found: error
@@ -77,7 +77,7 @@ jobs:
       # Never check out or execute PR code in this write-enabled job. Obtain artifact
       # metadata from GitHub, rather than trusting files or outputs from the build.
       - name: Create or update the PR comment
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           PR_NUMBER: ${{ github.event.pull_request.number }}

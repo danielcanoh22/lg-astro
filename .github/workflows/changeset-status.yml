@@ -22,12 +22,12 @@ jobs:
       comment-body: ${{ steps.status.outputs.comment-body }}
     steps:
       # Read the PR with the bundled Changesets action, without running PR code or installing dependencies.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
       - name: Generate changeset status
         id: status
-        uses: changesets/action/pr-status@v2
+        uses: changesets/action/pr-status@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2
 
   comment:
     name: Update changeset comment
@@ -38,7 +38,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Create or update the PR comment
-        uses: changesets/action/pr-comment@v2
+        uses: changesets/action/pr-comment@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2
         with:
           update-id: astro-changeset-status
           body: |
