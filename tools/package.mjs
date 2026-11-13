@@ -1,3 +1,12 @@
+/**
+ * Stages and builds the TV package (`pnpm run package`, after `pnpm assets` and `pnpm build`;
+ * `--4k` keeps the `@2x` wallpapers).
+ *
+ * Checks the cross-built ARM binaries and generated vector meshes, stages them in
+ * `.build/package` with assets, splash images, `home.sh`, licenses and the SDL-webOS runtime
+ * (or ARM libraries from `WEBOS_NATIVE_LIBS`), runs `ares-package`, then verifies and normalizes
+ * the IPK with `ipk.mjs`. Writes `dist/<id>_<version>_arm.ipk` and `dist/sha256sums`.
+ */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -77,7 +86,7 @@ await fs.cp(path.join(out, 'assets'), path.join(stage, 'assets'), {
   recursive: true,
   filter: (source) =>
     path.basename(source) !== '.DS_Store' &&
-    // Protect direct packaging calls that reuse an older generated asset cache.
+    // Skip dumps an older asset cache may still hold; splash images are staged separately below.
     !['app-icons', 'icons.json', 'colors.json', 'splash'].includes(path.basename(source)) &&
     (highResolution || !source.endsWith('@2x.jpg')) &&
     !(
@@ -108,6 +117,7 @@ for (const file of ['home.sh', 'astro-helper']) {
 await fs.copyFile(path.join(root, 'license'), path.join(stage, 'LICENSE'));
 await fs.copyFile(path.join(root, 'assets.md'), path.join(stage, 'ASSETS.md'));
 await fs.mkdir(path.join(stage, 'lib'));
+/** Copies an ARM soft-float shared library into the package; an SDL must be SDL-webOS. */
 async function copyLibrary(directory, name) {
   const library = await fs.readFile(path.join(directory, name));
   if (

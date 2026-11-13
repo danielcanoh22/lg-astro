@@ -1,3 +1,13 @@
+/**
+ * Generates the native app's assets into `.build/assets` (`pnpm assets`; `--4k` adds `@2x`
+ * wallpapers for the experimental 4K mode).
+ *
+ * Offline and deterministic from the sources in `assets/`: static font instances and metrics
+ * (via `font-weights.py`), shaded and plain wallpapers, thumbnails, 1080p splash PNGs, brand card
+ * surfaces, compiled vector artwork (`vector-assets.mjs`) and the app icons. Needs
+ * `woff2_decompress` and Python/fontTools from `nix develop`. `tools/package.mjs` packages the
+ * result.
+ */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -56,7 +66,7 @@ for (const file of await fs.readdir(path.join(source, 'wallpapers'))) {
   for (const scale of highResolution ? [1, 2] : [1]) {
     const width = 1920 * scale;
     const height = 1080 * scale;
-    // Match background-size:cover and each CSS background-position exactly.
+    // Cover the frame, centred horizontally, at each photo's chosen vertical focus.
     const photo = await sharp(input, { density: 72 * scale })
       .resize(width, height, { fit: 'outside' })
       .png()

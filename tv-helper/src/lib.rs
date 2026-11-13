@@ -1,13 +1,37 @@
-//! Privileged, bounded TV operations. Shared with Astro for its already-root Home process.
-//! No SDL, image decoding, browser engine, or persistent daemon is needed by the helper.
+//! Privileged, bounded TV operations for Astro: the library behind the `astro-helper` executable.
+//!
+//! The helper does the few things Astro cannot do from its app jail: read other apps' icons,
+//! write the package's splash image, uninstall apps, register Astro as a TV input and manage the
+//! optional Home integration. It runs as root in two ways:
+//!
+//! - As the `astro-helper` binary, executed by Homebrew Channel's root exec service with
+//!   individually quoted arguments, or by `tv/home.sh` (root over SSH, the boot hook, or the
+//!   fallback systemd unit).
+//! - In process, when Astro already runs as root as Home: [`home::record_start`],
+//!   [`home::record_healthy`] and [`files::sync_splash`] are called directly.
+//!
+//! Either way it acts with root privileges on requests an unprivileged app could have shaped, so
+//! it never trusts caller paths. IDs are checked against fixed grammars ([`valid_app_id`],
+//! [`valid_background`], [`valid_upload`]); files are read only below fixed roots, through
+//! [`open_within`] or no-follow and owner checks; and every read, child process and reply stream
+//! is bounded in size and time. All system access goes through [`system::System`], so tests run
+//! the same code against a fixture root.
+//!
+//! No SDL, image decoding, browser engine or persistent daemon is involved.
 pub mod files;
 pub mod home;
 pub mod input;
 pub mod system;
 pub mod uninstall;
 
+/// Result of a helper operation. Errors are human-readable messages for the user or the log.
 pub type Result<T> = std::result::Result<T, String>;
+/// Astro's own app ID.
 pub const APP: &str = "com.danielcanoh22.astro";
+/// Directories where webOS installs applications, one subdirectory per app ID.
+///
+/// Developer-mode installs, Astro included, live under the first; the others hold apps from the
+/// store or the firmware. Files read on a caller's behalf must resolve below one of these.
 pub const ROOTS: [&str; 5] = [
     "/media/developer/apps/usr/palm/applications",
     "/media/cryptofs/apps/usr/palm/applications",
@@ -15,6 +39,10 @@ pub const ROOTS: [&str; 5] = [
     "/media/system/apps/usr/palm/applications",
     "/mnt/otncabi/usr/palm/applications",
 ];
+/// Whether `id` has the shape of a webOS app ID: at most 128 bytes of ASCII alphanumeric
+/// segments joined by `.`, `_` or `-`, none of them empty.
+///
+/// Such an ID contains no `/` and cannot be `.` or `..`, so it is safe to join onto a root.
 pub fn valid_app_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
@@ -22,7 +50,8 @@ pub fn valid_app_id(id: &str) -> bool {
             .split(['.', '_', '-'])
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
-/// LG and Palm system namespaces: never removable and hidden from the app list unless visible.
+/// Whether `id` is in an LG or Palm system namespace. Such apps are never removable and are
+/// hidden from Astro's app list unless their manifest marks them visible.
 pub fn vendor_app(id: &str) -> bool {
     ["com.webos.", "com.palm.", "com.lge."]
         .iter()
@@ -43,6 +72,10 @@ pub fn removable(id: &str) -> bool {
 /// Opens `path` only if, with every symlink resolved, it is a regular file inside one of
 /// `roots`. A path is otherwise only checked as text, so a link inside an application's
 /// directory could name any file on the TV, or a FIFO or device that stalls a reader.
+///
+/// Roots that do not exist are ignored. On Linux the opened descriptor is checked again through
+/// `/proc/self/fd`, so a symlink swapped in between the check and the open is caught as well.
+/// Returns `None` for anything that fails a check or cannot be opened.
 pub fn open_within<P: AsRef<std::path::Path>>(
     path: &std::path::Path,
     roots: impl IntoIterator<Item = P>,
@@ -72,6 +105,8 @@ pub fn open_within<P: AsRef<std::path::Path>>(
     }
     Some(file)
 }
+/// Whether `id` can name a packaged background: 1 to 32 lowercase letters, digits or `-`, so
+/// `splash/{id}.png` stays inside the package directory.
 pub fn valid_background(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 32
@@ -89,6 +124,11 @@ pub fn valid_upload(id: &str) -> bool {
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
 }
+/// Returns an LS2 reply unchanged when it reports `"returnValue": true`.
+///
+/// # Errors
+///
+/// Any other reply, including one without `returnValue`, becomes an error that quotes it.
 pub fn accepted(reply: serde_json::Value) -> Result<serde_json::Value> {
     if reply
         .get("returnValue")

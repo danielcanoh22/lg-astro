@@ -1,5 +1,20 @@
 #!/bin/sh
-# Optional native Home replacement. The webosbrew hook has no .sh suffix.
+# Enables, applies and removes the optional Astro Home integration (webOS 25 only): a root-side
+# wrapper that confirms, locks and then runs `astro-helper home COMMAND`.
+#
+# Usage: home.sh enable [APP_DIR] | disable | restore | status
+#        home.sh apply | boot | fallback    (run by the system, see below)
+#
+# Always runs as root:
+#   - by the user over SSH; enable lists its changes and asks for y/n first;
+#   - as the Homebrew Channel boot hook /var/lib/webosbrew/init.d/64-astro-home, a symlink
+#     without a .sh suffix run with no argument (boot), which applies in the background;
+#   - by Astro, in the astro-home-fallback systemd unit, after repeated failed starts as Home
+#     (fallback: LG Home until the next boot).
+#
+# Side effects: creates the root-owned /var/lib/astro-home (saved state, copied scripts, staged
+# app, lock, boot.log), bind-mounts the staged app over LG Home and installs or removes the
+# boot hook. Changes are serialized by a flock on /var/lib/astro-home/lock.
 STATE=/var/lib/astro-home
 # The cold-boot hook is a symlink to the copied $STATE/home.sh: find astro-helper beside its target.
 SCRIPT=$0
@@ -10,7 +25,6 @@ fi
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$SCRIPT")" && pwd) || exit 1
 COMMAND=${1:-boot}
 case "$COMMAND" in
-  # fallback: LG Home until the next boot, started by Astro after repeated failed starts.
   enable|disable|restore|status|apply|boot|fallback) ;;
   *) printf '%s\n' 'Usage: home.sh enable [APP_DIR] | disable | restore | status' >&2; exit 1 ;;
 esac
@@ -45,6 +59,7 @@ if [ "$COMMAND" = enable ]; then
     esac
   done
 fi
+# Root writes and executes from $STATE: refuse a symlink or a directory another user owns.
 [ ! -L "$STATE" ] || exit 1
 if [ ! -d "$STATE" ]; then mkdir -m 755 "$STATE" || exit 1; fi
 [ "$(stat -c %u "$STATE")" = 0 ] || exit 1

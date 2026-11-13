@@ -1,4 +1,12 @@
-// SDL in the NDK is for linking, not TV display: its Wayland backend is disabled.
+/**
+ * Prepares the SDL runtime Astro ships: the pinned SDL-webOS release, with the standard SDL ABI
+ * and a real webOS/Wayland video backend (`pnpm runtime`; also used by `build-webos.sh` and
+ * `package.mjs`).
+ *
+ * The SDK's own SDL is only good for linking: its video backend is a dummy. This downloads the
+ * archive into `.build/sdl-webos` when missing, verifies archive and library checksums, and
+ * writes a relocatable `pkgconfig/sdl2.pc` for the cross build.
+ */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -13,6 +21,10 @@ const archiveHash = '4ad566453d113bdd9ee96878176b97d28d9fa70503a62d83d55a351545a
 const libraryHash = 'f564f7da624cec47168300d017f3ec822f41b5096f0ce1c96873eecd8614d446';
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
+/**
+ * Throws unless `bytes` is an ARM soft-float shared library built with SDL's Wayland and webOS
+ * backends, so the SDK's display-less SDL can never be packaged.
+ */
 export function verifyWebosSdl(bytes) {
   if (
     bytes.length < 52 ||
@@ -34,6 +46,11 @@ export function verifyWebosSdl(bytes) {
   }
 }
 
+/**
+ * Downloads (when missing), verifies and extracts SDL-webOS, then writes its pkg-config file.
+ *
+ * @returns {Promise<string>} The runtime directory, with the library in `lib/`.
+ */
 export async function prepareWebosRuntime() {
   await fs.mkdir(directory, { recursive: true });
   const archive = path.join(directory, filename);

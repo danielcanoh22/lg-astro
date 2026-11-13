@@ -1,3 +1,11 @@
+/**
+ * Compiles the standalone SVG logos and UI icons into `.lvec` triangle meshes
+ * (`pnpm assets:vector`; also called by `assets.mjs`).
+ *
+ * Writes a job manifest to `.build/vector-sources`, runs the host compiler in
+ * `tools/vector-assets` with Cargo, and lists the outputs in `.build/assets/vector-artwork.json`,
+ * which packaging checks. Needs a Rust toolchain.
+ */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -7,6 +15,10 @@ const root = path.resolve(import.meta.dirname, '..');
 const out = path.join(root, '.build/assets');
 const sources = path.join(root, '.build/vector-sources');
 
+/**
+ * Compiles every logo and UI icon. The per-logo options (`monochrome`, `light_ink`, `trim`) are
+ * applied by the compiler, so the SVG sources need no display-specific edits.
+ */
 export async function generateVectorAssets() {
   await fs.mkdir(sources, { recursive: true });
   const assets = [];
@@ -57,8 +69,7 @@ export async function generateVectorAssets() {
     });
   }
 
-  // Standalone SVG sources preserve the shipped Lucide and input artwork.
-  // No React renderer, JSX loader or JavaScript icon dependency is needed.
+  // UI icons (Lucide and the input artwork) are standalone SVG sources as well.
   for (const file of await fs.readdir(path.join(root, 'assets/ui-icons'))) {
     if (!file.endsWith('.svg')) continue;
     const name = path.parse(file).name;

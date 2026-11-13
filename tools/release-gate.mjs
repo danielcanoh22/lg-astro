@@ -1,3 +1,10 @@
+/**
+ * Decides whether a CI run on `main` may publish a release. Imported by the `release-gate` job of
+ * `.github/workflows/ci.yml` through `actions/github-script`; tested by
+ * `tests/release.test.mjs`.
+ */
+
+/** Splits a strict `major.minor.patch` version into BigInt parts, rejecting anything else. */
 function versionParts(version) {
   if (typeof version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
     throw new Error(`Invalid numeric release version: ${version}`);
@@ -5,6 +12,11 @@ function versionParts(version) {
   return version.split('.').map(BigInt);
 }
 
+/**
+ * Whether `current` is a strictly higher semantic version than `previous`.
+ *
+ * @throws {Error} When either is not a numeric `major.minor.patch` version.
+ */
 export function isVersionIncrease(previous, current) {
   const before = versionParts(previous);
   const after = versionParts(current);
@@ -14,6 +26,17 @@ export function isVersionIncrease(previous, current) {
   return false;
 }
 
+/**
+ * Whether this push to `main` is the merge of the Changesets version PR (`changeset-release/main`
+ * from this repository) and raised the version in `package.json`.
+ *
+ * Deleted, forced and first pushes never qualify, and the merged PR must have produced exactly
+ * the pushed commit, so another merge or a manual run cannot publish.
+ *
+ * @param {{ github: object, context: object }} script The `actions/github-script` client and
+ *   event context.
+ * @returns {Promise<boolean>}
+ */
 export async function isReleaseMerge({ github, context }) {
   if (
     context.eventName !== 'push' ||

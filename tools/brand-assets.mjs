@@ -1,5 +1,13 @@
-// Optional host-only source refresh. Normal builds use the checked-in SVGs and
-// never contact these hosts. Hashes cover the original bytes before adaptation.
+/**
+ * Restores curated brand logo sources into `assets/logos` from pinned upstream files
+ * (`pnpm assets:brands`). Optional and host-only: normal builds use the checked-in SVGs and never
+ * contact these hosts.
+ *
+ * Usage: `node tools/brand-assets.mjs [--only NAME] [--checksums]`. `--checksums` prints each
+ * source's current SHA-256 and size instead of writing. Hashes cover the original bytes before
+ * adaptation. A full run also restores the Simple Icons license notice. Tested by
+ * `tests/brand-assets.test.mjs`.
+ */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -7,11 +15,13 @@ import { createHash } from 'node:crypto';
 const root = path.resolve(import.meta.dirname, '..');
 const simple =
   'https://raw.githubusercontent.com/simple-icons/simple-icons/90bd1f3e7b77851fd0c56474f6fa43b816babdab';
+// Wikimedia Commons serves originals under the MD5 of the decoded file name.
 const commons = (file) => {
   file = decodeURIComponent(file);
   const hash = createHash('md5').update(file).digest('hex');
   return `https://upload.wikimedia.org/wikipedia/commons/${hash[0]}/${hash.slice(0, 2)}/${encodeURIComponent(file)}`;
 };
+/** `[name, url, sha256]` for every restorable logo; `name` is its file in `assets/logos`. */
 export const sources = [
   [
     'spotify',
@@ -150,6 +160,7 @@ export const sources = [
   ],
 ];
 
+/** Fetches an SVG source, rejecting anything that is not standalone vector artwork. */
 async function download(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error(`${response.status}: ${url}`);
@@ -159,8 +170,12 @@ async function download(url) {
   return text;
 }
 
-// The Coupang SVG was distributed as a component. Keep only its static SVG
-// paths, resolving numeric JSX attributes and removing its redundant bounds clip.
+/**
+ * Adapts a downloaded source for the mesh compiler and prefixes a provenance comment.
+ *
+ * The Coupang SVG was distributed as a component: only its static SVG paths are kept, with
+ * numeric JSX attributes resolved and its redundant bounds clip removed.
+ */
 export function prepareSvg(name, original, url) {
   let svg = original.replace(/<\?xml[^?]*\?>/, '');
   if (name === 'crunchyroll') {

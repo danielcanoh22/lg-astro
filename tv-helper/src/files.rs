@@ -1,3 +1,8 @@
+//! File operations run as root: reading installed apps' icons and staging splash images.
+//!
+//! Astro's jail cannot read other apps' directories or write its own package directory, so it
+//! asks the helper. Every path here comes from fixed roots plus validated IDs; files are opened
+//! without trusting symlinks, and every read is size-limited.
 use crate::{
     APP, ROOTS, Result,
     system::{self, System},
@@ -11,6 +16,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+/// Resolves a manifest's icon reference (relative, absolute or `file://`) against an app
+/// directory. Accepts only PNG, JPEG or WebP paths below one of [`ROOTS`] without `..`; this is a
+/// textual check, and [`crate::open_within`] still resolves symlinks before anything is read.
 fn resolve(directory: &Path, icon: &str) -> Option<PathBuf> {
     if icon.is_empty() || icon.len() > 4096 || icon.chars().any(char::is_control) {
         return None;
@@ -33,13 +41,28 @@ fn resolve(directory: &Path, icon: &str) -> Option<PathBuf> {
         && matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp"))
     .then_some(path)
 }
+/// The `read-app-icon` request: what Astro's inventory reported for one app.
+///
+/// Only `id` is trusted to choose directories, and only after validation; the other fields are
+/// hints that must still resolve below [`ROOTS`].
 #[derive(Deserialize)]
 pub struct IconSource {
     pub id: String,
+    /// The reported install directory, tried first when it is a direct child of a root.
     pub directory: Option<String>,
     pub large_icon: Option<String>,
     pub icon: Option<String>,
 }
+/// Reads the candidate icon files of one installed app and returns them hex-encoded, in order of
+/// preference: the reported large icon, the manifest's `largeIcon`, the reported icon, the
+/// manifest's `icon`, then `icon.png`, for each directory where the app may be installed.
+///
+/// A manifest only counts when its `id` matches. Files that fail a check are skipped; at most
+/// 512 KiB of icons is returned in total. Decoding is left to Astro, outside the root process.
+///
+/// # Errors
+///
+/// Fails only for an invalid app ID.
 pub fn read_icons(system: &impl System, source: &IconSource) -> Result<Value> {
     if !valid_app_id(&source.id) {
         return Err("Invalid application ID".into());
@@ -103,8 +126,9 @@ pub fn read_icons(system: &impl System, source: &IconSource) -> Result<Value> {
     }
     Ok(json!({"returnValue":true,"icons":icons}))
 }
+/// Reads Astro's manifest, failing unless `directory` is Astro's developer-mode install of the
+/// native package.
 fn installed(system: &impl System, directory: &Path) -> Result<Value> {
-    // Astro is a developer-mode install on the target TV.
     if directory != Path::new(ROOTS[0]).join(APP) {
         return Err("Invalid Astro installation directory".into());
     }
@@ -114,8 +138,20 @@ fn installed(system: &impl System, directory: &Path) -> Result<Value> {
     }
     Ok(app)
 }
+/// Largest splash PNG the helper reads or copies.
 const SPLASH_LIMIT: usize = 32 * 1024 * 1024;
 
+/// Makes `background` the splash webOS shows while Astro starts: copies its image over the
+/// package's `splash.png` and, while the Home integration uses this package, over the staged
+/// Home's copy too. Unchanged files are not rewritten.
+///
+/// `background` is a packaged background ID (`splash/{id}.png` in the package) or an uploaded
+/// one, whose splash is read from app-owned storage with the checks of `uploaded_splash`.
+///
+/// # Errors
+///
+/// Fails when `directory` is not Astro's installation, the ID is invalid, the image is missing
+/// or fails its checks, or a write fails.
 pub fn sync_splash(system: &impl System, directory: &Path, background: &str) -> Result<Value> {
     installed(system, directory)?;
     let image = if valid_upload(background) {
@@ -147,12 +183,14 @@ pub fn sync_splash(system: &impl System, directory: &Path, background: &str) -> 
     }
     Ok(json!({"returnValue":true,"background":background}))
 }
+/// Atomically writes `image` to `path` unless it already holds exactly these bytes.
 fn replace(system: &impl System, path: &Path, image: &[u8]) -> Result<()> {
     if system::read(system, path, SPLASH_LIMIT).is_ok_and(|bytes| bytes == image) {
         return Ok(());
     }
     system::write(system, path, image, 0o644)
 }
+/// Returns the metadata of `path` if it is a directory itself, not a symlink to one.
 fn real_directory(system: &impl System, path: &Path) -> Result<fs::Metadata> {
     let metadata =
         fs::symlink_metadata(system.path(path)).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -244,9 +282,10 @@ fn saved_preferences(system: &impl System) -> Option<Value> {
         .filter(fs::Metadata::is_dir)?;
     system::json(system, storage.join("preferences.json")).ok()
 }
-/// Stages the splash Astro's saved preferences select. Older native builds also saved
-/// splash_background. An unusable uploaded splash stages the package's current splash.png
-/// (normally the same image, synced earlier) instead.
+/// Writes the staged Home's `splash.png` from the background Astro's saved preferences select
+/// (`dunes` when none is usable). Older native builds also saved `splash_background`, which
+/// takes precedence. An unusable uploaded splash, or a missing packaged one, stages the
+/// package's current `splash.png` (normally the same image, synced earlier) instead.
 pub(crate) fn stage_splash(system: &impl System, directory: &Path) -> Result<()> {
     let background = saved_preferences(system)
         .and_then(|value| {

@@ -1,4 +1,8 @@
-//! Optional TV-input helper compatible with PR #124; never implicitly registers an input.
+//! Registers Astro as a TV input with LG's external input manager (`com.webos.service.eim`).
+//!
+//! Follows the registration and verification contract of upstream PR #124: an input is only added
+//! on an explicit `enable` (Settings → System → Show as TV input), and a change counts only once
+//! LG's own input list confirms it.
 use crate::{
     APP, Result, accepted,
     system::{self, System},
@@ -21,6 +25,18 @@ fn listed(system: &impl System) -> Result<bool> {
         .iter()
         .any(|d| d["appId"] == APP))
 }
+/// Runs a TV-input `command` (`status`, `enable` or `disable`) and replies with whether Astro is
+/// registered.
+///
+/// `enable` requires the installed manifest in `directory` to be Astro's and to declare
+/// `supportGIP`. It is idempotent, and an added device that LG does not then list is deleted
+/// again, so a firmware that ignores the registration is not left with a half-registered input.
+///
+/// # Errors
+///
+/// Fails when not run as root, for an unknown command, when a service call is refused, or when
+/// the input list does not reflect the requested state afterwards. A failed rollback says so and
+/// asks for `disable` to be retried.
 pub fn configure(system: &impl System, command: &str, directory: &Path) -> Result<Value> {
     system::root(system)?;
     match command {

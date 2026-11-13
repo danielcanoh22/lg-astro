@@ -1,3 +1,13 @@
+//! Optional Home integration for webOS 25: Astro replaces LG Home (`com.webos.app.home`).
+//!
+//! A staged copy of Astro's manifest under Home's ID is bind-mounted over LG Home's directory,
+//! and SAM (the application manager) is made to reread it, so SAM itself starts Astro's
+//! installed executable as Home. LG's files are never modified: removing the mount and
+//! rereading gives LG Home back. A Homebrew Channel boot hook reapplies the mount after every
+//! cold boot, and a crash-loop guard ([`record_start`]) falls back to LG Home until the next
+//! boot when Astro keeps failing as Home.
+//!
+//! Driven by `tv/home.sh` through [`dispatch`]; `development.md` describes the lifecycle.
 use crate::{
     APP, Result, accepted, files,
     system::{self, System},
@@ -6,28 +16,41 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, path::Path};
 
+/// Root-owned state of the integration; it survives removal of the Astro package.
 const STATE: &str = "/var/lib/astro-home";
+/// The saved [`Config`].
 const CONFIG: &str = "/var/lib/astro-home/state.json";
+/// The staged Home app bind-mounted over LG Home: Astro's manifest under Home's ID, plus
+/// symlinks into the installed package.
 const STAGE: &str = "/var/lib/astro-home/app";
+/// Homebrew Channel boot hook, a symlink to the copied `home.sh` that reapplies the mount.
 const HOOK: &str = "/var/lib/webosbrew/init.d/64-astro-home";
 /// Astro starts as Home that have not become healthy yet. tmpfs: a reboot clears it, and with it
 /// any fallback to LG Home.
 pub const FAILURES: &str = "/var/run/astro-home-failures";
 /// Consecutive unhealthy starts after which the next start gives LG Home back until reboot.
 pub const FAILURE_LIMIT: u32 = 3;
+/// LG Home's app ID, the only Home this integration replaces.
 pub const HOME: &str = "com.webos.app.home";
+/// The integration's saved state (`state.json`).
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
+    /// Whether Astro should be Home; `false` while enabling and after `disable`.
     pub enabled: bool,
+    /// How Home is replaced; only `manifest` (see [`method`]).
     pub method: String,
+    /// The Astro installation the staged Home links to.
     pub app_dir: String,
+    /// LG Home's original manifest, kept to recognize it again.
     pub stock: Value,
     pub home_id: String,
+    /// Fields this version does not know, preserved across rewrites.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 impl Config {
+    /// Rejects a state file that names another target, method or a relative installation path.
     fn validate(&self) -> Result<()> {
         if self.method != "manifest" {
             return Err("Invalid Home method".into());
@@ -53,12 +76,19 @@ fn target(id: &str) -> Result<()> {
         Err("Unsupported Home target".into())
     }
 }
+/// Operations on one Home app: the bind mount, SAM's view of its manifest and its process.
 pub struct Home<'a, S: System> {
     system: &'a S,
     id: String,
+    /// The Home app's directory that the stage is mounted over.
     target: String,
 }
 impl<'a, S: System> Home<'a, S> {
+    /// Returns the operations for Home app `id`.
+    ///
+    /// # Errors
+    ///
+    /// Fails for any ID other than [`HOME`].
     pub fn new(system: &'a S, id: &str) -> Result<Self> {
         target(id)?;
         Ok(Self {
@@ -87,9 +117,11 @@ impl<'a, S: System> Home<'a, S> {
             .map(str::to_owned)
             .ok_or_else(|| "Invalid foreground app".into())
     }
+    /// Whether the stage is currently mounted over the Home directory.
     fn mounted(&self) -> bool {
         system::same_file(self.system, STAGE, &self.target)
     }
+    /// Returns `(root, mount point)` for every mount in `/proc/self/mountinfo`.
     fn mounts(&self) -> Result<Vec<(String, String)>> {
         Ok(String::from_utf8(self.read("/proc/self/mountinfo")?)
             .map_err(|e| e.to_string())?
@@ -100,6 +132,8 @@ impl<'a, S: System> Home<'a, S> {
             })
             .collect())
     }
+    /// Whether something other than this stage is mounted on or below the Home directory, such
+    /// as another Home replacement. The integration never mounts over or removes such a mount.
     fn foreign_mount(&self) -> Result<bool> {
         Ok(!self.mounted()
             && self
@@ -107,6 +141,7 @@ impl<'a, S: System> Home<'a, S> {
                 .iter()
                 .any(|(_, p)| p == &self.target || p.starts_with(&format!("{}/", self.target))))
     }
+    /// Unmounts `path`, detaching it lazily when it is busy.
     fn unmount(&self, path: &str) -> Result<()> {
         if let Err(error) = system::command(self.system, "/bin/umount", &[path]) {
             eprintln!("Astro Home: {error}; detaching mount");
@@ -114,6 +149,8 @@ impl<'a, S: System> Home<'a, S> {
         }
         Ok(())
     }
+    /// Terminates every running Home process, LG's or Astro's (see [`home_process`]), and waits
+    /// up to 5 s for them to exit so SAM starts Home from the current manifest.
     fn stop_home(&self, app: &str) -> Result<()> {
         let mut stopped = vec![];
         for entry in fs::read_dir(self.system.path(Path::new("/proc")))
@@ -155,6 +192,7 @@ impl<'a, S: System> Home<'a, S> {
     fn launch(&self) -> Result<()> {
         accepted(self.luna("launch", json!({"id":self.id}))?).map(|_| ())
     }
+    /// Unblocks Home in SAM, retrying up to three times; "not blocked" also counts as released.
     fn release(&self) -> Result<()> {
         let mut last = String::new();
         for _ in 0..3 {
@@ -177,6 +215,9 @@ impl<'a, S: System> Home<'a, S> {
         }
         Err(format!("Could not release Home: {last}"))
     }
+    /// Makes SAM reread Home's manifest by blocking and releasing the app, then waits up to 15 s
+    /// for `getAppInfo` to report `expected`'s type and executable (and, for Astro, the `home`
+    /// category).
     fn reread(&self, expected: &Value) -> Result<()> {
         let payload = json!({"id":self.id});
         // Release even if the request timed out after taking effect; preserve the original error.
@@ -220,12 +261,15 @@ impl<'a, S: System> Home<'a, S> {
         }
         Err("SAM did not read the expected Home manifest".into())
     }
+    /// Whether Astro runs as its own app, not as Home.
     fn normal_running(&self) -> Result<bool> {
         let reply = accepted(self.luna("running", json!({}))?)?;
         Ok(reply["running"]
             .as_array()
             .is_some_and(|apps| apps.iter().any(|app| app["id"] == APP)))
     }
+    /// Closes the normal Astro instance and waits up to 5 s for it to leave the running list.
+    /// A failed close is accepted when the instance has exited anyway.
     fn close_normal(&self) -> Result<()> {
         if !self.normal_running()? {
             return Ok(());
@@ -249,6 +293,13 @@ impl<'a, S: System> Home<'a, S> {
         }
         Err("Close Astro before enabling Home integration".into())
     }
+    /// Gives LG Home back: removes the mount, makes SAM reread LG's manifest and stops the
+    /// running Home. LG Home is reopened only if Home was in front.
+    ///
+    /// # Errors
+    ///
+    /// Fails, leaving everything else untouched, when another integration is mounted over Home;
+    /// otherwise when a step fails.
     pub fn restore(&self, config: &Config) -> Result<()> {
         self.restore_home(config, false)
     }
@@ -285,6 +336,15 @@ impl<'a, S: System> Home<'a, S> {
         }
         Ok(())
     }
+    /// Makes Astro Home: stages the splash, bind-mounts the stage over LG Home, makes SAM
+    /// reread the manifest and stops the previous Home. Astro is launched when `open` is set or
+    /// Home was and still is in front. Also resets the crash-loop counter ([`FAILURES`]).
+    ///
+    /// # Errors
+    ///
+    /// Fails when Astro is no longer installed, another integration is mounted over Home, or a
+    /// step fails. A failure after mounting first tries to [`restore`](Self::restore) LG Home
+    /// and reports both errors if that fails too.
     pub fn apply(&self, config: &Config, open: bool) -> Result<()> {
         // Stage timings land in boot.log at cold boot, to see where the delay before Astro goes.
         let started = std::time::Instant::now();
@@ -340,6 +400,20 @@ impl<'a, S: System> Home<'a, S> {
         }
         Ok(())
     }
+    /// Enables the integration for the Astro installed at `app`.
+    ///
+    /// Saves LG Home's original manifest, closes the normal Astro, builds the stage (symlinks to
+    /// the package's executable, libraries, assets, splash images and icons, plus the manifest
+    /// rewritten as a hidden `home` app under Home's ID), copies `home.sh` and `astro-helper`
+    /// into `/var/lib/astro-home`, installs the boot hook and [`apply`](Self::apply)s. `state.json` is
+    /// marked enabled only once that succeeded. Running it again refreshes everything, which is
+    /// how an update brings in new scripts.
+    ///
+    /// # Errors
+    ///
+    /// Fails for anything but an installed native Astro package, a firmware other than webOS 25
+    /// ([`method`]), a foreign mount or boot hook, an unrecognizable LG Home manifest, or a
+    /// failing step.
     pub fn install(&self, app: &Path) -> Result<()> {
         let physical = fs::canonicalize(self.system.path(app)).map_err(|e| e.to_string())?;
         let base = self.system.path(Path::new("/"));
@@ -443,12 +517,19 @@ impl<'a, S: System> Home<'a, S> {
         system::write_json(self.system, CONFIG, &config)
     }
 }
+/// Decodes the octal escapes `/proc/self/mountinfo` uses for whitespace and backslashes.
 fn unescape(s: &str) -> String {
     s.replace("\\040", " ")
         .replace("\\011", "\t")
         .replace("\\012", "\n")
         .replace("\\134", "\\")
 }
+/// Whether a process with command line `args` and executable `executable` is Home app `id`.
+///
+/// Matches LG Home (`flutter-client -i <id>`) or Astro's executable from `app` started by SAM
+/// for `id` (its JSON launch argument names `id` as `nid` or `appId`); a normal Astro launch
+/// never matches. The ` (deleted)` suffix the kernel shows once an update replaced the
+/// executable is ignored, so an Astro started before the update still matches.
 pub fn home_process(
     args: &[String],
     executable: Option<&Path>,
@@ -470,8 +551,14 @@ pub fn home_process(
         .and_then(|arg| serde_json::from_str::<Value>(arg).ok());
     flutter || (astro && metadata.is_some_and(|m| m["nid"] == id || m["appId"] == id))
 }
-/// The takeover stages a Home manifest that SAM rereads through releaseBlockSystemApp; it is
-/// only verified on starfish 10.x (webOS 25).
+/// Returns the integration method for firmware `release` (the text of `/etc/starfish-release`).
+///
+/// The only method, `manifest`, stages a Home manifest that SAM rereads through
+/// `releaseBlockSystemApp`; it is only verified on starfish 10.x (webOS 25).
+///
+/// # Errors
+///
+/// Fails for another Home target or firmware version.
 pub fn method(release: &str, id: &str) -> Result<&'static str> {
     target(id)?;
     let version = release
@@ -484,10 +571,17 @@ pub fn method(release: &str, id: &str) -> Result<&'static str> {
     }
     Err("This Home integration targets webOS 25 (10.x)".into())
 }
+/// Whether the boot hook exists and is Astro's link to the copied `home.sh`, so another
+/// project's `64-astro-home` is never replaced or removed.
 pub fn hook_owned(system: &impl System) -> bool {
     fs::read_link(system.path(Path::new(HOOK)))
         .is_ok_and(|p| p == system.path(Path::new("/var/lib/astro-home/home.sh")))
 }
+/// Loads the saved [`Config`], or `None` if the integration was never enabled.
+///
+/// # Errors
+///
+/// Fails for an unreadable or invalid state file.
 pub fn load(system: &impl System) -> Result<Option<Config>> {
     if !system::exists(system, CONFIG) {
         return Ok(None);
@@ -497,6 +591,21 @@ pub fn load(system: &impl System) -> Result<Option<Config>> {
     config.validate()?;
     Ok(Some(config))
 }
+/// Runs a `home` command of the CLI as root and returns its JSON reply.
+///
+/// - `status`: what the integration files say; `homeKeyVerified` stays `null` because no file
+///   proves that the Home key reaches Astro.
+/// - `enable APP_DIR`: [`Home::install`].
+/// - `apply`: [`Home::apply`] (boot hook and manual). While disabled it acts as `disable`, so
+///   a leftover boot hook removes itself.
+/// - `disable` / `restore`: saves the state as disabled, [`Home::restore`]s LG Home and removes
+///   the boot hook. The copied scripts stay for recovery.
+/// - `fallback`: [`Home::fallback`] when enabled, for Astro's crash-loop guard.
+///
+/// # Errors
+///
+/// Fails when not run as root, for an unknown command, when the integration was never enabled
+/// (except `status` and `enable`), or when the operation fails.
 pub fn dispatch(system: &impl System, command: &str, app: Option<&str>) -> Result<Value> {
     system::root(system)?;
     let saved = load(system)?;
@@ -535,14 +644,16 @@ pub fn dispatch(system: &impl System, command: &str, app: Option<&str>) -> Resul
     }
 }
 
+/// What Astro should do when it starts as Home (see [`record_start`]).
 #[derive(Debug, PartialEq, Eq)]
 pub enum Start {
+    /// Start normally.
     Continue,
     /// Too many starts never became healthy: give LG Home back until reboot.
     Fallback,
 }
 /// Called by Astro as Home before it opens its window. A start counts as failed until
-/// `record_healthy`; after FAILURE_LIMIT failed starts in a row, the next one falls back.
+/// [`record_healthy`]; after [`FAILURE_LIMIT`] failed starts in a row, the next one falls back.
 /// Only once per boot: the caller cannot observe whether the fallback succeeded, and an Astro
 /// that exits on every start without one would leave the TV with no Home at all.
 pub fn record_start(system: &impl System) -> Result<Start> {

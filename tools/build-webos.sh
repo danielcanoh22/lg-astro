@@ -1,4 +1,10 @@
 #!/bin/sh
+# Cross-compiles the astro and astro-helper release binaries for the TV (pnpm build).
+#
+# Requires WEBOS_NDK, the extracted and relocated webOS SDK that pnpm sdk prepares. Downloads and
+# verifies the pinned SDL-webOS runtime (tools/webos-runtime.mjs) and links against it through an
+# isolated pkg-config. Output: target/armv7-unknown-linux-gnueabi/release/{astro,astro-helper},
+# which tools/package.mjs packages.
 set -eu
 
 # Use the webOS NDK's ARM soft-float ABI and sysroot for Rust AND SDL linking.

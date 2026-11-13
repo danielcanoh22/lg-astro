@@ -1,7 +1,13 @@
-// Inspect the actual IPK, and normalize only Astro-owned entries. The webOS CLI
-// emits world-writable directories; boot scripts need app-owned 0755 parents.
+/**
+ * Verifies the IPK the webOS CLI produced and normalizes the file modes of Astro's entries.
+ * Used by `tools/package.mjs`; tested by `tests/release.test.mjs`.
+ *
+ * The CLI emits world-writable directories, and root runs `home.sh` and `astro-helper` from the
+ * package, so every Astro entry is rewritten to 0755 (directories and executables) or 0644.
+ */
 import { gunzipSync, gzipSync } from 'node:zlib';
 
+/** Splits an `ar` archive (the IPK container) into members whose headers can be rewritten. */
 function members(bytes) {
   if (bytes.subarray(0, 8).toString() !== '!<arch>\n') throw new Error('Not an IPK/ar archive.');
   const result = [];
@@ -20,6 +26,10 @@ function members(bytes) {
   return result;
 }
 
+/**
+ * Lists the entries of an uncompressed ustar archive. Each `header` is a view into `tar`, so
+ * changing it changes the archive in place.
+ */
 function entries(tar) {
   const result = [];
   for (let offset = 0; offset + 512 <= tar.length;) {
@@ -45,6 +55,19 @@ function entries(tar) {
   return result;
 }
 
+/**
+ * Checks that an IPK matches `manifest` and contains everything Astro needs on the TV, then
+ * returns it with normalized modes and checksums.
+ *
+ * Checks the app metadata, permissions and icons, every required file (binaries, helper scripts,
+ * SDL, licenses, fonts, wallpapers, splash images, vector meshes), ARM soft-float ELF binaries,
+ * `Architecture: arm`, the asset version and the absence of retired dumped artwork.
+ *
+ * @param {Buffer} bytes The IPK as written by `ares-package`.
+ * @param {object} manifest The source `appinfo.json`.
+ * @returns {Buffer} The normalized IPK.
+ * @throws {Error} Describing the first check that failed.
+ */
 export function normalizeAndVerifyPackage(bytes, manifest) {
   const archive = members(bytes);
   const member = archive.find((entry) => entry.name === 'data.tar.gz');
