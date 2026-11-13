@@ -3,17 +3,20 @@
 use sdl2::event::{Event, EventSender};
 use std::sync::Mutex;
 
+/// Holds the SDL event sender and the registered user event type, once [`install`] has run.
 static SENDER: Mutex<Option<(EventSender, u32)>> = Mutex::new(None);
 
-/// Registers the SDL user event that workers push. Until this runs, `wake` does nothing.
+/// Registers the SDL user event that workers push. Until this runs, [`wake`] does nothing.
 pub fn install(sender: EventSender, event_type: u32) {
     if let Ok(mut slot) = SENDER.lock() {
         *slot = Some((sender, event_type));
     }
 }
 
-/// Call after queuing a result for the SDL thread. The event carries no data: the loop
-/// drains its channels on every turn.
+/// Wakes the SDL thread's event wait; call it after queuing a result for that thread.
+///
+/// The event carries no data: the loop drains its channels on every turn. Safe to call
+/// from any thread; it does nothing before [`install`].
 pub fn wake() {
     if let Ok(slot) = SENDER.lock()
         && let Some((sender, event_type)) = slot.as_ref()

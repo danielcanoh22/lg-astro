@@ -1,3 +1,16 @@
+//! Astro, a native SDL2/OpenGL ES 2 launcher for a rooted LG webOS 25 TV.
+//!
+//! The same executable runs as the normal app (`com.danielcanoh22.astro`), as the staged
+//! `com.webos.app.home` when the optional Home integration is enabled, and as a desktop preview
+//! without TV services. [`run`] owns the SDL/UI thread: input, [`state::State`] updates, scene
+//! composition and rendering all stay there. Blocking work runs on workers that send results back
+//! over channels and wake the event loop through [`wake`]:
+//!
+//! - the platform worker ([`platform::Platform`]) for Luna calls, inventory and the root helper;
+//! - the wallpaper worker ([`wallpapers::Service`]) for the gallery, uploads and splash images;
+//! - the update workers ([`update::discovery::Service`] checks the feed, [`update::Worker`]
+//!   installs);
+//! - the preferences writer ([`storage::Saver`]) and the renderer's image and artwork workers.
 mod app_artwork;
 // Used by the TV build's Home lifecycle; the host build compiles it for its tests.
 #[cfg(all(feature = "webos", target_os = "linux"))]
@@ -56,8 +69,10 @@ use std::{
 };
 use time::OffsetDateTime;
 
+/// Command-line options plus what webOS launch metadata (`argv[1]`) says about this start.
 #[derive(Default)]
 struct Options {
+    /// Started by SAM as the staged `com.webos.app.home` (launch metadata `nid`).
     webos_home: bool,
     /// Opened by Home for Astro's TV input: run instead of redirecting to Home.
     launched_by_home: bool,
@@ -80,6 +95,14 @@ struct Options {
 }
 
 impl Options {
+    /// Parses the process arguments, skipping webOS launch metadata, and validates the values.
+    ///
+    /// `--help` prints usage and exits the process.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message for an unknown option, a missing or invalid value, or an invalid
+    /// simulated update version.
     fn parse() -> Result<Self, String> {
         let mut result = Self::default();
         let mut args = std::env::args().skip(1).peekable();
@@ -193,6 +216,7 @@ impl Options {
     }
 }
 
+/// An OK or pointer press in progress, kept to tell a tap from a hold on its target.
 struct Press {
     target: Target,
     start: Instant,
@@ -200,28 +224,40 @@ struct Press {
     pointer: bool,
 }
 
+/// Mouse ID of clicks injected by `--script click:X:Y`, so scripted runs can ignore real
+/// pointer input.
 const SCRIPT_POINTER: u32 = u32::MAX - 1;
 /// The first frame waits this long at most for its images (the wallpaper starts decoding on the
 /// image worker during startup); past it the window opens and the rest appear when ready.
 const FIRST_FRAME_IMAGE_WAIT: Duration = Duration::from_millis(1500);
-// SDL-webOS's Back scancode is outside rust-sdl2's standard Scancode enum.
-// Keycode retains the raw value: SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_WEBOS_BACK).
+/// SDL-webOS's Back keycode, `SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_WEBOS_BACK)`.
+///
+/// The Back scancode is outside rust-sdl2's standard Scancode enum, so the keycode keeps the
+/// raw value.
 const WEBOS_BACK_KEYCODE: i32 = (1 << 30) | 482;
 
+/// Reports whether `key` is a Back key: Escape, AC Back, keycode 461, or SDL-webOS Back on TV.
 fn is_back(key: Keycode, webos: bool) -> bool {
     matches!(key, Keycode::Escape | Keycode::AcBack)
         || i32::from(key) == 461
         || (webos && i32::from(key) == WEBOS_BACK_KEYCODE)
 }
 
+/// Tells a short Back press (go back) from a hold (open Recent apps).
+///
+/// One physical press is handled once: dismissing an overlay, a fired hold or the remote's
+/// native Exit notification all mark it handled until its release.
 #[derive(Default)]
 struct BackButton {
+    /// The pressed key, when it went down, and whether the press was already handled.
     press: Option<(i32, Instant, bool)>,
 }
 
 impl BackButton {
+    /// How long Back must stay down to open Recent apps.
     const HOLD: Duration = Duration::from_millis(600);
 
+    /// Starts tracking a press; returns `false` while another press is still tracked.
     fn down(&mut self, key: Keycode, now: Instant) -> bool {
         if self.press.is_none() {
             self.press = Some((i32::from(key), now, false));
@@ -231,12 +267,16 @@ impl BackButton {
         }
     }
 
+    /// Marks the current press handled, so its hold and release do nothing more.
     fn consume(&mut self) {
         if let Some((_, _, consumed)) = &mut self.press {
             *consumed = true;
         }
     }
 
+    /// Handles the remote's native Exit key, which Magic Remotes send for a long Back press.
+    ///
+    /// Returns `true` when that should open Recent apps: the press was not handled yet.
     fn native_hold(&mut self, now: Instant) -> bool {
         self.down(Keycode::AcBack, now);
         let fresh = self.press.is_some_and(|(_, _, consumed)| !consumed);
@@ -244,6 +284,8 @@ impl BackButton {
         fresh
     }
 
+    /// Handles Back going down: dismisses an overlay or move mode at once, otherwise waits for
+    /// the release or the hold.
     fn key_down(&mut self, state: &mut State, key: Keycode, now: Instant) -> Vec<Effect> {
         if !self.down(key, now) {
             return vec![];
@@ -258,6 +300,7 @@ impl BackButton {
         }
     }
 
+    /// Returns `true` once, when an unhandled press has been down for [`Self::HOLD`].
     fn held(&mut self, now: Instant) -> bool {
         if let Some((_, start, fired)) = &mut self.press
             && !*fired
@@ -269,6 +312,9 @@ impl BackButton {
         false
     }
 
+    /// Ends the press of `key`: `Some(false)` for a short press, `Some(true)` for a hold not yet
+    /// handled, `None` when it was a different key or already handled.
+    ///
     /// A delayed poll can see release before the hold timer: still classify it
     /// by elapsed time, and never issue short Back after a fired long press.
     fn release(&mut self, key: Keycode, now: Instant) -> Option<bool> {
@@ -280,6 +326,7 @@ impl BackButton {
         (!fired).then_some(now.duration_since(start) >= Self::HOLD)
     }
 
+    /// Forgets the press, e.g. when another key or a focus change interrupts it.
     fn cancel(&mut self) {
         self.press = None;
     }
@@ -307,8 +354,8 @@ fn reload_changed_preferences(
     }
 }
 
-/// Applies finished background preference writes as the synchronous save did: a failed user
-/// save is announced, and a successful one updates the launch splash.
+/// Applies finished background preference writes: a failed user save is announced, and a
+/// successful one updates the launch splash.
 fn saved(
     saver: &storage::Saver,
     state: &mut State,
@@ -345,6 +392,9 @@ fn sync_splash(state: &State, platform: &Platform, wallpapers: &wallpapers::Serv
     }
 }
 
+/// Carries out the side effects that state changes asked for, by queuing work on the workers.
+///
+/// Returns `false` when an effect asks Astro to quit.
 fn effects(
     effects: Vec<Effect>,
     state: &mut State,
@@ -420,6 +470,13 @@ fn effects(
     true
 }
 
+/// Applies one `--script` action to the state, as the matching input would.
+///
+/// `await-*` actions only hold the script until the run loop sees their condition.
+///
+/// # Errors
+///
+/// Returns a message for an unknown action or a failed scripted upload.
 fn script(
     action: &str,
     state: &mut State,
@@ -518,6 +575,7 @@ fn scripted_upload(url: &str, path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Runs Astro and exits with status 1 after printing any startup or runtime error.
 fn main() {
     if let Err(error) = run() {
         eprintln!("Astro native: {error}");
@@ -525,6 +583,7 @@ fn main() {
     }
 }
 
+/// Builds the scene, building it again when focus had to scroll into view.
 fn compose(
     state: &mut State,
     assets: &view::Assets,
@@ -540,11 +599,14 @@ fn compose(
     }
 }
 
+/// Reports whether the wallpaper upload server should accept uploads now.
 fn wallpaper_upload_active(state: &State, webos: bool, focused: bool, visible: bool) -> bool {
     // Desktop users need to switch to a browser without invalidating the upload URL.
     visible && (!webos || focused) && matches!(state.overlay, Some(Overlay::WallpaperUpload))
 }
 
+/// Reports whether periodic input status refreshes should run: on TV, in front, idle, and on a
+/// screen that shows inputs.
 fn input_refresh_active(state: &State, webos: bool, focused: bool, visible: bool) -> bool {
     webos
         && focused
@@ -562,6 +624,11 @@ fn input_refresh_active(state: &State, webos: bool, focused: bool, visible: bool
                 )))
 }
 
+/// Injects a left click at logical 1920x1080 coordinates `x:y`, tagged [`SCRIPT_POINTER`].
+///
+/// # Errors
+///
+/// Returns a message for malformed or non-finite coordinates or an SDL push failure.
 fn scripted_click(
     sdl: &sdl2::Sdl,
     window: &sdl2::video::Window,
@@ -621,13 +688,18 @@ fn open_home_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-/// sam discards a system app's output. As Home, keep it in a small log.
+/// Redirects stderr to `/tmp/astro-home.log` and raises SDL's log level.
+///
+/// SAM discards a system app's output. As Home, keep it in a small log.
 #[cfg(all(feature = "webos", unix))]
 fn log_home_output() {
     use std::os::unix::io::IntoRawFd;
     if let Ok(file) = open_home_log(std::path::Path::new("/tmp/astro-home.log")) {
+        // SAFETY: the descriptor was just opened and is owned here; dup2 replaces stderr with
+        // it, and the original descriptor stays open for the life of the process.
         unsafe { libc::dup2(file.into_raw_fd(), 2) };
     }
+    // SAFETY: SDL allows setting log priorities at any time, including before SDL_Init.
     unsafe { sdl2::sys::SDL_LogSetAllPriority(sdl2::sys::SDL_LogPriority::SDL_LOG_PRIORITY_INFO) };
 }
 
@@ -644,6 +716,13 @@ fn next_prewarm(
     prewarm.pop()
 }
 
+/// Starts Astro: parses options, handles the TV's Home redirects, starts the workers, opens the
+/// window and runs the SDL event loop until quit or the frame budget ends.
+///
+/// # Errors
+///
+/// Returns a message when options, assets, preferences or SDL/GL setup fail, or when a
+/// scripted run ends before its script completes.
 fn run() -> Result<(), String> {
     let startup = Instant::now();
     let mut options = Options::parse()?;
@@ -854,9 +933,12 @@ fn run() -> Result<(), String> {
     let (window, _context) = opened.ok_or_else(|| failures.join("; "))?;
     gl::load_with(|name| video.gl_get_proc_address(name) as *const _);
     if !webos {
+        // SAFETY: the GL context created above is current on this thread and functions are
+        // loaded.
         unsafe { gl::Enable(gl::MULTISAMPLE) };
     }
     let mut samples = 0;
+    // SAFETY: the context is current on this thread and `samples` is a valid output location.
     unsafe { gl::GetIntegerv(gl::SAMPLES, &mut samples) };
     eprintln!("Astro GL multisampling: {samples} samples");
     startup_stage("window and GL context");
@@ -964,7 +1046,7 @@ fn run() -> Result<(), String> {
                         }
                     },
                     // A registration sam had accepted is gone: quit, so sam starts Home afresh.
-                    // Never accepted: stay, unregistered, as before.
+                    // Never accepted: keep running unregistered; sam restarts Home per Home key.
                     move |registered| {
                         if registered {
                             close(platform::Lifecycle::Close);
@@ -988,7 +1070,7 @@ fn run() -> Result<(), String> {
     let mut foreground = platform::ForegroundCheck::default();
     // A Home that sam preloaded draws nothing until its relaunch: a first frame would map its
     // surface, and webOS then gives it the screen over the input or app in front. Without a
-    // lifecycle registration no relaunch would arrive, so it shows as before.
+    // lifecycle registration no relaunch would arrive, so it shows at once.
     let mut preloaded =
         webos && options.webos_home && options.preloaded && lifecycle_event.is_some();
     if preloaded {
@@ -1373,7 +1455,8 @@ fn run() -> Result<(), String> {
                         if end_registration.is_some() {
                             foreground.relaunched(Instant::now(), focused && visible);
                         }
-                        // SAFETY: the window outlives the event loop.
+                        // SAFETY: the window outlives the event loop, so its raw pointer is
+                        // valid, and these calls run on the SDL thread that owns it.
                         unsafe {
                             sdl2::sys::SDL_RestoreWindow(window.raw());
                             sdl2::sys::SDL_ShowWindow(window.raw());
@@ -2048,6 +2131,7 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// Converts window pixels to logical 1920x1080 layout coordinates, undoing the letterbox.
 fn pointer_position(window: &sdl2::video::Window, x: i32, y: i32) -> Option<(f32, f32)> {
     let (width, height) = window.size();
     let scale = (width as f32 / 1920.).min(height as f32 / 1080.);
@@ -2060,6 +2144,7 @@ fn pointer_position(window: &sdl2::video::Window, x: i32, y: i32) -> Option<(f32
     ))
 }
 
+/// Returns the control under window pixel `x, y`, if any.
 fn hit(
     controls: &[state::Control],
     window: &sdl2::video::Window,

@@ -1,9 +1,22 @@
+//! Locates, loads and atomically saves the preferences file.
+//!
+//! On the TV the file lives in the app's own directory under `/media/developer`, shared by the
+//! jailed app and root Home; desktop previews use `$XDG_CONFIG_HOME/astro-native`. Saves run on
+//! the [`Saver`] worker so their fsync never stalls the SDL thread, and files created by root
+//! Home keep the storage directory's owner so the normal app can still read them.
 use crate::model::Preferences;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
+/// Returns the preferences file for this run: the TV storage directory on webOS, otherwise
+/// `astro-native/preferences.json` under `$XDG_CONFIG_HOME` or `~/.config`.
+///
+/// # Errors
+///
+/// On webOS, returns why the persistent storage is unusable (or that the build lacks webOS
+/// support); elsewhere, that neither `HOME` nor `XDG_CONFIG_HOME` is set.
 pub fn default_path(webos: bool) -> Result<PathBuf, String> {
     if webos {
         #[cfg(all(feature = "webos", unix))]
@@ -20,6 +33,7 @@ pub fn default_path(webos: bool) -> Result<PathBuf, String> {
 
 #[cfg(all(feature = "webos", unix))]
 fn tv_path() -> Result<PathBuf, String> {
+    // SAFETY: geteuid has no preconditions and cannot fail.
     tv_path_in(&tv_storage(), unsafe { libc::geteuid() })
 }
 
@@ -53,6 +67,8 @@ fn restrict_to_owner(directory: &Path, owner: u32) -> std::io::Result<()> {
     if metadata.uid() != owner || mode & 0o077 == 0 {
         return Ok(());
     }
+    // SAFETY: the descriptor belongs to `directory`, which stays open for the call; fchmod
+    // acts on the opened directory itself, so a swapped path cannot redirect it.
     if unsafe { libc::fchmod(directory.as_raw_fd(), (mode & !0o077) as libc::mode_t) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -117,6 +133,12 @@ fn tv_path_in(directory: &Path, user: u32) -> Result<PathBuf, String> {
     Ok(directory.join("preferences.json"))
 }
 
+/// Reads and sanitizes the preferences at `path`; a missing file yields the defaults.
+///
+/// # Errors
+///
+/// Returns `Preferences could not be read:` with the cause when the file exists but cannot
+/// be read or parsed. Invalid files are reported, never replaced.
 pub fn load(path: &Path) -> Result<Preferences, String> {
     match fs::read(path) {
         Ok(bytes) => {
@@ -134,12 +156,13 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
 /// (Home and the TV-input app share one file).
 pub type Stamp = Option<(std::time::SystemTime, u64)>;
 
+/// Returns the current [`Stamp`] of `path`, or `None` when it cannot be read.
 pub fn stamp(path: &Path) -> Stamp {
     let metadata = fs::metadata(path).ok()?;
     Some((metadata.modified().ok()?, metadata.len()))
 }
 
-/// Writes preferences synchronously. The app saves through `Saver`; tests seed files with this.
+/// Writes preferences synchronously. The app saves through [`Saver`]; tests seed files with this.
 #[cfg(test)]
 pub fn save(path: &Path, preferences: &Preferences) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(preferences)
@@ -154,6 +177,8 @@ pub struct Saved {
     pub report: bool,
 }
 
+/// State shared between [`Saver`] and its worker: the newest unwritten snapshot (with its
+/// `report` flag), whether a write is in progress, and whether the saver is being dropped.
 #[derive(Default)]
 struct SaveQueue {
     next: Option<(Vec<u8>, bool)>,
@@ -164,7 +189,8 @@ struct SaveQueue {
 /// Writes preferences on a worker thread, so the fsync of an atomic save never stalls the SDL
 /// thread. Each save encodes the whole preferences at the call, so only the newest pending
 /// snapshot is written: an older one that has not started is superseded. Writes keep call order,
-/// `flush` waits for every pending write, and dropping the saver writes what is still pending.
+/// [`Saver::flush`] waits for every pending write, and dropping the saver writes what is still
+/// pending. If the worker cannot start, saves run synchronously on the caller's thread.
 pub struct Saver {
     path: PathBuf,
     queue: std::sync::Arc<(std::sync::Mutex<SaveQueue>, std::sync::Condvar)>,
@@ -174,6 +200,7 @@ pub struct Saver {
 }
 
 impl Saver {
+    /// Starts the `astro-preferences` writer thread for `path`.
     pub fn new(path: PathBuf) -> Self {
         let queue = std::sync::Arc::new((
             std::sync::Mutex::new(SaveQueue::default()),
@@ -226,8 +253,15 @@ impl Saver {
         &self.path
     }
 
-    /// Queues the current preferences. An encoding error returns at once; a write error
-    /// arrives later through `results`.
+    /// Queues the current preferences, replacing any snapshot not yet being written.
+    ///
+    /// `report` marks a user-initiated save whose failure is shown; it is kept when a newer
+    /// snapshot supersedes a reported one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an encoding error at once; a write error arrives later through
+    /// [`Saver::results`].
     pub fn save(&self, preferences: &Preferences, report: bool) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(preferences)
             .map_err(|e| format!("Could not encode preferences: {e}"))?;
@@ -273,9 +307,10 @@ impl Drop for Saver {
     }
 }
 
-/// The effective user, or `u32::MAX` (never root) where ownership is not managed.
+/// Returns the effective user, or `u32::MAX` (never root) where ownership is not managed.
 pub fn effective_user() -> u32 {
     #[cfg(all(feature = "webos", unix))]
+    // SAFETY: geteuid has no preconditions and cannot fail.
     return unsafe { libc::geteuid() };
     #[cfg(not(all(feature = "webos", unix)))]
     u32::MAX
@@ -285,7 +320,12 @@ pub fn effective_user() -> u32 {
 /// (`user` 0) creates one, it takes the owner of the directory it was created in, so the normal
 /// app can still use it after Home is disabled. The owner change never follows a symlink, and
 /// existing directories keep their owner. The steps follow `create_dir_all`'s order (the whole
-/// path first), so every outcome and error is the same as before.
+/// path first), so outcomes and errors match it.
+///
+/// # Errors
+///
+/// Returns the I/O error of a failed creation or, for root, of reading the parent's owner or
+/// changing the new directory's owner.
 pub fn create_directories(directory: &Path, user: u32) -> std::io::Result<()> {
     if directory.as_os_str().is_empty() {
         return Ok(());
@@ -323,6 +363,15 @@ fn inherit_parent_owner(directory: &Path, user: u32) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Replaces `path` with `bytes` through a fsynced, owner-only temporary file and a rename,
+/// creating missing parent directories first.
+///
+/// As root (Home), the file gets the storage directory's owner before the rename.
+///
+/// # Errors
+///
+/// Returns a message naming the directory or file when preparing, writing, re-owning or
+/// renaming fails; the temporary file is removed on failure.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::{
         io::Write,
@@ -357,6 +406,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let result = (|| {
         file.write_all(bytes)?;
         #[cfg(all(feature = "webos", unix))]
+        // SAFETY: geteuid has no preconditions and cannot fail.
         if unsafe { libc::geteuid() } == 0 {
             use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
             let parent = path
@@ -371,6 +421,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             }
             // Atomic replacement must not turn private app files into root-only
             // files: disabling Home should leave the normal app able to read them.
+            // SAFETY: the descriptor belongs to `file`, which stays open for the call.
             if unsafe { libc::fchown(file.as_raw_fd(), metadata.uid(), metadata.gid()) } != 0 {
                 return Err(std::io::Error::last_os_error());
             }

@@ -1,9 +1,14 @@
-//! Find the package owning the running binary: the directory next to the executable.
+//! Finds the installed package that owns the running binary: the directory next to the
+//! executable.
+//!
+//! Only that directory is accepted, never another installation of the same app, so a
+//! broken package fails loudly instead of running with someone else's assets.
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
+/// Reports whether both paths are the same regular file (same device and inode on Unix).
 fn same_executable(a: &Path, b: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -24,6 +29,9 @@ fn same_executable(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// Reports whether `directory` is Astro's native package for `executable`: it has `assets/`,
+/// its `astro` is that very file, and its `appinfo.json` names Astro's ID, type `native` and
+/// main `astro`.
 fn owns_executable(directory: &Path, executable: &Path) -> bool {
     if !directory.join("assets").is_dir() || !same_executable(&directory.join("astro"), executable)
     {
@@ -39,6 +47,12 @@ fn owns_executable(directory: &Path, executable: &Path) -> bool {
     })
 }
 
+/// Returns the package directory that contains `executable`.
+///
+/// # Errors
+///
+/// Returns a message naming the executable when its parent directory is not a complete
+/// Astro native package (see `owns_executable`).
 pub fn find_directory(executable: &Path) -> Result<PathBuf, String> {
     executable
         .parent()

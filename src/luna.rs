@@ -1,8 +1,11 @@
-//! One bounded LS2 round trip on the platform worker's own GLib context.
-//! The hub sees the installed native executable. LSCallFromApplication (the
-//! luna-send-pub -a path) instead requires an impersonation privilege we lack.
-//! `subscribe_as_app` is the one exception: as root, it holds a subscription
-//! through the system bus `luna-send -a`, which may act for an app ID.
+//! Makes bounded LS2 (Luna) calls from Astro's own native process (webOS builds only).
+//!
+//! Each [`call`] registers an anonymous connection, attaches it to a private GLib context
+//! that only the calling worker iterates, and waits for one reply. The hub sees the installed
+//! native executable and applies its role. `LSCallFromApplication` (the `luna-send-pub -a`
+//! path) would require an impersonation privilege Astro lacks. [`subscribe_as_app`] is the one
+//! exception: as root, it holds a subscription through the system bus `luna-send -a`, which
+//! may act for an app ID.
 use crate::app_subscription::{self, AppSubscription};
 use libc::{c_char, c_int, c_ulong, c_void};
 use serde_json::Value;
@@ -13,9 +16,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Largest reply payload accepted; longer replies fail instead of being parsed.
 const MAX_REPLY: usize = 2 * 1024 * 1024;
 
-// Layout from the NDK's public luna-service2/lunaservice.h.
+/// `LSError`, with the layout from the NDK's public `luna-service2/lunaservice.h`.
+///
+/// Created by [`Error::new`] and freed on drop, so every instance passed to LS2 is initialized.
 #[repr(C)]
 struct Error {
     code: c_int,
@@ -55,6 +61,7 @@ unsafe extern "C" {
 }
 
 impl Error {
+    /// Returns an error initialized by `LSErrorInit`, ready to pass to any LS2 call.
     fn new() -> Self {
         // SAFETY: the public error structure is zero-initializable; LS2 then
         // initializes its cookie before any other error API uses it.
@@ -65,6 +72,7 @@ impl Error {
         }
     }
 
+    /// Formats the LS2 code and the first 240 characters of its message for `stage`.
     fn describe(&self, stage: &str) -> String {
         let detail = if self.message.is_null() {
             String::new()
@@ -87,11 +95,13 @@ impl Drop for Error {
     }
 }
 
+/// Heap slot the reply callback fills; its address is the LS2 call's user data.
 #[derive(Default)]
 struct Reply {
     result: Option<Result<Value, String>>,
 }
 
+/// LS2 reply callback: parses the payload into the [`Reply`] behind `userdata`.
 extern "C" fn receive(_handle: *mut c_void, message: *mut c_void, userdata: *mut c_void) -> bool {
     if message.is_null() || userdata.is_null() {
         return true;
@@ -116,6 +126,10 @@ extern "C" fn receive(_handle: *mut c_void, message: *mut c_void, userdata: *mut
     true
 }
 
+/// An anonymous LS2 registration attached to its own GLib context.
+///
+/// Dropping it unregisters before releasing the context and the reply slot, which the
+/// callback may still reference until then.
 struct Connection {
     handle: *mut c_void,
     context: *mut c_void,
@@ -123,6 +137,12 @@ struct Connection {
 }
 
 impl Connection {
+    /// Registers an anonymous LS2 handle and attaches it to a new private GLib context.
+    ///
+    /// # Errors
+    ///
+    /// Returns a description when the context cannot be allocated or LS2 refuses the
+    /// registration or attachment.
     fn open() -> Result<Self, String> {
         let mut error = Error::new();
         let mut connection = Self {
@@ -147,6 +167,12 @@ impl Connection {
         Ok(connection)
     }
 
+    /// Sends one call and polls the private context until its reply or `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message for an invalid URI or payload, a refused submission, a missing,
+    /// oversized or non-JSON reply, or a timeout (after cancelling the call).
     fn request(&mut self, uri: &str, payload: &Value, timeout: Duration) -> Result<Value, String> {
         let uri = CString::new(uri).map_err(|_| "Invalid Luna URI")?;
         let payload = CString::new(payload.to_string()).map_err(|_| "Invalid Luna payload")?;
@@ -209,19 +235,37 @@ impl Drop for Connection {
     }
 }
 
+/// Calls a Luna `uri` with `payload` and returns its JSON reply, waiting at most 6.5 s.
+///
+/// Blocks the calling thread; call it only from a worker, never the SDL thread.
+///
+/// # Errors
+///
+/// Returns a readable message when registration, submission or the reply fails or times out.
+/// A reply with `returnValue: false` is returned as `Ok`; callers check it.
 pub fn call(uri: &str, payload: &Value) -> Result<Value, String> {
     call_with_timeout(uri, payload, Duration::from_millis(6500))
 }
 
+/// Like [`call`], with a caller-chosen timeout.
+///
+/// # Errors
+///
+/// Same as [`call`].
 pub fn call_with_timeout(uri: &str, payload: &Value, timeout: Duration) -> Result<Value, String> {
     Connection::open()?.request(uri, payload, timeout)
 }
 
-/// A subscription kept for the life of the process, made as `app_id` by a root `luna-send -a`
-/// child, which the system bus lets act for an app. For the Home manifest staged under LG's
-/// app-ID based role, where Astro's own connection cannot be that app. Requires root. Does not
-/// wait for the service; see `app_subscription::subscribe` for how replies and failures are
-/// reported.
+/// Starts a subscription kept for the life of the process, made as `app_id` by a root
+/// `luna-send -a` child, which the system bus lets act for an app.
+///
+/// Used for the Home manifest staged under LG's app-ID based role, where Astro's own
+/// connection cannot be that app. Requires root. Does not wait for the service; see
+/// [`app_subscription::subscribe`] for how replies and failures are reported.
+///
+/// # Errors
+///
+/// Same as [`app_subscription::subscribe`].
 pub fn subscribe_as_app(
     app_id: &str,
     uri: &str,
