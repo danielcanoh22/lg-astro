@@ -714,6 +714,27 @@ fn an_icon_linked_inside_the_application_roots_is_still_read() {
 }
 
 #[test]
+fn splash_sync_accepts_only_the_developer_installation() {
+    let f = Fixture::new();
+    for other in [
+        "/media/cryptofs/apps/usr/palm/applications/com.danielcanoh22.astro",
+        "/usr/palm/applications/com.danielcanoh22.astro",
+    ] {
+        f.put_json(
+            &format!("{other}/appinfo.json"),
+            json!({"id":APP,"type":"native","main":"astro"}),
+        );
+        f.put(&format!("{other}/splash/forest.png"), b"forest");
+        assert_eq!(
+            files::sync_splash(&f, Path::new(other), "forest").unwrap_err(),
+            "Invalid Astro installation directory"
+        );
+        assert!(!f.p(&format!("{other}/splash.png")).exists());
+    }
+    files::sync_splash(&f, Path::new(DIR), "forest").unwrap();
+}
+
+#[test]
 fn splash_updates_tile_and_only_the_enabled_own_manifest_stage() {
     let f = Fixture::new();
     f.put_json(

@@ -104,10 +104,8 @@ pub fn read_icons(system: &impl System, source: &IconSource) -> Result<Value> {
     Ok(json!({"returnValue":true,"icons":icons}))
 }
 fn installed(system: &impl System, directory: &Path) -> Result<Value> {
-    if !ROOTS[..3]
-        .iter()
-        .any(|root| directory == Path::new(root).join(APP))
-    {
+    // Astro is a developer-mode install on the target TV.
+    if directory != Path::new(ROOTS[0]).join(APP) {
         return Err("Invalid Astro installation directory".into());
     }
     let app = system::json(system, directory.join("appinfo.json"))?;
